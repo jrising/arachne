@@ -29,7 +29,7 @@ def index():
     return render_template('index.html', log_filename=log_filename)
 
 def prompt(query):
-     return quert
+     return query
 
 def stream(input_text, past_messages, log_filename):
     global break_streaming
