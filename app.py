@@ -1,8 +1,5 @@
 from flask import Flask, render_template, request, Response
 
-from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain.vectorstores import Chroma
-from langchain import OpenAI
 from bs4 import Tag, NavigableString, BeautifulSoup
 
 import unstructured
@@ -15,10 +12,6 @@ app = Flask(__name__)
 
 load_dotenv()
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
-
-embeddings = OpenAIEmbeddings(openai_api_key=os.environ['OPENAI_API_KEY'])
-persist_directory = 'database/'
-docsearch = Chroma(embedding_function=embeddings, persist_directory=persist_directory)
 
 break_streaming = False
 
@@ -35,14 +28,8 @@ def index():
 
     return render_template('index.html', log_filename=log_filename)
 
-def gen_prompt(docs, query) -> str:
-    #Context: {[doc.page_content for doc in docs]}
-    return f"""{query}"""
-
 def prompt(query):
-     docs = docsearch.similarity_search(query, k=4)
-     prompt = gen_prompt(docs, query)
-     return prompt
+     return quert
 
 def stream(input_text, past_messages, log_filename):
     global break_streaming
