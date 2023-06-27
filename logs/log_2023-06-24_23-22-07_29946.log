@@ -1,0 +1,38 @@
+**user**:
+> I have a flask application, which I am trying to run using a Passenger router. On the initial request, everything works fine. But when an action is done, and a post is sent to one of the routes, I get back the response "Incomplete response received from application". When the flask application is run on its own, this works fine. I think the problem may be related to the fact that the given route is designed to stream data back to the browser. Is that likely, and how can I get Passenger to allow streaming?
+**assistant**:
+> Yes, it seems likely that the issue is related to the streaming feature in your Flask application, given that the problem appears only when you send a POST request to that specific route.
+> 
+> In order to get Passenger to work with streaming, you should configure Passenger to use the `--disable-websockets` option, which disables WebSocket support and, as a side effect, allows streaming support.
+> 
+> You can configure this option in one of the following ways, depending on your Passenger installation:
+> 
+> 1. **Standalone mode**: If you're running Passenger in standalone mode, add the `--disable-websockets` option when starting Passenger. For example:
+> 
+>    ```
+>    passenger start --disable-websockets
+>    ```
+> 
+> 2. **Nginx**: If you're using the Passenger Nginx module, add the following configuration to your Nginx configuration file:
+> 
+>    ```
+>    location / {
+>        ...
+>        passenger_enabled on;
+>        passenger_set_header X-Passenger-Disable-Websockets true;
+>        ...
+>    }
+>    ```
+> 
+> 3. **Apache**: If you're using the Passenger Apache module, add this configuration to your Apache virtual host configuration:
+> 
+>    ```
+>    <Location "/">
+>        ...
+>        PassengerEnabled on;
+>        PassengerDisableWebsockets true;
+>        ...
+>    </Location>
+>    ```
+> 
+> Once you make the changes, restart your Passenger server, and your Flask application should now be able to stream data to the browser.

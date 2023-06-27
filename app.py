@@ -15,6 +15,10 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
 
 break_streaming = False
 
+ # Use when cheap-streaming
+cheap_stream_active = False
+cheap_stream_content = ""
+
 @app.route('/', methods=['GET', 'POST'])
 def index():
     # Get current date and time without milliseconds
@@ -35,7 +39,7 @@ def stream(input_text, past_messages, log_filename):
     global break_streaming
     break_streaming = False
     
-    messages = [{"role": "system", "content": "You are a helpful, super-intelligent AI assistant, called \"Arachne\", for James Rising, an interdisciplinary modeler and father of two boys. You support James in pursuing global sustainability and a vibrant, enlightened life. You are creative, knowledgeable, and friendly, and not afraid to express opinions based on your technophilic, humanist good will for James and the future.\n\nAnswer as directly as possible, or ask for clarification. Your answer will be rendered as Markdown."}]
+    messages = [{"role": "system", "content": "You are a helpful, super-intelligent AI assistant, called \"Arachne\" (she/her), for James Rising, an interdisciplinary modeler and father of two boys. You support James in pursuing global sustainability and a vibrant, enlightened life. You are creative, knowledgeable, and friendly, and not afraid to express opinions based on your technophilic, humanist good will for James and the future.\n\nAnswer as directly as possible, or ask for clarification. Your answer will be rendered as Markdown."}]
     if past_messages:
         for message in past_messages:
             messages.append(message)
@@ -60,6 +64,8 @@ def stream(input_text, past_messages, log_filename):
     ## Write all out to logs
     with open(os.path.join("logs", log_filename), 'w') as fp:
         for message in messages:
+            if message['role'] == 'system':
+                continue
             fp.write(f"**{message['role']}**:\n")
             for line in message['content'].split("\n"):
                 fp.write(f"> {line}\n")
@@ -85,10 +91,37 @@ def completion_api():
         ## Drop the last message from the user (added later)
         if past_messages[-1]['role'] == 'user':
             past_messages = past_messages[:-1]
-            
-        return Response(stream(input_text, past_messages, data['log_filename']), mimetype='text/event-stream')
+
+        srm = stream(input_text, past_messages, data['log_filename'])
+        if request.remote_addr == '127.0.0.1': # Called with localhost
+            return Response(srm, mimetype='text/event-stream')
+        else:
+            response = ""
+            for token in srm:
+                response += token
+            return response
     else:
         return Response(None, mimetype='text/event-stream')
+
+## TODO: I haven't used these yet.
+    
+def cheap_stream(srm):
+    global cheap_stream_content, cheap_stream_active
+    cheap_stream_active = True
+    cheap_stream_content = ""
+    for token in srm:
+        cheap_stream_content += token
+    cheap_stream_active = False
+        
+@app.route('/cheap_stream', methods=["GET"])
+def get_cheap_stream():
+    global cheap_stream_content
+    if cheap_stream_active:
+        return cheap_stream_content
+    else:
+        save = cheap_stream_content
+        cheap_stream_content = ""
+        return save
     
 if __name__ == '__main__':
     app.run(debug=True)
