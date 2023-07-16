@@ -122,6 +122,10 @@ def get_cheap_stream():
         save = cheap_stream_content
         cheap_stream_content = ""
         return save
+
+@app.route('/get_ip',  methods=["GET"])
+def get_ip():
+    return request.remote_addr
     
 if __name__ == '__main__':
     app.run(debug=True)
