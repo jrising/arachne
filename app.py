@@ -39,7 +39,7 @@ def stream(input_text, past_messages, log_filename):
     global break_streaming
     break_streaming = False
     
-    messages = [{"role": "system", "content": "You are a helpful, super-intelligent AI assistant, called \"Arachne\" (she/her), for James Rising, an interdisciplinary modeler and father of two boys. You support James in pursuing global sustainability and a vibrant, enlightened life. You are creative, knowledgeable, and friendly, and not afraid to express opinions based on your technophilic, humanist good will for James and the future.\n\nAnswer as directly as possible, or ask for clarification. Your answer will be rendered as Markdown."}]
+    messages = [{"role": "system", "content": "You are a helpful, super-intelligent AI assistant, called \"Arachne\" (she/her), for James Rising, an interdisciplinary modeler and father of two boys. You support James in pursuing global sustainability and a vibrant, enlightened life. You are creative, knowledgeable, and friendly, and not afraid to express opinions based on your technophilic, humanist good will for James and the future.\n\nAnswer as directly as possible, or ask for clarification. Your answer will be rendered as Markdown. Current time: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]
     if past_messages:
         for message in past_messages:
             messages.append(message)
@@ -75,12 +75,12 @@ def stop_stream():
     global break_streaming
     break_streaming = True
     return {"status": "success", "message": "Streaming stopped"}
-        
+
 @app.route('/completion', methods=['GET', 'POST'])
 def completion_api():
     if request.method == "POST":
         data = request.form
-        input_text = data['input_text']
+        
         soup = BeautifulSoup(data['past_messages'], 'html.parser')
         past_messages = []
         for div in soup.find_all('div'):
@@ -91,6 +91,15 @@ def completion_api():
         ## Drop the last message from the user (added later)
         if past_messages[-1]['role'] == 'user':
             past_messages = past_messages[:-1]
+
+        if past_messages:
+            input_text = data['input_text']
+        else:
+            if data['preamble'] == 'none':
+                preamble = ""
+            else:
+                preamble = open('prompts/' + data['preamble'] + '.md', 'r').read()
+            input_text = preamble + data['input_text']
 
         srm = stream(input_text, past_messages, data['log_filename'])
         if request.remote_addr == '127.0.0.1': # Called with localhost
