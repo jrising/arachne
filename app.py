@@ -42,7 +42,7 @@ def stream(input_text, past_messages, log_filename):
     messages.append({"role": "user", "content": f"{prompt(input_text)}"})
     if len(messages) == 2:
         completion = openai.ChatCompletion.create(model="gpt-4", messages=messages,
-                                                  stream=True, max_tokens=500, temperature=1)
+                                                  stream=True, max_tokens=2000, temperature=1)
     else:
         completion = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=messages,
                                                   stream=True, max_tokens=500, temperature=1)
