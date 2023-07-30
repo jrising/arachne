@@ -1,7 +1,6 @@
 from flask import Flask, render_template, request, Response
 
 from bs4 import Tag, NavigableString, BeautifulSoup
-
 import unstructured
 from datetime import datetime
 import os
@@ -12,12 +11,9 @@ app = Flask(__name__)
 
 load_dotenv()
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
+openai.api_key = os.getenv('OPENAI_API_KEY')
 
 break_streaming = False
-
- # Use when cheap-streaming
-cheap_stream_active = False
-cheap_stream_content = ""
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -38,7 +34,7 @@ def prompt(query):
 def stream(input_text, past_messages, log_filename):
     global break_streaming
     break_streaming = False
-    
+
     messages = [{"role": "system", "content": "You are a helpful, super-intelligent AI assistant, called \"Arachne\" (she/her), for James Rising, an interdisciplinary modeler and father of two boys. You support James in pursuing global sustainability and a vibrant, enlightened life. You are creative, knowledgeable, and friendly, and not afraid to express opinions based on your technophilic, humanist good will for James and the future.\n\nAnswer as directly as possible, or ask for clarification. Your answer will be rendered as Markdown."}]
     if past_messages:
         for message in past_messages:
@@ -78,6 +74,8 @@ def stop_stream():
         
 @app.route('/completion', methods=['GET', 'POST'])
 def completion_api():
+    global break_streaming
+    
     if request.method == "POST":
         data = request.form
         input_text = data['input_text']
@@ -93,35 +91,10 @@ def completion_api():
             past_messages = past_messages[:-1]
 
         srm = stream(input_text, past_messages, data['log_filename'])
-        if request.remote_addr == '127.0.0.1': # Called with localhost
-            return Response(srm, mimetype='text/event-stream')
-        else:
-            response = ""
-            for token in srm:
-                response += token
-            return response
+
+        return Response(srm, mimetype='text/event-stream')
     else:
         return Response(None, mimetype='text/event-stream')
-
-## TODO: I haven't used these yet.
-    
-def cheap_stream(srm):
-    global cheap_stream_content, cheap_stream_active
-    cheap_stream_active = True
-    cheap_stream_content = ""
-    for token in srm:
-        cheap_stream_content += token
-    cheap_stream_active = False
-        
-@app.route('/cheap_stream', methods=["GET"])
-def get_cheap_stream():
-    global cheap_stream_content
-    if cheap_stream_active:
-        return cheap_stream_content
-    else:
-        save = cheap_stream_content
-        cheap_stream_content = ""
-        return save
 
 @app.route('/get_ip',  methods=["GET"])
 def get_ip():
