@@ -11,6 +11,8 @@
     <script src="https://cdn.jsdelivr.net/npm/markdown-it@13.0.1/dist/markdown-it.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.3.1/styles/default.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.3.1/highlight.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+    <script src="{{ url_for('static', filename='main.js') }}"></script>
     <style>
         .container {
             display: flex;
@@ -222,7 +224,7 @@
 
           var formData = new FormData(searchForm);
           formData.append('input_text', userinput);
-	  formData.append('past_messages', document.getElementById('upperid').innerHTML);
+          formData.append('past_messages', document.getElementById('upperid').innerHTML);
         
           try {
               const response = await fetch('/completion', {
@@ -239,20 +241,15 @@
             </div>`
 	      
               let temp = document.getElementById('temp');
-	      let temprend = document.getElementById('temprend');
+	          let temprend = document.getElementById('temprend');
               while (true) {
-                  const {done, value} = await reader.read(); 
-                  if (done) {
-		      temp.removeAttribute('id');
-		      temprend.removeAttribute('id');
-		      break;
-		  }
+                  const {done, value} = await reader.read();
                   const text = new TextDecoder().decode(value);
-		  const atBottom = isAtBottom();
-                  temp.innerHTML += htmlEscape(text);
-		  temprend.innerHTML = md.render(htmlDecode(temp.innerHTML));
-		  if (atBottom)
-		      scrollToBottom();
+                  if (done) {
+                      endResponse(temp, temprend);
+		              break;
+		          }
+                  addToResponse(text, temp, temprend);
               }
           } catch (error) {
               console.error(error);
