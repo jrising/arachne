@@ -12,18 +12,22 @@ def make_log(log_filename):
 
     prompt = open('prompts/makelog.md', 'r').read()
     content = open('logs/' + log_filename, 'r').read()
-    extra = "\nPlease respond in the following template:\n\nSynopsis: [SYNOPSIS]\n\nLog: [LOG]\n"
+    extra = "\n\nPlease respond in the following template:\n\nSynopsis: [SYNOPSIS]\n\nLog: [LOG]\n"
     
-    messages.append({"role": "user", "content": prompt + "\n" + content})
+    messages.append({"role": "user", "content": prompt + "\n" + content + extra})
     completion = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=messages,
                                               max_tokens=500, temperature=1)
 
     response = completion['choices'][0]['message']['content']
-    parts = response.strip().split("\n")
-    with open("database/logs/running.log", 'a+') as fp:
-        fp.write(parts[-1] + "\n")
-    with open("database/logs/" + log_filename, 'w') as fp:
-        fp.write("\n".join(parts[:-1]))
+    parts1 = response.split("Synopsis:")
+    parts2 = parts1[-1].split("Log:")
+    synopsis = parts2[0].strip()
+    logline = parts2[1].strip()
+    if synopsis and logline:
+        with open("database/logs/running.log", 'a+') as fp:
+            fp.write(datetime.now().strftime('%Y-%m-%d %H:%M:%S: ') + logline + "\n")
+        with open("database/logs/" + log_filename, 'w') as fp:
+            fp.write(synopsis + "\n")
     
 if __name__ == '__main__':
     ## Find the next log that does not have a corresponding synopsis
