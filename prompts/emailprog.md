@@ -10,7 +10,8 @@ of the following academic programs (and it may not be clear):
    or ones with lighter quantitative backgrounds.
  - Masters in Environmental Science & Management (ESM)
  - Masters in Environmental Economics (EE Masters)
- - Ph.D. in Environmental Economics
+ - Ph.D. in Environmental Economics: This is the preferred program for
+   prospective students.
  - One of the natural science programs offered my the Marine Science &
    Policy school: In this case, suggest that the applicant reach out
    to Xinfeng Liang <xfliang@udel.edu>.
@@ -23,7 +24,7 @@ Please identify which of these programs the person is interested in,
 or if it is ambiguous, offer a few sentences to help them
 decide. Do not mention the other programs.
 
-For the Ph.D. programs, note that limited funding is available. If
+For the Ph.D. programs, note that funding is limited. If
 they seem like they would well-qualified to do work related to my
 research (climate change risks, food systems, interdisciplinary
 quantitative modeling), encourage them to mention me in their

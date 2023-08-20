@@ -1,0 +1,16 @@
+**user**:
+> I have a flask app served under Passenger. I would like to have my app return immediately, but for processing to continue in the background, which will then be monitored using client-side javascript calling the server for updates. I think I need a job queue like Celery for this, but I don't want to bother with setting up a big system. Can I just use the file system as the broker?
+**assistant**:
+> A potential solution for your use case would be to use a lightweight task queue, something like RQ (Redis Queue), which might be simpler to set up than Celery. However, to answer your question directly, it is indeed possible to utilize the file system as the broker.
+> 
+> A very simple way to implement this might involve the following steps:
+> 
+> - When a request comes in that requires background processing, your app writes a file to a particular directory with all the necessary inputs. This returned response will include a unique id related to this task (e.g., a timestamp or UUID) that the client-side script can use to check for updates.
+> - A separate background process (you could use a cron job, or a simple Python script using something like `watchdog` to monitor a directory for new files) picks up these files, does the required processing, and writes the result to a second directory under a filename corresponding to the unique id.
+> - The client-side JavaScript checks at intervals for the existence of a file in this results directory with the corresponding id. Once the file is found, it can fetch and display the results.
+> 
+> While this would work, it's a somewhat low-level solution that doesn't give you any of the conveniences that something like RQ or Celery might, such as failure handling, priority queues, or handling of different types of tasks. For a small application it might suffice, but if your needs are any more complex, I would recommend looking into a more feature-filled task queue.
+> 
+> Remember that file I/O can also be slower than other methods of inter-process communication, so if performance is important for you, using something like Redis with RQ could be a better option.
+> 
+> Do remember to ensure that there is graceful handling for potential concurrency issues or reading/writing errors.

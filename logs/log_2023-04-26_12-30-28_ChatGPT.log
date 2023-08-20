@@ -1,0 +1,200 @@
+**user**:
+> How can I stop an external hard drive connected to a Linux box from shutting off when it hasn't been used in a while?
+**assistant**:
+> To prevent an external hard drive from going to sleep or powering down when it's not in use on a Linux system, you can use the `hdparm` utility. Here's a step-by-step guide:
+> 
+> 1. Install `hdparm` if it's not already installed:
+> 
+> On Debian-based systems (e.g., Ubuntu, Linux Mint), use this command:
+> 
+> ```bash
+> sudo apt-get update
+> sudo apt-get install hdparm
+> ```
+> 
+> On Red Hat-based systems (e.g., CentOS, Fedora), use this command:
+> 
+> ```bash
+> sudo yum install hdparm
+> ```
+> 
+> 2. Identify the device name of your external hard drive:
+> 
+> Run the `lsblk` command to list all the block devices and their mount points. The external hard drive will most likely be labeled as `sdX`, where `X` is a letter (e.g., `sdb`, `sdc`). Identify the drive based on its size or mount point.
+> 
+> ```bash
+> lsblk
+> ```
+> 
+> 3. Check the current settings for your hard drive:
+> 
+> Run the following command, replacing `sdX` with the appropriate device name:
+> 
+> ```bash
+> sudo hdparm -I /dev/sdX
+> ```
+> 
+> Look for the "Advanced power management level" in the output. The value will range from 1 to 254. A lower number indicates more aggressive power management, while a higher number indicates less aggressive power management.
+> 
+> 4. Set the power management value:
+> 
+> To disable the power management feature, you can set the value to 254. Run the following command, replacing `sdX` with the appropriate device name:
+> 
+> ```bash
+> sudo hdparm -B 254 /dev/sdX
+> ```
+> 
+> 5. Make the changes persistent across reboots:
+> 
+> To make this setting persistent, you'll need to create a script that runs during system startup.
+> 
+> Create a new script file:
+> 
+> ```bash
+> sudo nano /etc/init.d/harddrive-powermanagement
+> ```
+> 
+> Paste the following content into the file, replacing `sdX` with the appropriate device name:
+> 
+> ```bash
+> #!/bin/sh
+> ### BEGIN INIT INFO
+> # Provides:          harddrive-powermanagement
+> # Required-Start:    $local_fs $remote_fs
+> # Required-Stop:     $local_fs $remote_fs
+> # Default-Start:     2 3 4 5
+> # Default-Stop:      0 1 6
+> # Short-Description: Disable power management for the external hard drive
+> # Description:       Disables power management for the specified external hard drive
+> ### END INIT INFO
+> 
+> /sbin/hdparm -B 254 /dev/sdX
+> ```
+> 
+> Press `CTRL + X`, then `Y`, and finally press `Enter` to save and exit the file.
+> 
+> Make the script executable:
+> 
+> ```bash
+> sudo chmod +x /etc/init.d/harddrive-powermanagement
+> ```
+> 
+> Add the script to the system startup:
+> 
+> On Debian-based systems, use:
+> 
+> ```bash
+> sudo update-rc.d harddrive-powermanagement defaults
+> ```
+> 
+> On Red Hat-based systems, use:
+> 
+> ```bash
+> sudo chkconfig --add harddrive-powermanagement
+> ```
+> 
+> After completing these steps, your external hard drive should no longer go to sleep or power down when it's not in use. Remember that disabling power management can cause increased power consumption and reduce the lifespan of your hard drive.
+**user**:
+> My hdparm command for this drive states: `APM_level	= not supported`. How can I keep this drive on, if APM is not available?
+**assistant**:
+> If Advanced Power Management (APM) is not supported by your external hard drive, you can try the following alternative methods to prevent the drive from going to sleep:
+> 
+> 1. Use a simple loop to read from the drive periodically:
+> 
+> Create a shell script that reads a small portion of data from the drive at regular intervals. This will keep the drive awake by accessing it periodically.
+> 
+> Create a new script file:
+> 
+> ```bash
+> nano keep_drive_awake.sh
+> ```
+> 
+> Paste the following content into the file, replacing `/dev/sdX` with the appropriate device name, and `interval_in_seconds` with the desired interval (e.g., `300` for 5 minutes):
+> 
+> ```bash
+> #!/bin/sh
+> while true
+> do
+>     dd if=/dev/sdX of=/dev/null bs=512 count=1 2>/dev/null
+>     sleep interval_in_seconds
+> done
+> ```
+> 
+> Press `CTRL + X`, then `Y`, and finally press `Enter` to save and exit the file.
+> 
+> Make the script executable:
+> 
+> ```bash
+> chmod +x keep_drive_awake.sh
+> ```
+> 
+> Run the script in the background:
+> 
+> ```bash
+> ./keep_drive_awake.sh &
+> ```
+> 
+> To stop the script, find the process ID using `ps` and terminate it using `kill`:
+> 
+> ```bash
+> ps aux | grep keep_drive_awake.sh
+> kill [process_id]
+> ```
+> 
+> 2. Mount the drive with the `noatime` option:
+> 
+> Mounting the drive with the `noatime` option will prevent the access time from being updated when reading from the drive, reducing the drive's idle time.
+> 
+> First, unmount the drive:
+> 
+> ```bash
+> sudo umount /dev/sdX
+> ```
+> 
+> Then, mount the drive with the `noatime` option, replacing `/dev/sdX` with the appropriate device name and `/mount/point` with the desired mount point:
+> 
+> ```bash
+> sudo mount -o noatime /dev/sdX /mount/point
+> ```
+> 
+> To make the `noatime` option persistent, edit the `/etc/fstab` file and add or modify the corresponding entry for your drive, including the `noatime` option:
+> 
+> ```bash
+> UUID=your_drive_UUID /mount/point ext4 defaults,noatime 0 0
+> ```
+> 
+> These methods should help you keep your external hard drive awake even if APM is not supported. Keep in mind that keeping the drive constantly active might cause increased power consumption and reduce the drive's lifespan.
+**user**:
+> Can I put that dd line in my crontab?
+**assistant**:
+> Yes, you can use `crontab` to run the `dd` command periodically, which will help keep the external hard drive awake.
+> 
+> To edit your user's crontab, run:
+> 
+> ```bash
+> crontab -e
+> ```
+> 
+> Add the following line to the end of the file, replacing `/dev/sdX` with the appropriate device name, and `*/5` with the desired interval in minutes (e.g., `*/5` for every 5 minutes):
+> 
+> ```bash
+> */5 * * * * dd if=/dev/sdX of=/dev/null bs=512 count=1 2>/dev/null
+> ```
+> 
+> Save the file and exit the editor.
+> 
+> The `dd` command will now run at the specified interval, which should help prevent the external hard drive from going to sleep. Keep in mind that this method might cause increased power consumption and reduce the drive's lifespan.
+**user**:
+> Do I need to do anything to activate the new crontab?
+**assistant**:
+> No, you don't need to do anything to activate the new crontab. Once you save the file and exit the editor, the new crontab will be installed automatically, and the system's cron daemon will start running the `dd` command at the specified interval.
+> 
+> To verify that your new crontab entry is installed, you can list your current user's crontab entries with the following command:
+> 
+> ```bash
+> crontab -l
+> ```
+> 
+> You should see the `dd` command line that you added earlier in the output.
+> 
+> Remember that keeping the drive active might cause increased power consumption and reduce the drive's lifespan. However, with the new crontab entry in place, your external hard drive should be prevented from going to sleep.

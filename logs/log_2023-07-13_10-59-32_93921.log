@@ -1,0 +1,69 @@
+**user**:
+> I would like to make an online survey where respondents click on a map to specify a location and then provide some information about their activities at that location. Is this available in an off-the-shelf system, or would I need to make it? If I need to make it, could it be done fairly easily (e.g., with something like R Shiny) or would it require custom map coding?
+**assistant**:
+> There are a few ways to create an online survey where respondents can interact with a map. If you're looking for an off-the-shelf system, tools such as Survey123 for ArcGIS or Maptionnaire allow you to integrate interactive maps into your survey.
+> 
+> Survey123 for ArcGIS, as suggested by its name, integrates with the ArcGIS mapping system. It allows for more complex spatial data collection, such as points, lines, and polygons, but it may have a steep learning curve and require an ArcGIS subscription.
+> 
+> Maptionnaire is more user-friendly and designed specifically for public engagement. It doesn't need an existing knowledge of GIS and suits most purposes.
+> 
+> If you're interested in creating this yourself using R Shiny, that would be possible — for instance, you could use the `leaflet` package in R for creating interactive map-based questions. Acquiring geographical data points from user's interactions would require a working knowledge of JavaScript and how to work with Shiny's UI.
+> 
+> It's also worth noting that Google Forms does not currently support embedding maps into the survey directly — a common workaround is to use a static image of a map and ask users to describe their location in text.
+> 
+> Here's a basic summary:
+> 
+> - Off-the-shelf solutions: Survey123 for ArcGIS and Maptionnaire.
+> - DIY with R Shiny: Possible, but requires some knowledge of JavaScript and Shiny's UI.
+> - Google Forms: Not directly supported. Workarounds include the use of static images.
+> 
+> I suggest considering your need for data complexity, your technical comfort level, and your budget before deciding.
+**user**:
+> In Shiny, can data be collected from users and, e.g., put into a database?
+**assistant**:
+> Yes, in a Shiny application, you can collect data from users and store it in a database. Shiny is a web framework in R that allows you to build interactive web applications. It offers various methods for collecting user input, such as text inputs, select inputs, checkboxes, and sliders.
+> 
+> To store user data in a database, you would typically use a package like RMySQL, RPostgreSQL, or RSQLite to establish a connection with your database system. These packages allow you to execute SQL queries and interact with the database directly from your Shiny app. You can create tables, insert data, and retrieve data using SQL commands.
+> 
+> Here's a simplified example of how you might collect and store user data in a database within a Shiny app:
+> 
+> ```R
+> # Load required packages
+> library(shiny)
+> library(RSQLite)
+> 
+> # UI
+> ui <- fluidPage(
+>   textInput("name", "Enter your name:"),
+>   actionButton("submit", "Submit")
+> )
+> 
+> # Server
+> server <- function(input, output, session) {
+>   # Connection to the database
+>   con <- dbConnect(RSQLite::SQLite(), "path/to/your/database.db")
+> 
+>   observeEvent(input$submit, {
+>     # Insert user data into the database
+>     dbExecute(con, "CREATE TABLE IF NOT EXISTS users (name VARCHAR(50))")
+>     dbExecute(con, "INSERT INTO users (name) VALUES (?)", input$name)
+>     
+>     # Additional data processing or actions can be performed here
+>     
+>     # Reset input field
+>     updateTextInput(session, "name", value = "")
+>   })
+> 
+>   # Close the database connection on app exit
+>   onStop(function() {
+>     dbDisconnect(con)
+>   })
+> }
+> 
+> # Run the app
+> shinyApp(ui, server)
+> ```
+> 
+> This example creates an input field for users to enter their name and a submit button. When the user clicks the submit button, the name is inserted into a table called "users" in the SQLite database. You can adapt this example to work with other database systems as well.
+> 
+> Remember to properly secure your database connections and inputs to prevent security vulnerabilities, such as SQL injection attacks.

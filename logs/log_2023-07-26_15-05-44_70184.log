@@ -1,0 +1,52 @@
+**user**:
+> How can I relabel the axes of a raster, so that rather than going from -180 to 180, it goes from 0 to 360?
+**assistant**:
+> You can shift the axes of a raster from the range `-180 to 180` to `0 to 360` in several ways depending on the programming language you're using. Here's an example of how you could do it in R using the `raster` package:
+> 
+> ```r
+> library(raster)
+> 
+> # Load raster
+> r <- raster("<your_raster_file>")
+> 
+> # Shift raster
+> r_shifted <- shift(r, x = 180)
+> 
+> # Update extent of the raster
+> res <- res(r_shifted)
+> e <- extent(r_shifted)
+> e@xmin <- 0
+> e@xmax <- 360
+> extent(r_shifted) <- e
+> 
+> # Now, your raster's axes should be from 0 to 360
+> ```
+> 
+> Remember to adjust `"<your_raster_file>"` to the path to your raster file. This code reads the raster, shifts it horizontally by 180 degrees, and then adjusts the extent to be between 0 and 360.
+> 
+> In Python, using `rasterio` and `numpy`, you can do the following:
+> 
+> ```python
+> import rasterio
+> import numpy as np
+> 
+> # Load raster
+> with rasterio.open("<your_raster_file>") as src:
+>     ras_array = src.read()
+>     transform = src.transform
+> 
+> # Shift raster
+> ras_array_shifted = np.roll(ras_array, ras_array.shape[1] // 2, axis=1)
+> 
+> # Update the metadata
+> metadata = src.meta
+> metadata['transform'] = rasterio.Affine(transform[0], transform[1], transform[2] + 180,
+>                                         transform[3], transform[4], transform[5])
+> 
+> # Write the result to a new file
+> with rasterio.open("<output_raster_file>", "w", **metadata) as dest:
+>     dest.write(ras_array_shifted)
+> ```
+> This code reads the raster to a numpy array, rolls it horizontally, and writes it back to a new raster file with updated transform in the metadata.
+> 
+> Please be aware that shifting a global raster like this might introduce inaccuracies at the dateline (180 degrees). So, depending on your application, it may be better to work with coordinates from -180 to 180 instead of shifting them.

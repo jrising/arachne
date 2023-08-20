@@ -1,0 +1,47 @@
+**user**:
+> On a Flask app served with Passanger, can I run some processing in the background between calls to the app, without using a task queue?
+**assistant**:
+> Yes, it's possible, although it's not typically recommended due to risks like memory leaks and unstable threading. 
+> 
+> Here's one way you can do this:
+> 
+> You could spin up a new thread with the Flask app and then run your background tasks inside that. It's important to remember, however, that if unhandled properly, threads can consume a lot of resources and introduce complexity to your codebase.
+> 
+> ```python
+> from flask import Flask
+> import atexit
+> from threading import Thread
+> 
+> app = Flask(__name__)
+> 
+> def background_task():
+>     """ This function will run in the background. """
+>     # Add your task here
+> 
+> def create_app():
+>     t = Thread(target=background_task)
+>     t.start()
+> 
+>     @atexit.register
+>     def shutdown():
+>         """ This function is called when the Flask app closes. """
+>         t.join()
+> 
+>     return app
+> ```
+> 
+> But, while this might work, it's usually safer and more flexible to use something like a task queue. Many of these solutions (including mature Python libraries like Celery or RQ) are designed to handle things like failures, retries, and distribution across multiple machines. 
+> 
+> Do consider your system's intended use and future scalability when deciding to introduce background tasks this way. 
+> 
+> Disclaimer: Use this solution carefully as it could potentially result in significant complications. Python threading can be tricky and Flask isn't naturally constructed for long-running tasks.
+**user**:
+> What does atexit do this in this?
+**assistant**:
+> The `atexit` module in Python provides a way to register functions that will be called automatically when a program exits, whether it exits normally or due to an exception. It allows you to define cleanup logic or tasks that should be performed before the program terminates.
+> 
+> In the given example, `atexit.register` is used to register the `shutdown()` function as an "exit handler" to be called automatically when the Flask app is closing. The purpose of this is to ensure that the background thread is joined (meaning it is allowed to finish executing) before the program ends.
+> 
+> By calling `t.join()` inside the `shutdown()` function, we ensure that the background thread is given enough time to complete its processing before the Flask app exits. This helps to ensure a clean termination of the background tasks and prevents any potential issues that may arise from abruptly terminating the thread.
+> 
+> So, in summary, the `atexit` module and the `shutdown()` function are used in this example to cleanly handle the termination of the background thread when the Flask app is closing.

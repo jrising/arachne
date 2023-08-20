@@ -1,0 +1,38 @@
+**user**:
+> In xarray, I am trying to drop the year dimension from a variable, since I know that the values of this variable repeat for every year, since the variable in question is just the region name (called FIPS). My idea for doing this is to take the FIPS dataarray, groupby the region variable (poly_idx), and then take the first value in each. But the result still has the same dimensions:
+> ```
+> >>> ds2.FIPS.groupby('poly_idx').first()
+> <xarray.DataArray 'FIPS' (year: 10, poly_idx: 3141)>
+> array([['27077', '53019', '53065', ..., '02240', '02068', '08014'],
+>        ['27077', '53019', '53065', ..., '02240', '02068', '08014'],
+>        ['27077', '53019', '53065', ..., '02240', '02068', '08014'],
+>        ...,
+> ```
+> 
+> How can I remove this year dimension from FIPS?
+**assistant**:
+> If you're sure that your `FIPS` variable does not vary along the `year` dimension, you can directly drop this dimension with the `isel` or `squeeze` functions. But, before dropping the dimension, I would suggest checking whether it is constant over years for each `poly_idx`. 
+> 
+> Here is how you can do it:
+> 
+> 1. Confirm that for each 'poly_idx', the FIPS values does not vary with 'year': 
+> 
+> ```python
+> assert (ds2.FIPS.diff('year') == 0).all()
+> ```
+> 
+> If this assert statement does not raise an `AssertionError`, each `poly_idx` indeed has a constant `FIPS` over all years.
+> 
+> 2. You can then proceed to drop the 'year' dimension:
+> 
+> ```python
+> ds2_FIPS_no_year = ds2.FIPS.isel(year=0).drop('year')
+> ```
+> 
+> Or
+> 
+> ```python
+> ds2_FIPS_no_year = ds2.FIPS.squeeze('year', drop=True)
+> ```
+> 
+> In the `isel` method, we're selecting the first index along the `year` dimension, since we've confirmed that all values over `year` are the same for each `poly_idx`. In the second `squeeze` method, we are reducing the dimensions of the data array by removing dimensions of length one. Both methods should work equally fine in this case.

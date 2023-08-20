@@ -1,0 +1,40 @@
+**user**:
+> I have run a regression with state-level fixed effects in PanelOLS, from linearmodels, where the underlying data is county-by-year. The state-level FEs were created as 50 additional exogenous predictors. How can I get prediction values from this for specific values of the other exogenous variables, while ignoring the state-level FEs (or otherwise setting them all to 0)?
+**assistant**:
+> To predict from a PanelOLS model with state level fixed effects, you would want to use your estimated model to generate prediction values for specific inputs. But since you've described wanting to ignore the state-level fixed effects or otherwise set them to 0, the process deviates slightly from the general prediction pattern. Follow these steps:
+> 
+> 1. First fit your model:
+> 
+> ```python
+> from linearmodels import PanelOLS
+> model = PanelOLS(dependent_var, exog_vars, entity_effects=True)
+> results = model.fit(cov_type='clustered', cluster_entity=True)
+> ```
+> 
+> Note that `exog_vars` should include both your other exogenous variables and state level fixed effects.
+> 
+> 
+> 2. Extract coefficient estimates for the other exogenous variables without the state-level fixed effects:
+> 
+> ```python
+> coefficients = results.params
+> coefficients = coefficients.drop([#list of your fixed effect column names])
+> ```
+> 
+> 3. Create your new data for prediction, not including the state-level fixed effects:
+> 
+> ```python
+> prediction_data = pd.DataFrame(# your data here)
+> ```
+> 
+> Note that you want to ensure that the data is properly formatted (i.e., has the same column order and names as your original data)
+> 
+> 4. Perform your prediction:
+> 
+> ```python
+> prediction = np.dot(prediction_data, coefficients)
+> ```
+> 
+> Note that the predicted values will ignore state-level fixed effects because the coefficient of the fixed effects are not included in the dot product calculation.
+> 
+> You can modify this procedure if you need to apply certain coefficients to your fixed effects. For example, if you want to set them all to 0, you would include those columns in your prediction data, but keep their coefficients out of the prediction calculation.

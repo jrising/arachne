@@ -1,0 +1,107 @@
+**user**:
+> In jquery, how do I repeatedly call an ajax command-- say with a 1 second delay-- until the results of that URL inform me to stop?
+**assistant**:
+> You can accomplish your goal by using the function `setInterval()` to set a time delay, and clearing it with `clearInterval()` when the desired condition is met.
+> 
+> Here's an example using jQuery for the Ajax part:
+> 
+> ```javascript
+> // Initialize intervalId to null
+> let intervalId = null;
+> 
+> // Function that wraps your Ajax call
+> function getServerData() {
+> 
+>   // Ajax request
+>   $.ajax({
+>     url: '/your/url',  // replace with your URL
+>     method: 'GET',     // replace with your HTTP method
+> 
+>     // If the request is successful
+>     success: function(response) {
+> 
+>       // If some condition is met in response to stop the calls
+>       if (response.shouldStop) {      
+> 
+>         // Clear the interval
+>         clearInterval(intervalId);
+>         console.log('The server says we can stop now.');
+> 
+>       } else {
+>         
+>         // If not stopping, handle the response as needed
+>         console.log('Continuing to make Ajax calls. Latest response:', response);
+> 
+>       }
+>     },
+> 
+>     // If the request fails
+>     error: function(error) {
+> 
+>       console.log('An error occurred:', error);
+> 
+>     }
+>   });
+> }
+> 
+> // Call your function every 1 second (1000 milliseconds) and 
+> // return interval ID for clean up later
+> intervalId = setInterval(getServerData, 1000);
+> 
+> ```
+> 
+> This script will execute the `getServerData()` function every one second, and stop once `response.shouldStop` returns `true`. 
+> 
+> Please replace `'/your/url'` and `'GET'` with your actual URL and HTTP method, and modify the conditional check within `success()` to match whatever condition you expect from your server's response to stop the repeated calls.
+> 
+> Always remember to handle possible Ajax errors appropriately.
+**user**:
+> What kind of object will response be? How can I just get the string of the response?
+**assistant**:
+> The `response` object in this example will typically be the response from the server in the format specified by the server-side code.
+> 
+> To get the string representation of the response, you can use the `JSON.stringify()` method, which converts the `response` object into a JSON string representation. Here's an updated version of the code:
+> 
+> ```javascript
+> // ...
+> 
+> // Function that wraps your Ajax call
+> function getServerData() {
+> 
+>   // Ajax request
+>   $.ajax({
+>     url: '/your/url',  // replace with your URL
+>     method: 'GET',     // replace with your HTTP method
+> 
+>     // If the request is successful
+>     success: function(response) {
+> 
+>       // If some condition is met in response to stop the calls
+>       if (response.shouldStop) {      
+> 
+>         // Clear the interval
+>         clearInterval(intervalId);
+>         console.log('The server says we can stop now.');
+> 
+>       } else {
+>         
+>         // If not stopping, handle the response as needed
+>         const responseString = JSON.stringify(response);
+>         console.log('Continuing to make Ajax calls. Latest response:', responseString);
+> 
+>       }
+>     },
+> 
+>     // If the request fails
+>     error: function(error) {
+> 
+>       console.log('An error occurred:', error);
+> 
+>     }
+>   });
+> }
+> 
+> // ...
+> ```
+> 
+> Now, the `responseString` variable will contain the JSON string representation of the `response` object. You can use `responseString` as needed to extract the relevant data or perform any other operations.

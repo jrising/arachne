@@ -1,7 +1,7 @@
 from flask import Flask, render_template, request, Response
 
 from bs4 import Tag, NavigableString, BeautifulSoup
-import unstructured
+# import unstructured
 from datetime import datetime
 import os
 import openai
@@ -109,7 +109,22 @@ def completion_api():
 @app.route('/get_ip',  methods=["GET"])
 def get_ip():
     return request.remote_addr
-    
+
+@app.route('/get-logs',  methods=['GET', 'POST'])
+def get_logs():
+    if request.method == "POST":
+        query = request.form['query']
+
+    else:
+        ## Get the last 10 lines from running.log
+        size = os.path.getsize("database/logs/running.log")
+        with open("database/logs/running.log", 'rb') as fp:
+            if size > 1024:
+                fp.seek(-1024, 2)
+            lines = fp.readlines()[1:][-10:]
+
+        return [line.decode() for line in lines]
+
 if __name__ == '__main__':
     app.run(debug=True)
     

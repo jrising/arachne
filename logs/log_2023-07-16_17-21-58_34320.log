@@ -1,0 +1,28 @@
+**user**:
+> Are there any cross-domain issues with using text/event-stream? I have a Flask app, served with Passenger, which streams back the response. It works fine on my localhost (where I just use flask), but on my remote server under Passenger, it produces an error. Why might this be?
+**assistant**:
+> There are indeed a few potential cross-domain issues that you might face when using text/event-stream, especially when the frontend and backend are not on the same domain. They might be related to Cross-Origin Resource Sharing (CORS) restrictions imposed by the browser. 
+> 
+> Key points you need to consider are:
+> 
+> 1. **CORS Issues:** CORS is a mechanism that uses additional HTTP headers to tell a browser to let a web application running at one origin (domain) have permission to access selected resources from a server at a different origin.
+> 
+> 2. **Passenger Configuration:** Passenger might have some restrictions on long-polling or streaming responses that Flask's built-in server doesn't.
+> 
+> Here are few things you might need to check:
+> 
+> 1. **Check your CORS Configuration**: Check if your Flask app is configured properly for CORS. Flask-CORS is an extension for handling Cross Origin Resource Sharing with Flask. You might need to permit your frontend domain from your Flask backend: 
+> 
+> ```python
+> from flask_cors import CORS
+> 
+> app = Flask(__name__)
+> CORS(app, resources={r"/*": {"origins": "*"}})
+> ```
+> 
+> 2. **Passenger Configuration**: Sometimes the issue can be with the way Passenger buffers the response, which can cause issues with streamed responses. Look over your Passenger configuration to see if anything could be causing the issue.
+> 
+> 3. **Check content type**: Ensure that your response headers (Content-Type) are correct. For Server-Sent Events, you should be using `text/event-stream`.
+> 
+> If you're experiencing an error beyond these recommendations, please provide more information about the specific error that you're experiencing, so that I can assist you in a more targeted way.
+> 

@@ -1,0 +1,17 @@
+**user**:
+> In Julia, I have a function that takes a function. I want this function to return a list with the same type as the output type of the function. Can I put this into the functions type definition?
+**assistant**:
+> Yes, you can achieve this in Julia by using function-based dispatch and the `eltype()` function. Here's how you might change the function definition to achieve this:
+> 
+> ```julia
+> function foo(bar::F) where {F <: Function, T = eltype(F())}
+>     output = F()
+>     return Array{T}(output)
+> end
+> ```
+> 
+> In this code, we declare `foo` as a function that takes a function `bar` as an argument. In the where clause, `F <: Function` says that `bar` should be a function, and `T = eltype(F())` declare `T` as the element type of the output array of `bar`.
+> 
+> Remember, this will only result correctly if the function `bar` doesn't require any arguments. If your function needs arguments, you will need to adjust accordingly. Also, bear in mind that the type will be determined at the time of function call and the `eltype(F())` might be different for each run, depending on the `bar` function's output. 
+> 
+> Remember, Julia uses "duck typing". If it walks like a `duck` (function that returns an Array), then it is a `duck`. Being specific in types is needed when you want multiple versions of the same function to behave differently based on input types or when you want to optimize your code, otherwise the beauty of Julia is that it can figure things out on its own.

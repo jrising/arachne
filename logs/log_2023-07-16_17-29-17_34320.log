@@ -1,0 +1,27 @@
+**user**:
+> I have a flask app served under Passenger. I would like to have my app return immediately, but for processing to continue in the background, which will then be monitored using client-side javascript calling the server for updates. How can I set this up? Do I need to worry about Passenger spinning up two flask processes, so that the results of the processing can't be assumed to be in memory on subsequent flask calls?
+**assistant**:
+> In a Flask application served under Passenger, it is indeed possible to start a background task in such a way that your application returns immediately while processing continues in the background. This can make your application highly responsive and improve the user experience greatly.
+> 
+> To accomplish this, you will generally use some form of task queue. Among the most commonly-used options for Python and Flask are Celery and RQ (Redis Queue). Both retrieve tasks from a queue and allow workers to process them.
+> 
+> Here is a broad outline of the setup you would use for either RQ or Celery:
+> 
+> 1. Install RQ or Celery into your Python environment 
+> ```shell
+> pip install rq     # for RQ
+> pip install celery # for Celery
+> ```
+> 2. Add tasks into your Flask application. These are just standard Python functions that 'do the work' of your background process.
+> 3. Set up your queue. This will generally use Redis as a backend.
+> 4. Add your tasks to the queue instead of running them immediately.
+> 5. Run one or more workers that will process tasks from the queue.
+> 
+> In a Passenger environment, each passenger process (or thread, if you are using multithreaded operation) is separate, and they do not share memory. So, you can't expect any state from one Flask request to be present in another, even if these are made from the same client in quick succession. Instead, you should use a shared, persistent storage system (like a database, Redis, or the file system) to keep shared state.
+> 
+> In your case, in order to communicate back to the client-side JavaScript about the progress of the background process, you will need to keep some shared state. This shared state can be as simple as a progress count or as complex as a log of exactly what the background process has done. You might update this state in the database or in Redis at the end of each task, and then provide an endpoint that the JavaScript can poll to receive updates.
+> 
+> Don't start long-running tasks in a request/response cycle directly in Flask; the connection may time out, or Passenger may otherwise kill your process. Instead, always use a task queue for any work that will take more than a few seconds.
+> 
+> Finally, both Celery and RQ have good documentation, so I recommend reading up on whichever tool you choose to find out more about how to use it. Here are their links:
+> [Celery Documentation](https://docs.celeryproject.org) / [RQ Documentation](https://python-rq.org/docs/).

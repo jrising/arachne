@@ -1,0 +1,20 @@
+**user**:
+> I have a Flask app, served with Passenger, which streams back the response. It works fine on my localhost (where I just use flask), but on my remote server under Passenger, it produces the error "Incomplete response received from application". Why might this be?
+**assistant**:
+> This error usually means that your Flask app on the server didn't close the connection or send complete response data to the server. The underlying problem might come from how Passenger and Flask handle responses differently, especially when it comes to streamed responses. Here are two potential areas that you should explore:
+> 
+> **Time-out Settings:**
+> Passenger has a default timeout of 30 seconds. Any longer responses or requests would end with an incomplete error. Check this Passenger setting and increase the timeout value if needed.
+> 
+> The Flask development server is generally more lenient about these things. It does not use timeouts the same way production WSGI servers do, which possibly explains why you're not encountering this issue during local development. 
+> 
+> You can find more details about Passenger configuration options [in their documentation](https://www.phusionpassenger.com/library/config/nginx/reference/#passengerfriendlyerrorpages).
+> 
+> **Streaming Responses:**
+> Passenger might not be suitable for handling long-lived connections or streaming responses, which seems like what you're attempting with your Flask app. Flask's `stream_with_context` is an amazing feature, but not all WSGI servers deal with it well.
+> 
+> Consider using a different WSGI server on your remote host. You might have better luck using Gunicorn or uWSGI, which are often used for Flask apps and have robust support for streaming responses. 
+> 
+> Whichever the case is, inspecting the server logs may give you additional insight into what exactly is going wrong. Look for exceptions or warnings that your application might be throwing. 
+> 
+> Remember to stress test and monitor your new settings to ensure that performance and resources are well aligned.
