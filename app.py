@@ -2,7 +2,7 @@ from flask import Flask, render_template, request, Response
 
 from bs4 import BeautifulSoup
 from datetime import datetime
-import os, pickle
+import os, pickle, subprocess
 import openai
 from dotenv import load_dotenv
 from whoosh.index import open_dir
@@ -151,6 +151,25 @@ def get_logs():
         items.append({'date': chunks[0].split(' ')[0], 'message': message})
         
     return render_template('history.html', items=items)
+
+@app.route('/window_closed', methods=['POST'])
+def window_closed():
+    if request.remote_addr == '127.0.0.1':
+        subprocess.Popen(["python", "makelog.py"])
+    return '', 200  # Respond with success status
+
+@app.route('/notes', methods=['GET'])
+def notes():
+    # Get current date and time without milliseconds
+    current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+
+    # Get the process ID
+    process_id = os.getpid()
+
+    # Create a unique log file name
+    log_filename = f'log_{current_time}_{process_id}.log'
+
+    return render_template('notes.html', log_filename=log_filename)
 
 if __name__ == '__main__':
     app.run(debug=True)
