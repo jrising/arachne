@@ -1,0 +1,41 @@
+**user**:
+> How can I get the last N lines from a file quickly, using python?
+**assistant**:
+> To get the last N lines from a file quickly in Python, you can use the built-in library `os` and a method `seek()` of a file object. Here's a simple function:
+> 
+> ```python
+> import os
+> 
+> 
+> def tail(filename, n=10):
+>     """
+>     Returns last n lines from the file
+>     """
+>     size = os.path.getsize(filename)
+>     with open(filename, 'rb') as f:
+>         if size > 1024:  # for very small files skip seeking from end
+>             f.seek(-1024, 2)
+>         lines = f.readlines()
+> 
+>     return lines[-n:]
+> ```
+> 
+> Call this function with the filename and the number of lines as arguments:
+> 
+> ```python
+> last_lines = tail("yourfilename.txt", 10)
+> for line in last_lines:
+>     print(line.decode(), end='')
+> ```
+> 
+> Note: This method will not work properly for very large lines (over 1024 bytes). For those, you would need to implement a more robust seek backwards that takes into account how many bytes the last `n` lines actually take up.
+> 
+> This code also assumes line breaks can be found within the last 1024 bytes of the file, which might not be the case for files with very long lines. In a more complete solution you would keep seeking backwards until enough line breaks are found.
+**user**:
+> What does the end='' do?
+**assistant**:
+> The `end=''` argument in the `print()` function is used to specify what should be printed at the end of each item that is being printed. By default, `print()` adds a newline character (`\n`) at the end of each item. However, by setting `end=''`, you can override this behavior and specify an empty string as the ending character.
+> 
+> In the context of the code example I provided, using `end=''` ensures that each line is printed without an additional newline character at the end. This is useful when you're reading lines from a file and want to maintain the original line breaks from the file itself. If you don't use `end=''`, `print()` would add its own newline character, resulting in extra empty lines between the lines you're printing.
+> 
+> So, setting `end=''` in this case ensures that the lines are printed exactly as they are read from the file, without any additional formatting or modifications.
