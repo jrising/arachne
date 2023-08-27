@@ -1,11 +1,12 @@
 from flask import Flask, render_template, request, Response
 
-from bs4 import Tag, NavigableString, BeautifulSoup
-# import unstructured
+from bs4 import BeautifulSoup
 from datetime import datetime
-import os
+import os, pickle
 import openai
 from dotenv import load_dotenv
+from whoosh.index import open_dir
+from whoosh import qparser
 
 app = Flask(__name__)
 
@@ -114,16 +115,42 @@ def get_ip():
 def get_logs():
     if request.method == "POST":
         query = request.form['query']
-
+        print(query)
+        ix = open_dir("database/whoosh")
+        with ix.searcher() as searcher:
+            og = qparser.OrGroup.factory(0.9)
+            qp = qparser.QueryParser("content", ix.schema, group=og)
+            qp.add_plugin(qparser.FuzzyTermPlugin())
+            parsed = qp.parse(query)
+            results = searcher.search(parsed, limit=10)
+            
+            lines = [result['path'][9:19] + ' ' + result['path'][20:28].replace('-', ':') + ': ' + result['line'] for result in results]
     else:
         ## Get the last 10 lines from running.log
         size = os.path.getsize("database/logs/running.log")
         with open("database/logs/running.log", 'rb') as fp:
-            if size > 1024:
-                fp.seek(-1024, 2)
+            if size > 2048:
+                fp.seek(-2048, 2)
             lines = fp.readlines()[1:][-10:]
 
-        return [line.decode() for line in lines]
+        lines = [line.decode() for line in lines]
+        
+    ## Replace lines with titles, where available
+    if os.path.exists("database/logs/titles.pkl"):
+        with open("database/logs/titles.pkl", 'rb') as fp:
+            titles = pickle.load(fp)
+    else:
+        titles = {}
+        
+    items = []
+    for line in lines:
+        chunks = line.split(': ', maxsplit=1)
+        message = chunks[1]
+        if chunks[0] in titles:
+            message = titles[chunks[0]]
+        items.append({'date': chunks[0].split(' ')[0], 'message': message})
+        
+    return render_template('history.html', items=items)
 
 if __name__ == '__main__':
     app.run(debug=True)

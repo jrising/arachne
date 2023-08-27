@@ -18,7 +18,9 @@ of the following academic programs (and it may not be clear):
    
 As a first step, identify any specific questions asked in the email or
 core confusions and relay them back here. I will provide any answers
-if needed to incorporate in the response.
+if needed to incorporate in the response. If the person is local to
+the Delaware/Mid-Atlantic area, or if they did schoolwork at MIT,
+Columbia, UC Berkeley, UChicago, LSE, or UD, tell me.
 
 Please identify which of these programs the person is interested in,
 or if it is ambiguous, offer a few sentences to help them

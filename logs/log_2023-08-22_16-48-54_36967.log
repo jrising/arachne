@@ -1,0 +1,42 @@
+**user**:
+> I am processing 3-hourly data in a netcdf in python (xarray) to daily data. When I do `ds.groupby("time.date")`, I get a date coordinate, and then that fails when I try to write the result back out with to_netcdf(). How can I do this?
+**assistant**:
+> The `groupby` function in xarray tries to return a DataArray or Dataset grouped by a certain coordinate or dimension. When you're using `"time.date"`, you are creating a new group coordinate which is a date object, but this type can't be written into a netCDF file, because netCDF only supports numeric and text types.
+> 
+> Here is a way to perform this operation by rounding your time coordinate to 'daily' resolution:
+> 
+> 1. First, ensure your 'time' field is a datetime object.
+> 
+>     ```python
+>     import xarray as xr
+> 
+>     ds = xr.open_dataset('inputfile.nc')
+> 
+>     # confirm the `time` dimension is a datatime64 object
+>     print(ds.time.dtype)  
+>     ```
+> 
+>     If not, convert this to a datetime64 object:
+> 
+>     ```python
+>     ds['time'] = ds.indexes['time'].to_datetimeindex()
+>     print(ds.time.dtype)  # should be 'datetime64[ns]'
+>     ```
+> 
+> 2. Then, you can use the `resample` function to downsample the data to a daily frequency:
+> 
+>     ```python
+>     daily_ds = ds.resample(time='1D').mean()
+>     ```
+> 
+>     This creates a new dataset, `daily_ds`, where the original dataset has been resampled to a daily frequency using a mean function over each new daily period. You can replace `mean()` with `sum()`, `max()`, etc., depending on your specific use case.
+> 
+> 3. When you're satisfied with your data manipulations, you can then save your resampled Dataset:
+> 
+>     ```python
+>     daily_ds.to_netcdf('outputfile.nc')
+>     ```
+> 
+> The result is a netCDF file which contains your original data, resampled to daily frequency.
+>   
+> Please replace 'inputfile.nc' and 'outputfile.nc' with your actual file names. File paths can be added before the filenames if they are not in your current working directory.
