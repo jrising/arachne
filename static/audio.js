@@ -27,6 +27,7 @@ if ("webkitSpeechRecognition" in window) {
 	// Create the interim transcript string locally because we don't want it to persist like final transcript
 	let interim_transcript = "";
 
+	
 	// Loop through the results from the speech recognition object.
 	for (let i = event.resultIndex; i < event.results.length; ++i) {
 	    // If the result item is Final, add it to Final Transcript, Else add it to Interim transcript
@@ -40,6 +41,8 @@ if ("webkitSpeechRecognition" in window) {
 	// Set the Final franscript and Interim transcript
 	document.querySelector("#final").innerHTML = final_transcript;
 	document.querySelector("#interim").innerHTML = interim_transcript;
+
+	document.querySelector("#event").innerHTML = event;
     };
 
     $(function() {
