@@ -3,19 +3,19 @@ if ("webkitSpeechRecognition" in window) {
 	let speechRecognition = new webkitSpeechRecognition();
 	// Setup for note-taking
 	speechRecognition.continuous = true;
-	speechRecognition.interimResults = true;
+	    speechRecognition.interimResults = true;
 	speechRecognition.lang = 'en-US';
 
 	speechRecognition.onstart = () => {
-	    document.querySelector("#status").style.display = "block";
+	    $("#status").style.display = "block";
 	};
     
 	speechRecognition.onend = () => {
-	    document.querySelector("#status").style.display = "none";
+	    $("#status").style.display = "none";
 	};
 
 	speechRecognition.onError = () => {
-	    document.querySelector("#status").style.display = "none";
+	    $("#status").style.display = "none";
 	};
 
 	let final_transcript = "";
@@ -25,18 +25,18 @@ if ("webkitSpeechRecognition" in window) {
 	    let interim_transcript = "";
 
 	    // Loop through the results from the speech recognition object.
-	    for (let i = event.resultIndex; i < event.results.length; ++i) {
-		// If the result item is Final, add it to Final Transcript, Else add it to Interim transcript
-		if (event.results[i].isFinal) {
-		    final_transcript += event.results[i][0].transcript;
-		} else {
-		    interim_transcript += event.results[i][0].transcript;
-		}
+	    for (let i = event.resultIndex; i < event.results.length; i++) {
+		    // If the result item is Final, add it to Final Transcript, Else add it to Interim transcript
+		    if (event.results[i].isFinal) {
+		        final_transcript += (i) + event.results[i][0].transcript;
+		    } else {
+		        interim_transcript += (i) + event.results[i][0].transcript;
+		    }
 	    }
 
 	    // Set the Final franscript and Interim transcript
-	    document.querySelector("#final").innerHTML = final_transcript;
-	    document.querySelector("#interim").innerHTML = interim_transcript;
+	    $("#final").innerHTML = final_transcript;
+	    $("#interim").innerHTML = interim_transcript;
 	};
 
 	speechRecognition.start();
