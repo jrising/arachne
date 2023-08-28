@@ -171,6 +171,14 @@ def notes():
 
     return render_template('notes.html', log_filename=log_filename)
 
+@app.route('/save_notes', methods=['POST'])
+def save_notes():
+    data = request.form
+    with open(os.path.join("logs", data['log_filename']), 'w') as fp:
+        fp.write("**NOTE**:\n")
+        fp.write("> " + data['transcript'])
+    return '', 200  # Respond with success status
+        
 if __name__ == '__main__':
     app.run(debug=True)
     

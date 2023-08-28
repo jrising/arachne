@@ -3,22 +3,27 @@ if ("webkitSpeechRecognition" in window) {
 	let speechRecognition = new webkitSpeechRecognition();
 	// Setup for note-taking
 	speechRecognition.continuous = true;
-	    speechRecognition.interimResults = true;
+	speechRecognition.interimResults = true;
 	speechRecognition.lang = 'en-US';
+
+	let final_transcript = "";
 
 	speechRecognition.onstart = () => {
 	    $("#status").show();
 	};
     
 	speechRecognition.onend = () => {
+	    $.ajax({
+		url: 'save_notes',
+		type: 'POST',
+		data: { log_filename: $("#log_filename").html(), transcript: final_transcript }
+	    });
 	    $("#status").hide();
 	};
 
 	speechRecognition.onError = () => {
 	    $("#status").hide();
 	};
-
-	let final_transcript = "";
 
 	speechRecognition.onresult = (event) => {
 	    // Create the interim transcript string locally because we don't want it to persist like final transcript
