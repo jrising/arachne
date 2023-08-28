@@ -7,15 +7,15 @@ if ("webkitSpeechRecognition" in window) {
 	speechRecognition.lang = 'en-US';
 
 	speechRecognition.onstart = () => {
-	    $("#status").style.display = "block";
+	    $("#status").show();
 	};
     
 	speechRecognition.onend = () => {
-	    $("#status").style.display = "none";
+	    $("#status").hide();
 	};
 
 	speechRecognition.onError = () => {
-	    $("#status").style.display = "none";
+	    $("#status").hide();
 	};
 
 	let final_transcript = "";
@@ -35,8 +35,8 @@ if ("webkitSpeechRecognition" in window) {
 	    }
 
 	    // Set the Final franscript and Interim transcript
-	    $("#final").innerHTML = final_transcript;
-	    $("#interim").innerHTML = interim_transcript;
+	    $("#final").html(final_transcript);
+	    $("#interim").html(interim_transcript);
 	};
 
 	speechRecognition.start();
