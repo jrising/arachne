@@ -32,12 +32,15 @@ def index():
 def prompt(query):
      return query
 
-def stream(input_text, past_messages, log_filename):
+def stream(input_text, past_messages, log_filename, history_text=""):
     global break_streaming
     break_streaming = False
     
     messages = [{"role": "system", "content": "You are a helpful, super-intelligent AI assistant, called \"Arachne\" (she/her), for James Rising, an interdisciplinary modeler and father of two boys. You support James in pursuing global sustainability and a vibrant, enlightened life. You are creative, knowledgeable, and friendly, and not afraid to express opinions based on your technophilic, humanist good will for James and the future.\n\nAnswer as directly as possible, or ask for clarification. Your answer will be rendered as Markdown. Most recent training data: 2021-09; Current time: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]
 
+    if history_text:
+        messages.append({"role": "assistant", "content": history_text})
+    
     if past_messages:
         for message in past_messages:
             messages.append(message)
@@ -101,7 +104,13 @@ def completion_api():
                 preamble = open('prompts/' + data['preamble'] + '.md', 'r').read()
             input_text = preamble + data['input_text']
 
-        srm = stream(input_text, past_messages, data['log_filename'])
+        history_text = data.get('history', '')
+        if history_text:
+            history_text = history_text.replace("\n\n", "\n").replace("\n\n", "\n")
+            history_text = "Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.\n" + history_text
+            print(history_text)
+            
+        srm = stream(input_text, past_messages, data['log_filename'], history_text)
 
         return Response(srm, mimetype='text/event-stream')
     else:
