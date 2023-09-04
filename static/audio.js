@@ -33,9 +33,9 @@ if ("webkitSpeechRecognition" in window) {
 	    for (let i = event.resultIndex; i < event.results.length; i++) {
 		    // If the result item is Final, add it to Final Transcript, Else add it to Interim transcript
 		    if (event.results[i].isFinal) {
-		        final_transcript += (i) + event.results[i][0].transcript;
+		        final_transcript = event.results[i][0].transcript;
 		    } else {
-		        interim_transcript += (i) + event.results[i][0].transcript;
+		        interim_transcript += event.results[i][0].transcript;
 		    }
 	    }
 
