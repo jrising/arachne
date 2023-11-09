@@ -1,12 +1,25 @@
 from flask import Flask, render_template, request, Response
 
+import regex as re
 from bs4 import BeautifulSoup
 from datetime import datetime
 import os, pickle, subprocess
-import openai
+import openai, tiktoken
 from dotenv import load_dotenv
 from whoosh.index import open_dir
 from whoosh import qparser
+
+try:
+    from TTS.api import TTS
+    import pygame
+    import threading
+    import queue
+
+    tts = TTS("tts_models/en/ljspeech/glow-tts")
+    pygame.init()
+except:
+    print("No text-to-speech functionality.")
+    pass
 
 app = Flask(__name__)
 
@@ -16,8 +29,7 @@ openai.api_key = os.getenv('OPENAI_API_KEY')
 
 break_streaming = False
 
-@app.route('/', methods=['GET', 'POST'])
-def index():
+def get_log_filename():
     # Get current date and time without milliseconds
     current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
@@ -25,18 +37,36 @@ def index():
     process_id = os.getpid()
 
     # Create a unique log file name
-    log_filename = f'log_{current_time}_{process_id}.log'
+    return f'log_{current_time}_{process_id}.log'
 
-    return render_template('index.html', log_filename=log_filename)
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if request.headers['Host'] == 'coupling.existencia.org':
+        return render_template('custom.html', title="Coupling Human to Natural Systems",
+                               welcome="Welcome to your virtual teaching assistant. What can I help you with?",
+                               log_filename="", system="coupling")
+    else:
+        return render_template('index.html', log_filename=get_log_filename())
 
 def prompt(query):
      return query
 
-def stream(input_text, past_messages, log_filename, history_text=""):
+def chat_tokens(messages):
+    """Returns the number of tokens for a chat."""
+    encoding = tiktoken.get_encoding("cl100k_base")
+    num_tokens = 0
+    for message in messages:
+        num_tokens += len(encoding.encode(message['content'])) + 4
+    return num_tokens
+ 
+def stream(input_text, past_messages, log_filename, history_text="", custom_system=None, custom_model=None):
     global break_streaming
     break_streaming = False
-    
-    messages = [{"role": "system", "content": "You are a helpful, super-intelligent AI assistant, called \"Arachne\" (she/her), for James Rising, an interdisciplinary modeler and father of two boys. You support James in pursuing global sustainability and a vibrant, enlightened life. You are creative, knowledgeable, and friendly, and not afraid to express opinions based on your technophilic, humanist good will for James and the future.\n\nAnswer as directly as possible, or ask for clarification. Your answer will be rendered as Markdown. Most recent training data: 2021-09; Current time: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]
+
+    if custom_system:
+        messages = [{"role": "system", "content": custom_system}]
+    else:
+        messages = [{"role": "system", "content": "You are a helpful, super-intelligent AI assistant, called \"Arachne\" (she/her), for James Rising, an interdisciplinary modeler and father of two boys. You support James in pursuing global sustainability and a vibrant, enlightened life. You are creative, knowledgeable, and friendly, and not afraid to express opinions based on your technophilic, humanist good will for James and the future.\n\nAnswer as directly as possible, or ask for clarification. Your answer will be rendered as Markdown. Most recent training data: 2021-09; Current time: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]
 
     if history_text:
         messages.append({"role": "assistant", "content": history_text})
@@ -45,12 +75,30 @@ def stream(input_text, past_messages, log_filename, history_text=""):
         for message in past_messages:
             messages.append(message)
     messages.append({"role": "user", "content": f"{prompt(input_text)}"})
-    if len(messages) == 2:
-        completion = openai.ChatCompletion.create(model="gpt-4", messages=messages,
-                                                  stream=True, max_tokens=2000, temperature=1)
+    if len(messages) < 4:
+        if custom_model:
+            model = custom_model
+        elif chat_tokens(messages) <= 3000:
+            model = 'gpt-4'
+        else:
+            model = 'gpt-3.5-turbo-16k' #'gpt-4-32k'
+            
+        completion = openai.ChatCompletion.create(model=model, messages=messages,
+                                                  stream=True, max_tokens=2500, temperature=1)
     else:
-        completion = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=messages,
-                                                  stream=True, max_tokens=500, temperature=1)
+        if custom_model:
+            model = 'gpt-4-1106-preview'
+        elif chat_tokens(messages) <= 3000:
+            model = 'gpt-3.5-turbo'
+        else:
+            model = 'gpt-3.5-turbo-16k'
+
+        if custom_model:
+            completion = openai.ChatCompletion.create(model=model, messages=messages,
+                                                      stream=True, max_tokens=500, temperature=1)
+        else:
+            completion = openai.ChatCompletion.create(model=model, messages=messages,
+                                                      stream=True, max_tokens=2500, temperature=1)
 
     response = ""
     for line in completion:
@@ -63,13 +111,14 @@ def stream(input_text, past_messages, log_filename, history_text=""):
     messages.append({"role": "assistant", "content": response})
         
     ## Write all out to logs
-    with open(os.path.join("logs", log_filename), 'w') as fp:
-        for message in messages:
-            if message['role'] == 'system':
-                continue
-            fp.write(f"**{message['role']}**:\n")
-            for line in message['content'].split("\n"):
-                fp.write(f"> {line}\n")
+    if log_filename:
+        with open(os.path.join("logs", log_filename), 'w') as fp:
+            for message in messages:
+                if message['role'] == 'system':
+                    continue
+                fp.write(f"**{message['role']}**:\n")
+                for line in message['content'].split("\n"):
+                    fp.write(f"> {line}\n")
 
 @app.route('/stop-stream', methods=['POST'])
 def stop_stream():
@@ -78,43 +127,95 @@ def stop_stream():
     return {"status": "success", "message": "Streaming stopped"}
 
 @app.route('/completion', methods=['GET', 'POST'])
-def completion_api():
-    global break_streaming
-    
+def completion():
     if request.method == "POST":
-        data = request.form
-        
-        soup = BeautifulSoup(data['past_messages'], 'html.parser')
-        past_messages = []
-        for div in soup.find_all('div'):
-            if div['class'][0] == 'usermessage':
-                past_messages.append({"role": "user", "content": div.text.strip()})
-            elif div['class'][0] == 'appmessage':
-                past_messages.append({"role": "assistant", "content": div.text.strip()})
-        ## Drop the last message from the user (added later)
-        if past_messages[-1]['role'] == 'user':
-            past_messages = past_messages[:-1]
-
-        if past_messages:
-            input_text = data['input_text']
-        else:
-            if data['preamble'] == 'none':
-                preamble = ""
-            else:
-                preamble = open('prompts/' + data['preamble'] + '.md', 'r').read()
-            input_text = preamble + data['input_text']
-
-        history_text = data.get('history', '')
-        if history_text:
-            history_text = history_text.replace("\n\n", "\n").replace("\n\n", "\n")
-            history_text = "Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.\n" + history_text
-            print(history_text)
-            
-        srm = stream(input_text, past_messages, data['log_filename'], history_text)
-
-        return Response(srm, mimetype='text/event-stream')
+        return Response(completion_api(), mimetype='text/event-stream')
     else:
         return Response(None, mimetype='text/event-stream')
+
+@app.route('/completion_custom', methods=['GET', 'POST'])
+def completion_custom():
+    if request.method == "POST":
+        custom_system = open('prompts/' + request.form['system'] + '.md', 'r').read()
+        return Response(completion_api(custom_system, "gpt-4-1106-preview"), mimetype='text/event-stream')
+    else:
+        return Response(None, mimetype='text/event-stream')
+
+@app.route('/completion_audio', methods=['GET', 'POST'])
+def completion_audio():
+    if request.method == "POST":
+        return Response(play_audio(completion_api()), mimetype='text/event-stream')
+    else:
+        return Response(None, mimetype='text/event-stream')
+
+def tts_consumer(qq):
+    channel = pygame.mixer.find_channel()
+
+    ii = 0
+    while True:
+        sentence = qq.get()
+
+        print("Generate " + sentence)
+        tts.tts_to_file(text=sentence, file_path="waves/tts" + str(ii) + ".wav")
+        
+        my_sound = pygame.mixer.Sound("waves/tts" + str(ii) + ".wav")
+        channel.queue(my_sound)
+
+        qq.task_done()  # Signal that a formerly enqueued task is complete
+
+        ii += 1
+
+def play_audio(srm):
+    qq = queue.Queue()
+    consumer_thread = threading.Thread(target=tts_consumer, args=(qq,))
+    consumer_thread.start()
+
+    currentinput = ""
+    for token in srm:
+        currentinput += token
+        if re.search(r"[.!?] ", currentinput):
+            sentences = re.split(r"[.!?] ", currentinput)
+            for sentence in sentences[:-1]:
+                qq.put(sentence)
+            currentinput = sentences[-1]
+        yield token
+
+    if currentinput:
+        qq.put(currentinput)
+
+    consumer_thread.join()
+        
+def completion_api(custom_system=None, custom_model=None):
+    global break_streaming
+    data = request.form
+
+    soup = BeautifulSoup(data['past_messages'], 'html.parser')
+    past_messages = []
+    for div in soup.find_all('div'):
+        if div['class'][0] == 'usermessage':
+            past_messages.append({"role": "user", "content": div.text.strip()})
+        elif div['class'][0] == 'appmessage':
+            past_messages.append({"role": "assistant", "content": div.text.strip()})
+    ## Drop the last message from the user (added later)
+    if past_messages[-1]['role'] == 'user':
+        past_messages = past_messages[:-1]
+
+    if past_messages:
+        input_text = data['input_text']
+    else:
+        if data.get('preamble', 'none') == 'none':
+            preamble = ""
+        else:
+            preamble = open('prompts/' + data['preamble'] + '.md', 'r').read()
+        input_text = preamble + data['input_text']
+
+    history_text = data.get('history', '')
+    if history_text:
+        history_text = history_text.replace("\n\n", "\n").replace("\n\n", "\n")
+        history_text = "Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.\n" + history_text
+            
+    return stream(input_text, past_messages, data['log_filename'], history_text,
+                  custom_system=custom_system, custom_model=custom_model)
 
 @app.route('/get_ip',  methods=["GET"])
 def get_ip():
@@ -124,7 +225,6 @@ def get_ip():
 def get_logs():
     if request.method == "POST":
         query = request.form['query']
-        print(query)
         ix = open_dir("database/whoosh")
         with ix.searcher() as searcher:
             og = qparser.OrGroup.factory(0.9)
@@ -169,16 +269,7 @@ def window_closed():
 
 @app.route('/notes', methods=['GET'])
 def notes():
-    # Get current date and time without milliseconds
-    current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-
-    # Get the process ID
-    process_id = os.getpid()
-
-    # Create a unique log file name
-    log_filename = f'log_{current_time}_{process_id}.log'
-
-    return render_template('notes.html', log_filename=log_filename)
+    return render_template('notes.html', log_filename=get_log_filename())
 
 @app.route('/save_notes', methods=['POST'])
 def save_notes():
@@ -187,7 +278,11 @@ def save_notes():
         fp.write("**NOTE**:\n")
         fp.write("> " + data['transcript'])
     return '', 200  # Respond with success status
-        
+
+@app.route('/audio', methods=['GET'])
+def audio():
+    return render_template('audio.html', log_filename=get_log_filename())
+
 if __name__ == '__main__':
     app.run(debug=True)
     

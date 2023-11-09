@@ -1,3 +1,60 @@
+async function sendText(text) {
+    let upperdiv = document.getElementById('upperid')
+    upperdiv.innerHTML += `<div class="message">
+                <div class="usermessagediv">
+                        <div class="usermessage">
+                            ${text}
+                        </div>
+                </div>
+            </div>`
+
+    var searchForm = document.getElementById('input-form');
+    var formData = new FormData(searchForm);
+    formData.append('past_messages', upperdiv.innerHTML);
+    formData.append('input_text', text);
+    formData.append('preamble', 'austin');
+    console.log(text);
+    try {
+	const response = await fetch('/completion_audio', {
+            method: 'POST',
+            body: formData
+	});
+	const reader = response.body.getReader();
+
+	textout = ""
+	while (true) {
+            const {done, value} = await reader.read();
+            const text = new TextDecoder().decode(value);
+            if (done) {
+		break
+	    }
+	    textout += text;
+	}
+	
+	upperdiv.innerHTML += `<div class="message">
+                <div class="appmessagediv">
+                    <div class="appmessage">${textout}</div>
+                </div>
+            </div>`
+
+	return textout;
+    } catch (error) {
+        console.error(error);
+    }
+}
+
+let stopListeningAfterSilence = (() => {
+    let silenceTimer = null;
+    const silenceDuration = 3000; // duration in ms, adjust to fit
+
+    return (recognition) => {
+        clearTimeout(silenceTimer);
+        silenceTimer = setTimeout(() => {
+            recognition.stop();
+        }, silenceDuration);
+    }
+})();
+
 if ("webkitSpeechRecognition" in window) {
     $(function() {
 	let speechRecognition = new webkitSpeechRecognition();
@@ -10,19 +67,26 @@ if ("webkitSpeechRecognition" in window) {
 
 	speechRecognition.onstart = () => {
 	    $("#status").show();
+	    $("#status").text("Listening...");
+	    stopListeningAfterSilence(speechRecognition);
 	};
     
 	speechRecognition.onend = () => {
-	    $.ajax({
-		url: 'save_notes',
-		type: 'POST',
-		data: { log_filename: $("#log_filename").html(), transcript: final_transcript }
-	    });
-	    $("#status").hide();
+	    $("#status").text("OnEnd");
+
+	    sendText(final_transcript).then(textout => {
+		final_transcript = "";
+		$("#final").html("");
+		$("#interim").html("");
+		speechRecognition.start()
+	    }).catch(error => console.error(error));
 	};
 
 	speechRecognition.onError = () => {
-	    $("#status").hide();
+	    if (event.error == 'no-speech') {
+	        //recognizing = false;
+	    }
+	    $("#status").text(event.error);
 	};
 
 	speechRecognition.onresult = (event) => {
@@ -42,11 +106,12 @@ if ("webkitSpeechRecognition" in window) {
 	    // Set the Final franscript and Interim transcript
 	    $("#final").html(final_transcript);
 	    $("#interim").html(interim_transcript);
+	    stopListeningAfterSilence(speechRecognition);
 	};
 
 	speechRecognition.start();
     });
 } else {
-    console.log("Speech Recognition Not Available");
+    $("#status").text("Speech Recognition Not Available");
     upgrade();
 }
