@@ -43,7 +43,7 @@ async function sendText(text) {
     }
 }
 
-let stopListeningAfterSilence = (() => {
+/*let stopListeningAfterSilence = (() => {
     let silenceTimer = null;
     const silenceDuration = 3000; // duration in ms, adjust to fit
 
@@ -53,7 +53,7 @@ let stopListeningAfterSilence = (() => {
             recognition.stop();
         }, silenceDuration);
     }
-})();
+})();*/
 
 if ("webkitSpeechRecognition" in window) {
     $(function() {
@@ -64,27 +64,54 @@ if ("webkitSpeechRecognition" in window) {
 	speechRecognition.lang = 'en-US';
 
 	let final_transcript = "";
+	$('#status').text("Waiting.");
+
+	function stopSpeaking() {
+	    fetch('/stop-stream', { method: 'POST' }).then((response) =>
+		{});
+	}
+
+	document.body.onkeydown = function(e) {
+	    if (e.key == " " || e.code == "Space" || e.keyCode == 32) {
+		if ($('#status').text() == "Speaking...") {
+		    stopSpeaking();
+		    $('#status').text("Waiting.");
+		}
+		if ($('#status').text() == "Waiting.") {
+		    speechRecognition.start();
+		    $('#status').text("Listening.");
+		}
+	    }
+	}
+
+	document.body.onkeyup = function(e) {
+	    $('#status').text("Waiting.");
+	    speechRecognition.stop();
+	}
 
 	speechRecognition.onstart = () => {
 	    $("#status").show();
-	    $("#status").text("Listening...");
-	    stopListeningAfterSilence(speechRecognition);
+	    $("#status").text("Listening.");
 	};
     
 	speechRecognition.onend = () => {
-	    $("#status").text("OnEnd");
+	    if (final_transcript == "") {
+		speechRecognition.start();
+		return;
+	    }
+	    $("#status").text("Speaking...");
 
 	    sendText(final_transcript).then(textout => {
 		final_transcript = "";
 		$("#final").html("");
 		$("#interim").html("");
-		speechRecognition.start()
+		$('#status').text("Waiting.");
 	    }).catch(error => console.error(error));
 	};
 
 	speechRecognition.onError = () => {
 	    if (event.error == 'no-speech') {
-	        //recognizing = false;
+	        
 	    }
 	    $("#status").text(event.error);
 	};
@@ -106,10 +133,7 @@ if ("webkitSpeechRecognition" in window) {
 	    // Set the Final franscript and Interim transcript
 	    $("#final").html(final_transcript);
 	    $("#interim").html(interim_transcript);
-	    stopListeningAfterSilence(speechRecognition);
 	};
-
-	speechRecognition.start();
     });
 } else {
     $("#status").text("Speech Recognition Not Available");

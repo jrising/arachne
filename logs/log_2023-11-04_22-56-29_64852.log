@@ -1,0 +1,208 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.
+> 
+> 
+>   2023-07-10:
+>   Does the order of predictors matter in ANOVA? In a standard ANOVA, order is irrelevant; in hierarchical ANOVA, it impacts results.
+> 
+> 
+> 
+>   2023-08-09:
+>   Terminology for assumptions, main results, and side-results in a mathematical treatise; Axioms, theorems, lemmas, and corollaries.
+> 
+> 
+> 
+>   2023-07-13:
+>   Known output types improve Julia performance; Type inference and explicit specifications recommended.
+> 
+> 
+> 
+>   2023-04-25:
+>   The limitations and shortcomings of academic freedom are critiqued in relation to broader social and political struggles; pursuit of true freedom is advocated.
+> 
+> 
+> 
+>   2023-09-05:
+>   Caching Command Results in Julia
+> 
+> 
+> 
+>   2023-07-18:
+>   Asked how to repeatedly call an Ajax command until stop condition is met; Arachne provided jQuery code example to implement recursive function for this purpose.
+> 
+> 
+> 
+>   2023-06-19:
+>   James sought auto-scrolling improvement for chat UX; Arachne provided code for detecting user scroll position and suggested refactoring to handle scrolled user action.
+> 
+> 
+> 
+>   2023-08-11:
+>   James requested details on an undersea electricity transmission hub; Arachne provided relevant information and stakeholders.
+> 
+> 
+> 
+>   2023-07-28:
+>   James encountered "refused to connect" error on desktop; AI suggested checking DNS cache, hosts file, firewall, and network settings.
+> 
+> 
+> 
+>   2023-01-30:
+>   James asked what econometricians call the black-box relationships they find; Arachne responded that they are called "econometric models."
+> 
+> 
+>     
+**user**:
+> I am using webkitSpeechRecognition, as follows:
+> ```
+> 	let speechRecognition = new webkitSpeechRecognition();
+> 	// Setup for note-taking
+> 	speechRecognition.continuous = true;
+> 	speechRecognition.interimResults = true;
+> 	speechRecognition.lang = 'en-US';
+> 
+> 	speechRecognition.onend = () => {
+> 	    $("#status").text("OnEnd");
+> 	    textout = sendText(final_transcript);
+> 	};
+> 
+> 	speechRecognition.start();
+> ```
+> 
+> But when I use it on a laptop computer, it almost immediately calls onEnd. How can I get it to take my dictation?
+**assistant**:
+> The `webkitSpeechRecognition` object closes when it doesn't detect any speech. You can make it restart itself by adding a check inside the `onend` event. However, keep in mind that this can lead to unwanted behavior, since the API would constantly be listening for sound (including background noise), which could use up a lot of CPU resources. Here's how you could modify your code:
+> 
+> ```javascript
+> 	let speechRecognition = new webkitSpeechRecognition();
+> 	// Setup for note-taking
+> 	speechRecognition.continuous = true;
+> 	speechRecognition.interimResults = true;
+> 	speechRecognition.lang = 'en-US';
+> 
+> 	let recognizing = false;
+> 
+> 	speechRecognition.onstart = () => {
+> 	    recognizing = true;
+> 	    $("#status").text("OnStart");
+> 	};
+> 
+> 	speechRecognition.onend = () => {
+> 	    $("#status").text("OnEnd");
+> 	    if (recognizing) {
+> 	        speechRecognition.start();
+> 	    }
+> 	};
+> 
+> 	speechRecognition.onerror = (event) => {
+> 	    if (event.error == 'no-speech') {
+> 	        recognizing = false;
+> 	    }
+> 	    $("#status").text(event.error);
+> 	};
+> 
+> 	speechRecognition.start();
+> ```
+> 
+> In the above code, I added an `onstart` event to set `recognizing` to true when the speech recognition starts, and in `onend`, we check if `recognizing` is true. If it is, then restart the speech recognition. `onerror` handles any errors, and if there's no speech detected, it will stop attempting to restart. 
+> 
+> Remember, you'll still want to provide some way for the user to manually stop the speech recognition, to ensure you respect their privacy and control over their hardware.
+**user**:
+> Okay, that helps. But my corresponding onresult function is never called:
+> ```
+> 	speechRecognition.onresult = (event) => {
+> 	    recognizing = false; // DEBUG STOP
+> 	    $("#status").text("Caught");
+>     }
+> ```
+> What's wrong?
+**assistant**:
+> The `onresult` event of `webkitSpeechRecognition` is called when there is a result available from the speech recognition engine. However, the `onresult` event is not triggered automatically in your code because you have set `interimResults` to `true`. When `interimResults` is set to `true`, the `onresult` event is only called when an interim (partial) result is received, and not for the final result.
+> 
+> To receive the final result, you need to listen for the `onend` event and retrieve the final transcript from the `event.results` object. Here's an updated version of your code to capture both interim and final results:
+> 
+> ```javascript
+> let speechRecognition = new webkitSpeechRecognition();
+> // Setup for note-taking
+> speechRecognition.continuous = true;
+> speechRecognition.interimResults = true;
+> speechRecognition.lang = 'en-US';
+> 
+> let recognizing = false;
+> 
+> speechRecognition.onstart = () => {
+>     recognizing = true;
+>     $("#status").text("OnStart");
+> };
+> 
+> speechRecognition.onend = () => {
+>     $("#status").text("OnEnd");
+>     if (recognizing) {
+>         speechRecognition.start();
+>     }
+> };
+> 
+> speechRecognition.onerror = (event) => {
+>     if (event.error == 'no-speech') {
+>         recognizing = false;
+>     }
+>     $("#status").text(event.error);
+> };
+> 
+> speechRecognition.onresult = (event) => {
+>     recognizing = false; // DEBUG STOP
+>     $("#status").text("Caught");
+>     let finalTranscript = "";
+>     let interimTranscript = "";
+> 
+>     for (let i = event.resultIndex; i < event.results.length; i++) {
+>         const transcript = event.results[i][0].transcript;
+>         if (event.results[i].isFinal) {
+>             finalTranscript += transcript;
+>         } else {
+>             interimTranscript += transcript;
+>         }
+>     }
+> 
+>     // Use finalTranscript and interimTranscript as needed
+> };
+> 
+> speechRecognition.start();
+> ```
+> 
+> In the updated code, the `onresult` event is handled to retrieve both interim and final transcript results. The interim results are stored in the `interimTranscript` variable, while the final results are appended to the `finalTranscript` variable. You can then use these variables as needed for further processing or display.
+**user**:
+> Okay, but onresult never gets called with partial results either. It does on a phone though. It's just never called.
+**assistant**:
+> I apologize for the confusion. It seems that the behavior you're experiencing is specific to the device or browser you are using on your laptop. The availability of partial results (`interimResults`) can vary across different implementations of the Web Speech API.
+> 
+> To ensure compatibility and consistent behavior across devices, you can modify your code to listen for the `onresult` event and retrieve the both partial and final results from the `event.results` object. Here's an updated code snippet that handles the `onresult` event for both partial and final results:
+> 
+> ```javascript
+> let speechRecognition = new webkitSpeechRecognition();
+> speechRecognition.continuous = true;
+> speechRecognition.interimResults = true;
+> speechRecognition.lang = 'en-US';
+> 
+> speechRecognition.onresult = (event) => {
+>     let finalTranscript = "";
+>     let interimTranscript = "";
+> 
+>     for (let i = event.resultIndex; i < event.results.length; i++) {
+>         const transcript = event.results[i][0].transcript;
+>         if (event.results[i].isFinal) {
+>             finalTranscript += transcript;
+>         } else {
+>             interimTranscript += transcript;
+>         }
+>     }
+> 
+>     // Process or display partial (interimTranscript) and final (finalTranscript) results as needed
+> };
+> 
+> speechRecognition.start();
+> ```
+> 
+> In this code, the `onresult` event is handled to retrieve both partial and final results. The `for` loop iterates over the `event.results` array to process each result. If a result is marked as `isFinal`, it is considered as a final transcript and appended to the `finalTranscript` variable. Otherwise, it is treated as an interim result and appended to the `interimTranscript` variable.
+> 
+> Please note that some speech recognition engines or browser implementations may not trigger the `onresult` event for partial (interim) results, even if `interimResults` is set to `true`. If you need consistent access to partial results, consider using a different speech recognition library or exploring alternative solutions.

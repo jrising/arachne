@@ -3,7 +3,7 @@ from flask import Flask, render_template, request, Response
 import regex as re
 from bs4 import BeautifulSoup
 from datetime import datetime
-import os, pickle, subprocess
+import os, pickle, subprocess, time
 import openai, tiktoken
 from dotenv import load_dotenv
 from whoosh.index import open_dir
@@ -78,20 +78,26 @@ def stream(input_text, past_messages, log_filename, history_text="", custom_syst
     if len(messages) < 4:
         if custom_model:
             model = custom_model
-        elif chat_tokens(messages) <= 3000:
-            model = 'gpt-4'
         else:
-            model = 'gpt-3.5-turbo-16k' #'gpt-4-32k'
+            chatlen = chat_tokens(messages)
+            if chatlen <= 3000:
+                model = 'gpt-4'
+            else:
+                model = 'gpt-4-1106-preview'
             
         completion = openai.ChatCompletion.create(model=model, messages=messages,
                                                   stream=True, max_tokens=2500, temperature=1)
     else:
         if custom_model:
-            model = 'gpt-4-1106-preview'
-        elif chat_tokens(messages) <= 3000:
-            model = 'gpt-3.5-turbo'
+            model = custom_model
         else:
-            model = 'gpt-3.5-turbo-16k'
+            chatlen = chat_tokens(messages)
+            if chatlen >= 15000:
+                model = 'gpt-4-1106-preview'
+            elif chatlen <= 3000:
+                model = 'gpt-3.5-turbo'
+            else:
+                model = 'gpt-3.5-turbo-16k'
 
         if custom_model:
             completion = openai.ChatCompletion.create(model=model, messages=messages,
@@ -148,27 +154,27 @@ def completion_audio():
     else:
         return Response(None, mimetype='text/event-stream')
 
-def tts_consumer(qq):
-    channel = pygame.mixer.find_channel()
-
+## Generates the waves
+def tts_consumer(qqin, qqout):
     ii = 0
     while True:
-        sentence = qq.get()
+        sentence = qqin.get()
+        if sentence is None or break_streaming:
+            break
 
-        print("Generate " + sentence)
         tts.tts_to_file(text=sentence, file_path="waves/tts" + str(ii) + ".wav")
+        qqout.put("waves/tts" + str(ii) + ".wav")
         
-        my_sound = pygame.mixer.Sound("waves/tts" + str(ii) + ".wav")
-        channel.queue(my_sound)
-
-        qq.task_done()  # Signal that a formerly enqueued task is complete
-
+        qqin.task_done()  # Signal that a formerly enqueued task is complete
         ii += 1
 
 def play_audio(srm):
-    qq = queue.Queue()
-    consumer_thread = threading.Thread(target=tts_consumer, args=(qq,))
+    qqin = queue.Queue()
+    qqout = queue.Queue()
+    consumer_thread = threading.Thread(target=tts_consumer, args=(qqin, qqout))
     consumer_thread.start()
+
+    channel = pygame.mixer.find_channel()
 
     currentinput = ""
     for token in srm:
@@ -176,13 +182,37 @@ def play_audio(srm):
         if re.search(r"[.!?] ", currentinput):
             sentences = re.split(r"[.!?] ", currentinput)
             for sentence in sentences[:-1]:
-                qq.put(sentence)
+                qqin.put(sentence)
             currentinput = sentences[-1]
         yield token
 
-    if currentinput:
-        qq.put(currentinput)
+        if break_streaming:
+            break
 
+        if not qqout.empty():
+            if not channel.get_queue():
+                my_sound = pygame.mixer.Sound(qqout.get())
+                channel.queue(my_sound)
+
+    if break_streaming:
+        channel.quit()
+                
+    if currentinput:
+        qqin.put(currentinput)
+
+    while (not qqin.empty() or not qqout.empty()) and not break_streaming:
+        if not qqout.empty() and not channel.get_queue():
+            my_sound = pygame.mixer.Sound(qqout.get())
+            channel.queue(my_sound)
+        time.sleep(0.2)
+
+    if break_streaming:
+        channel.quit()
+        
+    qqin.put(None)
+    while channel.get_busy():
+        time.sleep(0.2)
+        
     consumer_thread.join()
         
 def completion_api(custom_system=None, custom_model=None):

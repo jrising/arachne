@@ -1,0 +1,175 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.
+> 
+> 
+>   2023-06-12:
+>   James wanted to encode a unicode object to ASCII in Python 2; Arachne provided methods to remove or replace unencodable characters.
+> 
+> 
+> 
+>   2023-03-10:
+>   How to resample xarray by taking every 10th value along a dimension; use `.isel()` method.
+> 
+> 
+> 
+>   2023-08-24:
+>   Pickle Files and the `with` Statement
+> 
+> 
+> 
+>   2023-08-19:
+>   James inquired about finding a file in Python with known directory but incomplete filename; Arachne suggested using the `glob` module for pattern matching.
+> 
+> 
+> 
+>   2023-04-13:
+>   Calculated how to find the indirect multiplier effect from an IMPLAN analysis; shared step-by-step process.
+> 
+> 
+> 
+>   2023-07-25:
+>   James asked how to get dimension keys in Mimi framework; Arachne suggested passing keys as argument to run_timestep function.
+> 
+> 
+> 
+>   2023-07-18:
+>   How to repeatedly call an Ajax command until the server asks to stop; Use `setInterval()` and `clearInterval()` with a conditional check in the Ajax success callback.
+> 
+> 
+> 
+>   2023-07-20:
+>   James seeks advice on how to request his academic advisor to nominate him for an award; Arachne provides guidelines for a professional email.
+> 
+> 
+> 
+>   2023-05-01:
+>   James designs language with N, I, and O; Arachne translates "NI OI IN PIR?" as "Sense change, opine known?"
+> 
+> 
+> 
+>   2023-02-10:
+>   Can mutable struct derive from abstract type in Julia? Yes, with <: operator; example provided.
+> 
+> 
+>     
+**user**:
+> I am building a TTS app with a producer thread that gets sentences and a consumer thread that speaks them out. Here's the functions:
+> ```
+> def tts_consumer(qq):
+>     channel = pygame.mixer.find_channel()
+> 
+>     ii = 0
+>     while True:
+>         sentence = qq.get()
+>         tts.tts_to_file(text=sentence, file_path="waves/tts" + str(ii) + ".wav")
+>         
+>         my_sound = pygame.mixer.Sound("waves/tts" + str(ii) + ".wav")
+>         channel.queue(my_sound)
+> 
+>         qq.task_done()  # Signal that a formerly enqueued task is complete
+>         ii += 1
+> 
+> def play_audio(srm):
+>     qq = queue.Queue()
+>     consumer_thread = threading.Thread(target=tts_consumer, args=(qq,))
+>     consumer_thread.start()
+> 
+>     currentinput = ""
+>     for token in srm:
+>         currentinput += token
+>         if re.search(r"[.!?] ", currentinput):
+>             sentences = re.split(r"[.!?] ", currentinput)
+>             for sentence in sentences[:-1]:
+>                 qq.put(sentence)
+>             currentinput = sentences[-1]
+>         yield token
+> 
+>     if currentinput:
+>         qq.put(currentinput)
+> 
+>     consumer_thread.join()
+> ```
+> 
+> My first question is, does the .join command here work? The consumer thread is in an infinite loop, so how can the join ever complete?
+**assistant**:
+> You are correct in your understanding that `Thread.join()` method blocks the calling thread until the thread whose `join()` method is called is terminated. Your consumer thread has an infinite loop, so it will not terminate on its own, so the `join()` statement in your code will block the `play_audio` function indefinitely.
+> 
+> But you can manage this situation. One way is to pass a 'poison pill' or termination signal to your consumer thread. This involves adding a unique value to the queue (like `None`) which signals the consumer thread to break the loop and end.
+> 
+> Modifying your code to implement this would look something like this:
+> 
+> ```python
+> def tts_consumer(qq):
+>     channel = pygame.mixer.find_channel()
+>     ii = 0
+> 
+>     while True:
+>         sentence = qq.get()
+>         
+>         # Break if poison pill is found
+>         if sentence is None:
+>             break
+> 
+>         tts.tts_to_file(text=sentence, file_path="waves/tts" + str(ii) + ".wav")        
+>         my_sound = pygame.mixer.Sound("waves/tts" + str(ii) + ".wav")
+>         channel.queue(my_sound)
+> 
+>         qq.task_done()  # Signal that a formerly enqueued task is complete
+>         ii += 1
+> 
+> def play_audio(srm):
+>     qq = queue.Queue()
+>     consumer_thread = threading.Thread(target=tts_consumer, args=(qq,))
+>     consumer_thread.start()
+> 
+>     ...
+> 
+>     if currentinput:
+>         qq.put(currentinput)
+>     
+>     # Put poison pill into the queue
+>     qq.put(None)
+> 
+>     consumer_thread.join()
+> ```
+> 
+> In this case, when `play_audio` has put all the sentences into the queue, it adds `None` to the queue. The consumer sees the `None` and breaks out of its infinite loop, and then the `join()` call in `play_audio` can complete.
+**user**:
+> Next, the audio I hear tends to skip sentences, even though I see them all being generated as .wav files. How can I get every sentence?
+**assistant**:
+> The skipping issue you're experiencing could be due to the consumer thread not having enough time to play each sentence before moving on to the next one. This can happen if the sentences are being queued faster than they can be played.
+> 
+> To ensure that each sentence is played before the next one starts, you can modify your code to introduce a small delay between each sentence playback. This can be achieved using the `time.sleep()` function from the `time` module.
+> 
+> Here's an updated version of your code that includes a small delay between each sentence playback:
+> 
+> ```python
+> import time
+> 
+> def tts_consumer(qq):
+>     channel = pygame.mixer.find_channel()
+>     ii = 0
+> 
+>     while True:
+>         sentence = qq.get()
+>         
+>         # Break if poison pill is found
+>         if sentence is None:
+>             break
+> 
+>         tts.tts_to_file(text=sentence, file_path="waves/tts" + str(ii) + ".wav")        
+>         my_sound = pygame.mixer.Sound("waves/tts" + str(ii) + ".wav")
+>         channel.queue(my_sound)
+> 
+>         # Delay for a short duration before processing the next sentence
+>         time.sleep(0.2)  # Adjust the delay duration as needed
+> 
+>         qq.task_done()  # Signal that a formerly enqueued task is complete
+>         ii += 1
+> 
+> # Rest of your code...
+> ```
+> 
+> In this example, a delay of 0.2 seconds (adjustable as needed) is introduced using `time.sleep(0.2)` after each sentence is played. This allows for a short pause between sentences and gives them enough time to be heard before the next one begins.
+> 
+> By introducing this delay, you should be able to hear each sentence without skipping. Feel free to adjust the delay duration to find a value that works best for your specific use case.

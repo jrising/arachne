@@ -1,0 +1,200 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.
+> 
+> 
+>   2023-02-05:
+>   Huns invading China confirmed; Correction made regarding Sesame Street songs about NYC, providing three examples.
+> 
+> 
+> 
+>   2023-08-09:
+>   How to create a pandas DataFrame from vectors in Python; Provided steps to import pandas, create a dictionary, and construct the DataFrame.
+> 
+> 
+> 
+>   2023-03-11:
+>   Explained broadcasting NaN issue in xarray and provided method to create DataArray from DataSet dimensions; answered how to subset columns and get column list in GeoPandas.
+> 
+> 
+> 
+>   2023-07-21:
+>   James seeks journals accepting "perspective" articles in economics; Arachne recommends The Journal of Economic Perspectives (JEP) and others for such submissions.
+> 
+> 
+> 
+>   2023-04-27:
+>   Getting the 10th lowest number in R using `sort()` and indexing; Explained combinations for choosing 10 out of 30.
+> 
+> 
+> 
+>   2023-04-14:
+>   James asked about the name for the length of a circle within a wedge; Arachne clarified it as an arc and provided its formula for calculation.
+> 
+> 
+> 
+>   2023-03-17:
+>   James asks for retrieving a numeric vector from a data.table column; Arachne provides code and instructions, including using indexing operator and `unlist()`.
+> 
+> 
+> 
+>   2023-03-09:
+>   Is there an open access version of InstructGPT?; InstructGPT is proprietary, but GPT-3 or open source models like GPT-2, RoBERTa, and BERT can be useful.
+> 
+> 
+> 
+>   2023-02-10:
+>   Can mutable struct derive from abstract type in Julia? Yes, with <: operator; example provided.
+> 
+> 
+> 
+>   2023-07-28:
+>   James asked about AVX and SSE; Arachne described them as instruction sets for managing data in processors.
+> 
+> 
+>     
+**user**:
+> How do I make a matrix of zeros in Julia which can also accept missing values?
+**assistant**:
+> In Julia, you can create a matrix that can include missing values using the `fill()` function, providing `missing` as the first argument (the value to fill the array with), and then the dimensions of the matrix as the remaining arguments. 
+> 
+> For instance, if you're creating a 3x3 matrix, you can do it this way:
+> 
+> ```julia
+> matrix = fill(missing, 3, 3)
+> ```
+> This will create a 3x3 matrix initialized with `missing` values.
+> 
+> But since you want to make a matrix of zeros that can also accept missing values, initialize the matrix with zeros by using `Union` with types `Float64` (or `Int64`, depending on your preference) and `Missing`:
+> 
+> ```julia
+> matrix = fill!(Array{Union{Missing, Float64}}(undef, 3, 3), 0)
+> ```
+> The `fill!()` function fills an existing array with a value, whereas `Array{Union{Missing, Float64}}(undef, 3, 3)` creates an uninitialized 3x3 array that can hold either `Float64` or `Missing` values.
+**user**:
+> I could also accept a matrix of missing values which allows floats. How can I do this?
+**assistant**:
+> If you want to create a matrix of missing values that can also accept floats, you can initialize the matrix with the `missing` value for each element. Here's how you can do it in Julia:
+> 
+> ```julia
+> matrix = fill(missing, 3, 3)
+> ```
+> 
+> This will create a 3x3 matrix with all elements set to `missing`. You can then assign float values to specific positions in the matrix:
+> 
+> ```julia
+> matrix[2, 2] = 3.14
+> ```
+> 
+> This assigns the value `3.14` to the element at the second row and second column of the matrix.
+> 
+> Note that in Julia, when you combine the `missing` value with other types (such as floats), the resulting element becomes of type `Union{Missing, Float64}`. This union type allows flexibility by accepting both missing values and floats in the same matrix.
+**user**:
+> When I do this, I get the error:
+> ```
+> ERROR: MethodError: convert(::Type{Union{}}, ::Float64) is ambiguous. Candidates:
+>   convert(::Type{PQ}, p::Number) where PQ<:Polynomials.AbstractRationalFunction in Polynomials at /Users/admin/.julia/packages/Polynomials/fboHv/src/rational-functions/common.jl:47
+>   convert(::Type{T}, x::Number) where T<:Number in Base at number.jl:7
+>   convert(::Type{T}, x::Number) where T<:AbstractChar in Base at char.jl:184
+>   convert(::Type{Union{}}, x) in Base at essentials.jl:216
+>   convert(::Type{T}, x) where T<:Observables.Observable in Observables at /Users/admin/.julia/packages/Observables/PHGQ8/src/Observables.jl:151
+>   convert(::Type{T}, arg) where T<:VecElement in Base at baseext.jl:19
+>   convert(P::Type{<:Polynomials.AbstractPolynomial}, x) in Polynomials at /Users/admin/.julia/packages/Polynomials/fboHv/src/common.jl:492
+> Possible fix, define
+>   convert(::Type{Union{}}, ::Number)
+> Stacktrace:
+>  [1] convert(#unused#::Type{Missing}, x::Float64)
+>    @ Base ./missing.jl:69
+>  [2] setindex!(::Matrix{Missing}, ::Float64, ::Int64, ::Int64)
+>    @ Base ./array.jl:905
+>  [3] top-level scope
+>    @ REPL[40]:1
+> ```
+**assistant**:
+> The error message suggests that there is an ambiguity in the conversion from `Float64` to `Missing`. This can happen if there are conflicting definitions of how the conversion should occur.
+> 
+> To resolve the issue, you can explicitly specify the type of the matrix to be `Matrix{Union{Missing, Float64}}`. By doing this, you make it clear that the matrix can contain elements of either `Missing` or `Float64` type.
+> 
+> Here's an example of how to create a matrix of missing values that can also accept floats:
+> 
+> ```julia
+> matrix = Matrix{Union{Missing, Float64}}(missing, 3, 3)
+> ```
+> 
+> This will create a 3x3 matrix filled with `missing` values, which can also accept `Float64` values when assigned explicitly. You can then assign float values to specific positions in the matrix without encountering the conversion ambiguity error.
+> 
+> ```julia
+> matrix[2, 2] = 3.14
+> ```
+> 
+> This assigns the value `3.14` to the element at the second row and second column of the matrix.
+**user**:
+> How do I do an equivalent to R's colMeans in julia, skipping missing values?
+**assistant**:
+> In Julia, you can calculate column means while skipping missing values using the `mean()` function in combination with the `skipmissing()` function. Here's an example:
+> 
+> ```julia
+> using Statistics
+> 
+> # Create a matrix with missing values
+> matrix = [1.0 2.0 missing; 3.0 missing 5.0; missing 6.0 7.0]
+> 
+> # Calculate column means while skipping missing values
+> col_means = [mean(skipmissing(col)) for col in eachcol(matrix)]
+> ```
+> 
+> In the code above, we use the `mean()` function from the `Statistics` module to calculate the mean of each column. We use a list comprehension to iterate over each column (`col`) in the matrix `eachcol(matrix)`, and within each iteration, we use `skipmissing(col)` to skip the missing values in that column before calculating the mean.
+> 
+> The resulting `col_means` will be an array containing the means of each column, excluding any missing values.
+> 
+> Note that to use the `Statistics` module, you need to import it with `using Statistics` before using the functions from that module.
+**user**:
+> Now I would like to broadcast the values from this colMeans to each of the columns in several specified rows. How can I do this?
+**assistant**:
+> To broadcast the column means to specified rows in a matrix, you can simply assign the mean values to the desired rows using broadcasting in Julia. Here's an example:
+> 
+> ```julia
+> using Statistics
+> 
+> # Create a matrix with missing values
+> matrix = [1.0 2.0 missing; 3.0 missing 5.0; missing 6.0 7.0]
+> 
+> # Calculate column means while skipping missing values
+> col_means = [mean(skipmissing(col)) for col in eachcol(matrix)]
+> 
+> # Specify the rows to broadcast the column means
+> rows_to_broadcast = [1, 3]
+> 
+> # Assign the column means to the specified rows using broadcasting
+> matrix[rows_to_broadcast, :] .= col_means
+> ```
+> 
+> In the code above, we first calculate the column means while skipping missing values, as we did before. Next, we specify the `rows_to_broadcast` as an array of row indices where we want to broadcast the column means. Finally, using broadcasting, we assign the column means to the specified rows by indexing `matrix[rows_to_broadcast, :]` and broadcasting the assignment (`.`) operator with the column means `col_means`.
+> 
+> With this code, the column means will be broadcasted to the specified rows in the matrix, replacing the existing values in those rows.
+**user**:
+> When I do this, I get the error `ERROR: DimensionMismatch("array could not be broadcast to match destination")`. But my col_means is a vector of length 3, and I have 3 columns.
+**assistant**:
+> Apologies for the confusion. It seems there was an error in the indexing approach. To correctly broadcast the column means to specified rows, we need to transpose the `col_means` vector before assigning it to the desired rows. Here's the revised code:
+> 
+> ```julia
+> using Statistics
+> 
+> # Create a matrix with missing values
+> matrix = [1.0 2.0 missing; 3.0 missing 5.0; missing 6.0 7.0]
+> 
+> # Calculate column means while skipping missing values
+> col_means = [mean(skipmissing(col)) for col in eachcol(matrix)]
+> 
+> # Specify the rows to broadcast the column means
+> rows_to_broadcast = [1, 3]
+> 
+> # Transpose the col_means vector to match the size of the rows to broadcast
+> broadcasted_means = col_means'
+> 
+> # Assign the column means to the specified rows using broadcasting
+> matrix[rows_to_broadcast, :] .= broadcasted_means
+> ```
+> 
+> In this updated code, we use the `broadcasted_means = col_means'` line to transpose the `col_means` vector, converting it into a row vector with the length equal to the number of columns. Finally, we assign the transposed `broadcasted_means` vector to the specified rows in the matrix using broadcasting, resolving the "array could not be broadcast to match destination" error.
+> 
+> Now, the column means will be correctly broadcasted to the specified rows in the matrix.

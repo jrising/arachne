@@ -1,0 +1,79 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.
+> 
+> 
+>   2023-10-18:
+>   Replacing NA values with 0 in an R dataframe
+> 
+> 
+> 
+>   2023-11-07:
+>   Estimating Current Climate Losses - Methodology and Approach
+> 
+> 
+> 
+>   2023-11-07:
+>   Estimating Climate Losses with Machine Learning
+> 
+> 
+> 
+>   2023-04-27:
+>   Inquired about ISO code "CYN"; Arachne stated there is no such code for a country.
+> 
+> 
+> 
+>   2023-10-02:
+>   Group-wise Mutations in dplyr
+> 
+> 
+> 
+>   2023-11-03:
+>   Highlighting Countries in Climate Change Losses Graph
+> 
+> 
+> 
+>   2023-11-07:
+>   Estimating Climate Change Losses - Methodology and Machine Learning Approach
+> 
+> 
+> 
+>   2023-02-13:
+>   James had trouble mutating data using `dplyr`'s `across`; Arachne suggested possible issues and checking data structure.
+> 
+> 
+> 
+>   2023-07-09:
+>   James encountered NA issues in R's 'model.matrix'; Arachne suggested using 'na.action = na.pass' to retain NAs in the resulting matrix.
+> 
+> 
+> 
+>   2023-10-25:
+>   Fitting a Random Forest for Flexible Querying
+> 
+> 
+>     
+**user**:
+> I am using dplyr with data that has several entries (monte carlo draws) for each of several groups (of countries). I have a weight for each entry, and now I want to normalize those weights. But there are NAs in the weights. Here is my attempt:
+> ```
+> allyr.ww <- allyr %>% group_by(ISO) %>%
+>     mutate(weight.norm=ifelse(all(is.na(weight)), 1/length(weight), weight / sum(weight, na.rm=T))
+> ```
+> 
+> I am getting odd behavior though. If my first entry for a country has an NA weight, I get NAs for all of the weights-- when I think I should ignore that entry. What's going on?
+**assistant**:
+> The unexpected behavior you're seeing is due to the `ifelse` function. If the first condition `all(is.na(weight))` in your `ifelse` call is `TRUE`, it would return `1/length(weight)` for all elements in the group. If it's `FALSE`, it would return `weight / sum(weight, na.rm=T)` for all elements, and that would include `NA` where `weight` is `NA`.
+> 
+> The issue is that `ifelse` doesn't apply the condition separately to each entry, but rather to the whole group. This is because `ifelse` isn't meant to be used in a row-wise manner, but instead is designed to work on vectors.
+> 
+> To ensure that each weight is considered individually, you could instead use the `case_when` function which can handle row-wise conditions, but you need to slightly revise your logic:
+> ```r
+> allyr.ww <- allyr %>% group_by(ISO) %>%
+>     mutate(weight.norm = case_when(
+>         all(is.na(weight)) ~ 1/length(weight),
+>         is.na(weight) ~ NA_real_,
+>         TRUE ~ weight / sum(weight, na.rm=T)
+>     ))
+> ```
+> In this version, if all weights are `NA`, each `weight.norm` will be `1/length(weight)`. If just one weight is `NA`, that specific `weight.norm` will be `NA` as well. Otherwise, each `weight.norm` will be `weight / sum(weight, na.rm=T)`.
+>   
+> This should give you the expected output.

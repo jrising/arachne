@@ -1,0 +1,103 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.
+> 
+> 
+>   2023-07-16:
+>   Flask app served under Passenger needs background processing; Arachne suggests using task queue (Celery/RQ) and shared state for progress updates.
+> 
+> 
+> 
+>   2023-08-20:
+>   James asked how to return HTML composed of a list of items in Flask; Arachne provided an example using the `render_template()` function with a `for` loop in Jinja2.
+> 
+> 
+> 
+>   2023-07-16:
+>   Running Flask background tasks without a task queue; Risks highlighted, solution suggested involving new thread.
+> 
+> 
+> 
+>   2023-07-16:
+>   James asked about closing a child thread in Python; Arachne suggested using shared variables, not forcefully terminating.
+> 
+> 
+> 
+>   2023-08-15:
+>   James asked how to change the title on legends in QGIS's layout system; Arachne provided step-by-step instructions.
+> 
+> 
+> 
+>   2023-03-09:
+>   James inquires about making paper sticky with rubber cement; Arachne provides step-by-step instructions and safety considerations.
+> 
+> 
+> 
+>   2023-08-23:
+>   James asked about exporting a layout in QGIS; Arachne provided a workaround using layout templates.
+> 
+> 
+> 
+>   2023-08-21:
+>   Inquired about creating size-dependent markers in QGIS; Received step-by-step instructions on using 'Data-defined override'.
+> 
+> 
+> 
+>   2023-07-14:
+>   James asked how to combine PDFs with bookmarks in Adobe Acrobat; Arachne provided a step-by-step guide to accomplish this.
+> 
+> 
+> 
+>   2023-08-17:
+>   James asked how to add a layer to a group in QGIS; Arachne provided a step-by-step guide.
+> 
+> 
+>     
+**user**:
+> How can I make a process queue in python? I want one thread to add items to the queue and another thread to work through them.
+**assistant**:
+> Sure, you can accomplish this using Python's built-in `queue` module combined with `threading`. Here's a simplified example:
+> 
+> ```python
+> import threading
+> import queue
+> import time
+> 
+> def producer(q):
+>     count = 0
+>     while True:
+>         data = f"Task-{count}"
+>         q.put(data)
+>         print(f"Added {data} to queue")
+>         count += 1
+>         time.sleep(1)  # Wait for 1 second before producing the next task
+> 
+> def consumer(q):
+>     while True:
+>         data = q.get()
+>         print(f"Processing {data}")
+>         q.task_done()  # Signal that a formerly enqueued task is complete
+>         time.sleep(2)  # Simulate processing time
+> 
+> # Create the queue
+> q = queue.Queue()
+> 
+> # Create a producer thread and a consumer thread
+> producer_thread = threading.Thread(target=producer, args=(q,))
+> consumer_thread = threading.Thread(target=consumer, args=(q,))
+> 
+> # Start the threads
+> producer_thread.start()
+> consumer_thread.start()
+> 
+> # Join threads so the application will wait for both threads to complete
+> producer_thread.join()
+> consumer_thread.join()
+> ```
+> 
+> In this example, one thread, the **producer**, adds items ('tasks') to the queue. The other thread, the **consumer**, retrieves tasks from the queue and processes them.
+> 
+> While this example runs the threads forever, you might want to add some checks or signals to end the loop after some specific event or after the queue is empty.
+> 
+> Remember, when sharing data between threads, you must be careful to avoid race conditions. Python's `queue.Queue` class is thread-safe, meaning it uses locks to ensure that an operation ('put' or 'get') by one thread is not interrupted by an operation by another thread.
+> 
+> If you need more control over the task completion, especially to know when all tasks in the queue are done, you can use the `queue.Queue.join()` method. Call `q.task_done()` for each task removed from the queue. This will unblock then `q.join()` call once all items have been processed. This helps in graceful shutdown of your worker threads.
