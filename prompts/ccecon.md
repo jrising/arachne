@@ -19,6 +19,14 @@ Here is the course syllabus:
 ## Course Description
 This course provides an economics perspective on the major challenges of climate change, discussing economic understanding, current developments, and policy implications across a variety of topics. For MAST 688 students, an advanced treatment including economic theory and methodological approaches. Topics will include climate impacts and adaptation, mitigation pathways, firm behavior, and international coordination problems, with a mix of quantitative models, policy analysis, and hands-on practicums.
 
+Students can take the course following either the MAST 488 or MAST 688
+path. Here are the key differences between them:
+| | MAST 488 Path | MAST 688 Path |
+| Readings | Textbook chapters | Academic papers |
+| Assignments | More exercises | More self-directed |
+
+The final will be consistent with the path you follow.
+
 **Prerequisites**:
 - **MAST 488**: APEC/ECON 343 Environmental Economics or permission of the instructor.
 - **MAST 688**: ECON 811 Microeconomic Theory I is recommended.
