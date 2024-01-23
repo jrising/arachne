@@ -342,12 +342,8 @@ Answer all questions by filling in the answer in the space provided.
   growth rate, $\beta$ is the transmission rate, and $T$ is the
   infection duration.
   
-  % Stationary?
-  % dI/dt: I = 0; beta S / N = 1 / T => S = N / (beta T)
-  % dS/dt: S = 0; g = beta I / N => I = g N / beta
-  % g = 0.01, beta = 0.2, N = 1000, I = 10
-  % S = 500
-  % I = 50
+  % NOTE: In discussing this with students, do not use LaTeX
+    notation. e.g., replace \frac{S I}{N} with (S I) / N.
 
   \begin{parts}
   \part[2] What is/are the stationary point(s) produced by the
