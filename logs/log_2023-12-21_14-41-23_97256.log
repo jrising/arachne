@@ -1,0 +1,120 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.
+> 
+> 
+>   2023-10-20:
+>   Time Zone Conversion in Python
+> 
+> 
+> 
+>   2023-08-09:
+>   James encountered an import error between `statsmodels` and `pandas`; Arachne suggested updating or downgrading the packages.
+> 
+> 
+> 
+>   2023-08-09:
+>   How to create a pandas DataFrame from vectors in Python; Provided steps to import pandas, create a dictionary, and construct the DataFrame.
+> 
+> 
+> 
+>   2023-08-23:
+>   James asked about exporting a layout in QGIS; Arachne provided a workaround using layout templates.
+> 
+> 
+> 
+>   2023-10-20:
+>   Geolocation in Python: Finding Nearby Points of Interest
+> 
+> 
+> 
+>   2023-08-23:
+>   Asked about getting notifications when a window is closed in Flask; Given solution using JavaScript and AJAX, with caveats and best practices.
+> 
+> 
+> 
+>   2023-05-23:
+>   How to draw from a conditional normal distribution; Difference between β̂ and expected value in econometrics.
+> 
+> 
+> 
+>   2023-06-24:
+>   James was having trouble with setting up Passenger for his Flask app; Arachne provided steps to fix the header issue and import error.
+> 
+> 
+> 
+>   2023-06-12:
+>   James wanted to encode a unicode object to ASCII in Python 2; Arachne provided methods to remove or replace unencodable characters.
+> 
+> 
+> 
+>   2023-11-19:
+>   Exporting GeoDataFrames to Import into QGIS
+> 
+> 
+>     
+**user**:
+> In python, I have a latitude and longitude and I want to add a certain number of northward and eastward meters. How can I get a new lat and lon?
+**assistant**:
+> To add a certain number of meters to a latitude and longitude pair in eastward (for longitude) and northward (for latitude) directions, you can use the geographic, spherical geometry library `geopy`. Below is a simple example of how to do it:
+> 
+> ```python
+> from geopy.distance import geodesic
+> 
+> # Starting point
+> start = (40.7128, -74.0060)  # latitude and longitude of New York City
+> 
+> # Number of meters to add 
+> northward_meters = 1000  # 1 km to the north
+> eastward_meters = 1000   # 1 km to the east
+> 
+> # Add northward meters
+> location_north = geodesic(meters=northward_meters).destination(point=start, bearing=0)
+> 
+> # Add eastward meters
+> location_final = geodesic(meters=eastward_meters).destination(point=location_north, bearing=90)
+> 
+> # Print final latitude and longitude
+> print(location_final.latitude, location_final.longitude)
+> ```
+> 
+> This code adds northward and eastward meters to the starting point. The `bearing` argument represents the direction (in degrees). 0 degrees is north, and 90 degrees is east. For other directions, you can use south (180 degrees) and west (270 degrees).
+> 
+> Note: This simple approach assumes Earth is a perfect sphere, which introduces small errors in calculations. For larger distances or higher precision requirements, more complex geodesic calculations should be used.
+**user**:
+> I get the error: cannot import name 'geodesic' from 'geopy'.
+**assistant**:
+> I apologize for the confusion. It seems that the 'geodesic' function is no longer available directly in the 'geopy' library. However, you can achieve the same result using a different approach.
+> 
+> You can use the 'pyproj' library to perform the coordinate calculations. Make sure the 'pyproj' library is installed, you can do so by running `pip install pyproj`.
+> 
+> Here's an example of how you can modify the code:
+> 
+> ```python
+> import pyproj
+> 
+> # Starting point
+> start = (40.7128, -74.0060)  # latitude and longitude of New York City
+> 
+> # Number of meters to add
+> northward_meters = 1000  # 1 km to the north
+> eastward_meters = 1000   # 1 km to the east
+> 
+> # Create the projection
+> crs = pyproj.CRS.from_string("EPSG:4326")  # WGS84 coordinate reference system
+> proj = pyproj.Transformer.from_crs(crs, crs.geodetic_crs, always_xy=True)
+> 
+> # Convert meters to degrees (approximation)
+> delta_latitude = northward_meters / proj.transformer.conversion[1, 1]
+> delta_longitude = eastward_meters / proj.transformer.conversion[0, 0]
+> 
+> # Calculate the new latitude and longitude
+> new_latitude = start[0] + delta_latitude
+> new_longitude = start[1] + delta_longitude
+> 
+> # Print the final latitude and longitude
+> print(new_latitude, new_longitude)
+> ```
+> 
+> This code uses the 'pyproj' library to create a coordinate transformer. It converts the given distances in meters to approximated degrees of latitude and longitude. Then, it adds those deltas to the starting latitude and longitude to get the final coordinates.
+> 
+> Please give it a try and let me know if you encounter any further issues!

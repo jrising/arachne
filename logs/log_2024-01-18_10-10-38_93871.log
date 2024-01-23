@@ -1,0 +1,468 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.
+> 
+> 
+>   2023-08-18:
+>   James wanted to convert a list of coordinates into a shapefile; Arachne provided a Python script using `geopandas` and `shapely`.
+> 
+> 
+> 
+>   2023-07-25:
+>   James asked how to get dimension keys in Mimi framework; Arachne suggested passing keys as argument to run_timestep function.
+> 
+> 
+> 
+>   2023-10-29:
+>   Ship Visibility in the 1850s
+> 
+> 
+> 
+>   2023-11-19:
+>   Extracting Coordinates from a Polygon in Python
+> 
+> 
+> 
+>   2023-12-24:
+>   Fixing "Table doesn't exist" Error in MediaWiki Update
+> 
+> 
+> 
+>   2023-03-09:
+>   James asked about scale and dimension in the natural sciences; Arachne explained their relationship and provided examples of terms used in different academic fields.
+> 
+> 
+> 
+>   2023-03-10:
+>   How to resample xarray by taking every 10th value along a dimension; use `.isel()` method.
+> 
+> 
+> 
+>   2023-06-16:
+>   How to move shapefile coordinates from 0-360° to -180 to 180° in QGIS; Assistant provides step-by-step guidance.
+> 
+> 
+> 
+>   2023-08-02:
+>   James asks how to change the coordinate variable in an xarray dataset; Arachne suggests using `assign_coords()` or `swap_dims()`.
+> 
+> 
+> 
+>   2023-07-26:
+>   How to relabel axes of a raster from -180 to 180 to 0 to 360; Provided code examples in R and Python, with caution about dateline inaccuracies.
+> 
+> 
+>     
+**user**:
+> I have a zipped zarr file that I am reading in python with
+> ```
+> from fsspec.implementations.zip import ZipFileSystem
+> import xarray as xr
+> ds = xr.open_zarr(ZipFileSystem("pyCIAM_outputs.zarr.zip").get_mapper())
+> ```
+> I would like to now start to reduce some of these dimensions to do some analysis, but when I say:
+> `>>> ds2 = ds.sum(dim='costtype')`
+> I run out of memory and the python process is killed. How can I go about this?
+**assistant**:
+> While zarr objects are lazy (i.e., data is not loaded until it's needed), the operation you're trying to perform (`.sum()`) attempts to load the data into memory all at once, hence your Out-of-Memory (OOM) error.
+> 
+> Here are some strategies to manage this situation:
+> 
+> 1. **Chunk your dataset**: Ensure that your dataset is chunked nicely for the operations you want to do. Usually, it is good to chunk along the dimensions you will be reducing. In your case, it would be 'costtype'. If the dataset isn't originally chunked this way, you get a performance penalty to rechunk it, but it's worth a try. 
+> 
+>      Here is an example of how to rechunk:
+>     ```python
+>     ds = ds.chunk({'costtype': 'auto'})
+>     ```
+> 
+> 2. **Perform operation on subsets of your data:** If the entire dataset is too large to handle, consider performing your operation in iterations on subsets of your data.
+> 
+>     Here is an example of how to do this:
+>     ```python
+>     subsets = ds.groupby('costtype')
+>     results = [subset.sum(dim='costtype') for subset in subsets]
+>     ds2 = xr.concat(results, dim='costtype')
+>     ```
+> 
+> 3. **Use `dask` for out-of-core computations**: `dask` allows you to perform computations that don't fit in memory. If you're working on a machine with multiple cores, `dask` can also parallelize computations to make use of all available cores. You initialize a `dask` client, which you can then use to perform computation on large datasets. Note that, to use `dask`, your dataset needs to be chunked (as described above).
+> 
+>     Here are the basic steps to use `dask` with `xarray`:
+>     ```python
+>     from dask.distributed import Client
+>     client = Client()
+> 
+>     ds = ds.chunk({'costtype': 'auto'})  # ensure your data is chunked
+> 
+>     ds2 = ds.sum(dim='costtype')
+>     ds2 = ds2.compute()  # compute is where calculation happens
+>     ```
+> 
+> 4. **Upgrade your hardware:** If your current hardware is routinely proving inadequate for the datasets you're working with, it may be worthwhile to consider adding more RAM, or even moving to a high-memory cloud instance.
+> 
+> Remember though, dask operates lazily. This means that when you call `ds.sum(dim='costtype')`, it doesn't actually perform the calculation, but constructs a dask graph of computations to be done. These computations are executed when you call `.compute()`. This approach allows dask to break down computations into manageable pieces (based on the chunks of your dataset), and enables it to utilize available computational resources most efficiently.
+**user**:
+> Here is the full definition of the dataset:
+> ```
+> Dimensions:       (adm1: 1836, case: 11, costtype: 6, scenario: 27,
+>                    quantile: 3, year: 96, ssp: 5, iam: 2, seg: 9568)
+> Coordinates:
+>   * adm1          (adm1)
+**assistant**:
+> To perform all the reductions and selections you've described, we can proceed in steps. Given your memory constraints, it's wise to iteratively apply reductions and carefully monitor memory usage. You should definitely use `dask` to manage memory more efficiently, as this will help avoid loading the whole dataset into memory at once.
+> 
+> Here's a code outline to perform these operations:
+> 
+> ```python
+> import xarray as xr
+> from fsspec.implementations.zip import ZipFileSystem
+> from dask.distributed import Client
+> 
+> client = Client()  # Set up dask client, this will help manage memory usage
+> 
+> # Load your dataset
+> ds = xr.open_zarr(ZipFileSystem("pyCIAM_outputs.zarr.zip").get_mapper(), consolidated=True)
+> 
+> # Drop 'optimal_case' data variable and 'seg' dimension
+> ds = ds.drop_vars('optimal_case')
+> 
+> # Ensure dataset is chunked – if large, this is very important
+> ds = ds.chunk({'adm1': 'auto', 'year': 'auto', 'costtype': 'auto'})
+> 
+> # Sum over costtype
+> ds = ds.sum(dim='costtype')
+> 
+> # Select only the max and min across the cases (for each year, iam, ssp, scenario, and adm1)
+> ds_max = ds.max(dim='case')
+> ds_min = ds.min(dim='case')
+> 
+> # Select specific ssp and scenario values and match them accordingly
+> # This will involve creating a new DataArray to filter the dataset
+> selected_scenarios = ['ssp119_medium', 'ssp126_low', 'ssp126_medium',
+>                       'ssp245_low', 'ssp245_medium', 'ssp370_medium', 
+>                       'ssp585_low', 'ssp585_medium']
+> selected_ssps = ['SSP1', 'SSP2', 'SSP3', 'SSP5']
+> 
+> # First, filter scenarios
+> ds_ssp_scenario = ds.where(ds.scenario.isin(selected_scenarios), drop=True)
+> 
+> # Now, create a mask based on your SSP and scenario matching criteria
+> scenario_ssp_map = {
+>     'SSP1': ['ssp119_medium', 'ssp126_low', 'ssp126_medium'],
+>     'SSP2': ['ssp245_low', 'ssp245_medium'],
+>     'SSP3': ['ssp370_medium'],
+>     'SSP5': ['ssp585_low', 'ssp585_medium']
+> }
+> 
+> # Initiate an empty dictionary to store filtered datasets
+> filtered_datasets = {}
+> 
+> for ssp, scenarios in scenario_ssp_map.items():
+>     # We use a mask to only select the relevant scenarios for each SSP
+>     scenario_mask = ds_ssp_scenario.scenario.isin(scenarios)
+>     # We then apply this mask to the dataset and assign it to the dictionary
+>     filtered_datasets[ssp] = ds_ssp_scenario.sel(ssp=ssp).where(scenario_mask, drop=True)
+> 
+> # Now, we should concatenate all filtered datasets along the 'ssp' dimension
+> concatenated_dataset = xr.concat(filtered_datasets.values(), dim='ssp')
+> 
+> # Compute to consolidate all lazy operations
+> concatenated_dataset = concatenated_dataset.compute()
+> 
+> # Finally, save to netcdf format
+> output_filepath = 'processed_output.nc'
+> concatenated_dataset.to_netcdf(output_filepath)
+> ```
+> 
+> Please ensure that you have enough memory to handle the `.compute()` call at the end. If not, you can perform these operations in smaller batches and save intermediate results to disk.
+> 
+> Remember that the efficiency of these operations heavily depends on the ordering and chunk size of the underlying data. If you need to perform multiple operations that reduce along different dimensions, it might be most efficient to adjust chunking between operations. 
+> 
+> With large datasets, it's also a good idea to keep an eye on the Dask dashboard, which can give you insights into the memory and compute resources usage. Adjust chunking and parallelization accordingly to optimize these.
+**user**:
+> You create ds_max and ds_min but don't use them. I want these to be in the final dataset, and not to have the original costs variable there. 
+> Also, I'd like to suggest a modification to how the SSPs and scenarios are handled. We can ultimately drop the ssp dimension, and just keep the selected scenarios-- but to choose different parts of the data according to the appropriate ssp for each scenario.
+> 
+> Can you modify the code accordingly?
+**assistant**:
+> Of course, I apologize for the oversight. Let's incorporate both `ds_max` and `ds_min` into the final dataset without including the original `costs` variable, and adjust the SSPs and scenarios as you've specified. Here's the updated code:
+> 
+> ```python
+> import xarray as xr
+> from fsspec.implementations.zip import ZipFileSystem
+> from dask.distributed import Client
+> 
+> client = Client()  # Set up dask client to manage memory usage
+> 
+> # Load your dataset
+> ds = xr.open_zarr(ZipFileSystem("pyCIAM_outputs.zarr.zip").get_mapper(), consolidated=True)
+> 
+> # Drop 'optimal_case' data variable and 'seg' dimension
+> ds = ds.drop_vars('optimal_case').drop_dims('seg')
+> 
+> # Ensure dataset is chunked – if large, this is very important
+> ds = ds.chunk({'adm1': 'auto', 'year': 'auto', 'costtype': 'auto', 'case': 'auto'})
+> 
+> # Calculate max and min over the 'case' dimension
+> ds_max = ds.max(dim='case')
+> ds_min = ds.min(dim='case')
+> 
+> # Sum over 'costtype'
+> ds_sum = ds.sum(dim='costtype')
+> 
+> # Selecting specific scenarios and corresponding SSPs
+> # Create a mapping of SSPs to scenarios
+> scenario_ssp_map = {
+>     'SSP1': ['ssp119_medium', 'ssp126_low', 'ssp126_medium'],
+>     'SSP2': ['ssp245_low', 'ssp245_medium'],
+>     'SSP3': ['ssp370_medium'],
+>     'SSP5': ['ssp585_low', 'ssp585_medium']
+> }
+> 
+> # Flatten the scenario list to use in isin selection
+> all_scenarios = [sc for sublist in scenario_ssp_map.values() for sc in sublist]
+> 
+> # Pre-select the data based on relevant scenarios (to reduce size before operations)
+> ds = ds.where(ds.scenario.isin(all_scenarios), drop=True)
+> 
+> # Initialize an empty DataArray list to collect the scenario specific calculations.
+> scenario_dataarrays = []
+> 
+> # Add max and min over cases to this list
+> scenario_dataarrays.append(ds_max)
+> scenario_dataarrays.append(ds_min)
+> 
+> # For each SSP, select the relevant scenarios and perform the sum over 'costtype'
+> for ssp, scenarios in scenario_ssp_map.items():
+>     # Filter the scenarios for the current SSP
+>     ds_filtered = ds.where(ds.scenario.isin(scenarios), drop=True)
+>     scenario_sum = ds_filtered.sum(dim='costtype')
+>     scenario_dataarrays.append(scenario_sum)
+> 
+> # Combine the DataArray list into a single Dataset; merge on the non-index dimensions
+> merged_dataset = xr.merge(scenario_dataarrays)
+> 
+> # Drop the 'ssp' dimension, as we're not carrying over an 'ssp' variable
+> merged_dataset = merged_dataset.drop_dims('ssp')
+> 
+> # Compute to get results
+> merged_dataset = merged_dataset.compute()
+> 
+> # Save to netcdf format
+> output_filepath = 'processed_output.nc'
+> merged_dataset.to_netcdf(output_filepath)
+> ```
+> 
+> In this revised script, we are now using `ds_max` and `ds_min` to capture the maximum and minimum data and including them in our final output. We've also altered the way we handle SSPs and scenarios by pre-filtering to the relevant scenarios, then iterating through the SSPs to calculate the sums per SSP scenario without keeping the `ssp` dimension in the resulting dataset.
+> 
+> Please check available resources and monitor memory usage while running this script, especially when you call the `.compute()` method. If the computation is still too large, you may have to persist intermediate results or perform these steps on a smaller subset of the data at a time.
+**user**:
+> This isn't quite right yet. scenario_dataarrays gets both the max and min variable, and then the scenario values (which I assume still have all cases in them). The only way I want to have cases represented are as the min and max. Maybe it would be easier to turn min and max into a dimension (so, collapsing case to a new dimension with values 'min' and 'max'), and then do the other operations with that?
+**assistant**:
+> Apologies for the confusion. That approach makes sense. To simplify things, let's collapse the `case` dimension into a new dimension called `case_type`, with values `'min'` and `'max'`. We can then perform the other operations accordingly. Here's the updated code:
+> 
+> ```python
+> import xarray as xr
+> from fsspec.implementations.zip import ZipFileSystem
+> from dask.distributed import Client
+> 
+> client = Client()  # Set up dask client to manage memory usage
+> 
+> # Load your dataset
+> ds = xr.open_zarr(ZipFileSystem("pyCIAM_outputs.zarr.zip").get_mapper(), consolidated=True)
+> 
+> # Drop 'optimal_case' data variable and 'seg' dimension
+> ds = ds.drop_vars('optimal_case').drop_dims('seg')
+> 
+> # Ensure dataset is chunked – if large, this is very important
+> ds = ds.chunk({'adm1': 'auto', 'year': 'auto', 'costtype': 'auto'})
+> 
+> # Calculate max and min over the 'case' dimension, collapsing 'case' into 'case_type' dimension
+> ds_collapsed = xr.concat([ds.max(dim='case'), ds.min(dim='case')], dim='case_type')
+> 
+> # Sum over 'costtype'
+> ds_sum = ds.sum(dim='costtype')
+> 
+> # Selecting specific scenarios and corresponding SSPs
+> # Create a mapping of SSPs to scenarios
+> scenario_ssp_map = {
+>     'SSP1': ['ssp119_medium', 'ssp126_low', 'ssp126_medium'],
+>     'SSP2': ['ssp245_low', 'ssp245_medium'],
+>     'SSP3': ['ssp370_medium'],
+>     'SSP5': ['ssp585_low', 'ssp585_medium']
+> }
+> 
+> # Flatten the scenario list to use in isin selection
+> all_scenarios = [sc for sublist in scenario_ssp_map.values() for sc in sublist]
+> 
+> # Pre-select the data based on relevant scenarios (to reduce size before operations)
+> ds_selected_scenarios = ds_sum.where(ds_sum.scenario.isin(all_scenarios), drop=True)
+> 
+> # Initialize an empty DataArray list to collect the scenario-specific calculations
+> scenario_dataarrays = []
+> 
+> # For each SSP, select the relevant scenarios and perform the sum over 'costtype'
+> for ssp, scenarios in scenario_ssp_map.items():
+>     # Filter the scenarios for the current SSP
+>     ds_ssp_filtered = ds_selected_scenarios.where(ds_selected_scenarios.scenario.isin(scenarios), drop=True)
+>     scenario_sum = ds_ssp_filtered.sel(ssp=ssp)
+>     scenario_dataarrays.append(scenario_sum)
+> 
+> # Combine the DataArray list into a single Dataset; merge on the non-index dimensions
+> merged_dataset = xr.merge(scenario_dataarrays)
+> 
+> # Combine the collapsed dataset with the other scenario-specific calculations
+> final_dataset = xr.merge([ds_collapsed, merged_dataset])
+> 
+> # Compute to get results
+> final_dataset = final_dataset.compute()
+> 
+> # Save to netcdf format
+> output_filepath = 'processed_output.nc'
+> final_dataset.to_netcdf(output_filepath)
+> ```
+> 
+> In this updated code, the `ds_collapsed` dataset is created by concatenating the maximum and minimum cases along the new `case_type` dimension. Then, the other scenario-specific calculations are added to this dataset using the `xr.merge()` function. The resulting `final_dataset` contains the collapsed cases as well as the other scenario-specific calculations.
+> 
+> Remember to monitor memory usage and adjust the chunking size if necessary, especially when working with large datasets.
+**user**:
+> Nearly there. How can I drop the ssp coordinate from each of the scenario_dataarrays, so it doesn't become a dimenion in the merged dataset?
+**assistant**:
+> Apologies for the oversight. To drop the `ssp` coordinate from each of the `scenario_dataarrays`, we can use the `.reset_coords()` method before merging the datasets. Here's the updated code:
+> 
+> ```python
+> import xarray as xr
+> from fsspec.implementations.zip import ZipFileSystem
+> from dask.distributed import Client
+> 
+> client = Client()  # Set up dask client to manage memory usage
+> 
+> # Load your dataset
+> ds = xr.open_zarr(ZipFileSystem("pyCIAM_outputs.zarr.zip").get_mapper(), consolidated=True)
+> 
+> # Drop 'optimal_case' data variable and 'seg' dimension
+> ds = ds.drop_vars('optimal_case').drop_dims('seg')
+> 
+> # Ensure dataset is chunked – if large, this is very important
+> ds = ds.chunk({'adm1': 'auto', 'year': 'auto', 'costtype': 'auto'})
+> 
+> # Calculate max and min over the 'case' dimension, collapsing 'case' into a new dimension 'case_type'
+> ds_collapsed = xr.concat([ds.max(dim='case'), ds.min(dim='case')], dim='case_type')
+> 
+> # Sum over 'costtype'
+> ds_sum = ds.sum(dim='costtype')
+> 
+> # Selecting specific scenarios and corresponding SSPs
+> # Create a mapping of SSPs to scenarios
+> scenario_ssp_map = {
+>     'SSP1': ['ssp119_medium', 'ssp126_low', 'ssp126_medium'],
+>     'SSP2': ['ssp245_low', 'ssp245_medium'],
+>     'SSP3': ['ssp370_medium'],
+>     'SSP5': ['ssp585_low', 'ssp585_medium']
+> }
+> 
+> # Flatten the scenario list to use in isin selection
+> all_scenarios = [sc for sublist in scenario_ssp_map.values() for sc in sublist]
+> 
+> # Pre-select the data based on relevant scenarios (to reduce size before operations)
+> ds_selected_scenarios = ds_sum.where(ds_sum.scenario.isin(all_scenarios), drop=True)
+> 
+> # Initialize an empty DataArray list to collect the scenario-specific calculations
+> scenario_dataarrays = []
+> 
+> # For each SSP, select the relevant scenarios and perform the sum over 'costtype'
+> for ssp, scenarios in scenario_ssp_map.items():
+>     # Filter the scenarios for the current SSP
+>     ds_ssp_filtered = ds_selected_scenarios.where(ds_selected_scenarios.scenario.isin(scenarios), drop=True)
+>     scenario_sum = ds_ssp_filtered.sel(ssp=ssp).reset_coords('ssp', drop=True)  # Drop 'ssp' coordinate
+>     scenario_dataarrays.append(scenario_sum)
+> 
+> # Combine the DataArray list into a single Dataset; merge on the non-index dimensions
+> merged_dataset = xr.merge(scenario_dataarrays)
+> 
+> # Combine the collapsed dataset with the other scenario-specific calculations
+> final_dataset = xr.merge([ds_collapsed, merged_dataset])
+> 
+> # Compute to get results
+> final_dataset = final_dataset.compute()
+> 
+> # Save to netcdf format
+> output_filepath = 'processed_output.nc'
+> final_dataset.to_netcdf(output_filepath)
+> ```
+> 
+> I added `.reset_coords('ssp', drop=True)` to each `scenario_sum` calculation, which drops the `'ssp'` coordinate from each `scenario_dataarray`. Now, when the datasets are merged using `xr.merge()`, the resulting merged dataset will not have the `'ssp'` dimension.
+> 
+> Remember to adjust the chunking size if needed to optimize memory management.
+**user**:
+> Great. Also, I see that the case_type dimension doesn't have coordinates. How can I fix that?
+**assistant**:
+> To add coordinates to the `case_type` dimension, you can use the `.assign_coords()` method. Here's the updated code:
+> 
+> ```python
+> import xarray as xr
+> from fsspec.implementations.zip import ZipFileSystem
+> from dask.distributed import Client
+> 
+> client = Client()  # Set up dask client to manage memory usage
+> 
+> # Load your dataset
+> ds = xr.open_zarr(ZipFileSystem("pyCIAM_outputs.zarr.zip").get_mapper(), consolidated=True)
+> 
+> # Drop 'optimal_case' data variable and 'seg' dimension
+> ds = ds.drop_vars('optimal_case').drop_dims('seg')
+> 
+> # Ensure dataset is chunked – if large, this is very important
+> ds = ds.chunk({'adm1': 'auto', 'year': 'auto', 'costtype': 'auto'})
+> 
+> # Calculate max and min over the 'case' dimension, collapsing 'case' into a new dimension 'case_type'
+> ds_collapsed = xr.concat([ds.max(dim='case'), ds.min(dim='case')], dim='case_type')
+> 
+> # Add coordinates to the 'case_type' dimension
+> ds_collapsed = ds_collapsed.assign_coords(case_type=['max', 'min'])
+> 
+> # Sum over 'costtype'
+> ds_sum = ds.sum(dim='costtype')
+> 
+> # Selecting specific scenarios and corresponding SSPs
+> # Create a mapping of SSPs to scenarios
+> scenario_ssp_map = {
+>     'SSP1': ['ssp119_medium', 'ssp126_low', 'ssp126_medium'],
+>     'SSP2': ['ssp245_low', 'ssp245_medium'],
+>     'SSP3': ['ssp370_medium'],
+>     'SSP5': ['ssp585_low', 'ssp585_medium']
+> }
+> 
+> # Flatten the scenario list to use in isin selection
+> all_scenarios = [sc for sublist in scenario_ssp_map.values() for sc in sublist]
+> 
+> # Pre-select the data based on relevant scenarios (to reduce size before operations)
+> ds_selected_scenarios = ds_sum.where(ds_sum.scenario.isin(all_scenarios), drop=True)
+> 
+> # Initialize an empty DataArray list to collect the scenario-specific calculations
+> scenario_dataarrays = []
+> 
+> # For each SSP, select the relevant scenarios and perform the sum over 'costtype'
+> for ssp, scenarios in scenario_ssp_map.items():
+>     # Filter the scenarios for the current SSP
+>     ds_ssp_filtered = ds_selected_scenarios.where(ds_selected_scenarios.scenario.isin(scenarios), drop=True)
+>     scenario_sum = ds_ssp_filtered.sel(ssp=ssp).reset_coords('ssp', drop=True)  # Drop 'ssp' coordinate
+>     scenario_dataarrays.append(scenario_sum)
+> 
+> # Combine the DataArray list into a single Dataset; merge on the non-index dimensions
+> merged_dataset = xr.merge(scenario_dataarrays)
+> 
+> # Combine the collapsed dataset with the other scenario-specific calculations
+> final_dataset = xr.merge([ds_collapsed, merged_dataset])
+> 
+> # Compute to get results
+> final_dataset = final_dataset.compute()
+> 
+> # Save to netcdf format
+> output_filepath = 'processed_output.nc'
+> final_dataset.to_netcdf(output_filepath)
+> ```
+> 
+> In the updated code, after concatenating the maximum and minimum values along the `case_type` dimension, the `.assign_coords()` method is used to add coordinates to the `case_type` dimension by assigning a list of desired coordinates to the `case_type` dimension in the `ds_collapsed` dataset.
+> 
+> This will add the coordinates `['max', 'min']` to the `case_type` dimension, ensuring it has the appropriate coordinates in the final dataset.
+> 
+> Remember to adjust the chunking size if needed to optimize memory management.

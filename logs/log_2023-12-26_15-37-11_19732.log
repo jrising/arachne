@@ -1,0 +1,103 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.
+> 
+> 
+>   2023-02-10:
+>   James inquired about using Julia's ProgressMeter in a Monte Carlo loop; Arachne shared code example and description.
+> 
+> 
+> 
+>   2023-11-07:
+>   Estimating Current Climate Losses - Methodology and Approach
+> 
+> 
+> 
+>   2023-10-30:
+>   Understanding Non-Informative Priors in Bayesian Gaussian Models
+> 
+> 
+> 
+>   2023-11-07:
+>   Methodology for Estimating Climate Change Losses using Machine Learning
+> 
+> 
+> 
+>   2023-10-18:
+>   Height Determination for Uncorrelated Clustering
+> 
+> 
+> 
+>   2023-05-10:
+>   James asked about researchers at the University of Delaware studying the green transition; Arachne provided tips and drafted a letter of introduction.
+> 
+> 
+> 
+>   2023-02-10:
+>   Can mutable struct derive from abstract type in Julia? Yes, with <: operator; example provided.
+> 
+> 
+> 
+>   2023-08-21:
+>   How to calculate standard error for marginal effect in an econometric model; Delta method as an approximation.
+> 
+> 
+> 
+>   2023-11-07:
+>   Estimating Current Climate Losses - Methodology for Projections
+> 
+> 
+> 
+>   2023-11-01:
+>   Selecting Lightly Informative Priors for a Bayesian Model
+> 
+> 
+>     
+**user**:
+> How can I approximate the entropy of a continuous distribution which is just described from Monte Carlo draws?
+**assistant**:
+> If you have a set of Monte Carlo draws from a continuous distribution, you can approximate the entropy of the distribution using estimators. Here is a potential approach:
+> 
+> **K-nearest Neighbor Estimator:**
+> 
+> The K-nearest neighbor estimator is a popular non-parametric entropy estimation method. Essentially, it calculates the entropy directly from the data without the need to estimate the underlying probability distribution. 
+> 
+> The following steps are in Julia:
+> 
+> 1. Install the `NearestNeighbors.jl` and `Distances.jl` packages for implementing the K-nearest neighbor method.
+> 
+> ```julia
+> using Pkg
+> Pkg.add("NearestNeighbors")
+> Pkg.add("Distances")
+> using NearestNeighbors, Distances
+> ```
+> 
+> 2. Using the Monte Carlo sampled data, construct a nearest neighbor structure called a "ball tree." The neighbors must be computed in terms of their ranks rather than their absolute distances.
+> 
+> ```julia
+> tree = KDTree(data, Euclidean())
+> ```
+> 
+> 3. Find the k-nearest neighbor distance `d_k` for every data point.
+> 
+> ```julia
+> k = # choose a value for k
+> d_k = # store the distances here
+> 
+> for i in eachindex(data[:, 1])
+>     idxs, dists = knn(tree, data[:, i], k + 1)  # k + 1 because it will also return the point itself
+>     d_k[i] = dists[end]  # last distance is the distance to the k-th nearest neighbor
+> end  
+> ```
+> 
+> 4. Calculate the entropy approximation from the following formula:
+> 
+> ```julia
+> N = length(data[:, 1])
+> k = # choose a value for k
+> entropy = (log(N) - psi(k) + log(sum(d_k)) + log(2)) / N + log(pi)
+> ```
+> 
+> This method is derived from Kozachenko and Leonenko (1987): "Sample Estimate of the Entropy of a Random Vector."
+> 
+> Note: The choice of k is not obvious. There are ways to choose k optimally in theory, but these may require more samples than you have in practice. Therefore, some trial and error might be necessary to find a suitable k for your specific data.

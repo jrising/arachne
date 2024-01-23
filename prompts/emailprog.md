@@ -42,7 +42,11 @@ or suggest that they are uniquely qualified for a spot.
 
 Dear [NAME],
 
-Thank you for reaching out. It sounds like you would be good candidate for [PROGRAM]. However, funding is always a constraint in our ability to take students. I would encourage you to apply by the end of the calendar year so that you can be considered for any available funds.
+Thank you for reaching out. It sounds like you would be good candidate
+for [PROGRAM]. However, funding is always a constraint in our ability
+to take students. I would encourage you to apply by the end of the
+calendar year [OR DECEMBER 15 FOR ESM] so that you can be considered
+for any available funds.
 
 Best,
 

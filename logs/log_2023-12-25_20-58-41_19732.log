@@ -1,0 +1,181 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.
+> 
+> 
+>   2023-12-22:
+>   Resolving Database Query Errors in MediaWiki
+> 
+> 
+> 
+>   2023-03-09:
+>   James asked about using the `find` command to list directories 3 levels deep; Arachne provided the necessary command.
+> 
+> 
+> 
+>   2023-12-24:
+>   Catch-22 in Mediawiki Upgrade: Creating Temporary LocalSettings.php file
+> 
+> 
+> 
+>   2023-12-24:
+>   MediaWiki Upgrade Error Resolution
+> 
+> 
+> 
+>   2023-12-24:
+>   Fixing "Table doesn't exist" Error in MediaWiki Update
+> 
+> 
+> 
+>   2023-07-21:
+>   How to return a list with the same type as the output type of a function in Julia; Function-based dispatch and `eltype()` explained.
+> 
+> 
+> 
+>   2023-07-09:
+>   James encountered NA issues in R's 'model.matrix'; Arachne suggested using 'na.action = na.pass' to retain NAs in the resulting matrix.
+> 
+> 
+> 
+>   2023-02-18:
+>   User asked about using blinkers in a turn-only lane in the US; Assistant clarified that it is required for safe driving and in some states, failure to use them can result in a traffic violation.
+> 
+> 
+> 
+>   2023-12-25:
+>   Resolving Missing Content Issue in MediaWiki Upgrade
+> 
+> 
+> 
+>   2023-08-22:
+>   James inquired about the TTL for setting up a DNS record in Google Domains; Arachne suggested a common practice of around 1 hour, highlighting trade-offs.
+> 
+> 
+>     
+**user**:
+> I am upgrading an old version MediaWiki. After the upgrade, I can still see my content in the `content` table, but all of the pages show up as "There is currently no text in this page." This is even the case with my single orphaned page-- it's name shows up on the orphaned pages list, but none of the content shows.
+> 
+> Here is the SELECT that appears to be failing (bring up no rows when they should be there):
+> SELECT rev_id,rev_page,rev_timestamp,rev_minor_edit,rev_deleted,rev_len,rev_parent_id,rev_sha1,actor_rev_user.actor_user AS `rev_user`,actor_rev_user.actor_name AS `rev_user_text`,rev_actor,comment_rev_comment.comment_text AS `rev_comment_text`,comment_rev_comment.comment_data AS `rev_comment_data`,comment_rev_comment.comment_id AS `rev_comment_cid`,page_namespace,page_title,page_id,page_latest,page_is_redirect,page_len,user_name FROM `wiki_revision` JOIN `wiki_actor` `actor_rev_user` ON ((actor_rev_user.actor_id = rev_actor)) JOIN `wiki_comment` `comment_rev_comment` ON ((comment_rev_comment.comment_id = rev_comment_id)) JOIN `wiki_page` ON ((page_id = rev_page)) LEFT JOIN `wiki_user` ON ((actor_rev_user.actor_user != 0) AND (user_id = actor_rev_user.actor_user)) WHERE rev_id = 263 LIMIT 1;
+> 
+> I see that my `actor_id` is 0 generally (it was a personal wiki), but I have no actor_id = 0 row in the actor table. Could that be a version update problem?
+**assistant**:
+> Based on my observations, yes, it could be a potential version update problem.
+> 
+> In MediaWiki version 1.31 and onwards, the user data handling system was overhauled. The way MediaWiki links revisions with users changed considerably; rather than referring directly to the `user` table, the revisions in the `revision` table now relate to the `actor` table through the `actor_id`, which in turn links to the `user` table.
+> 
+> In older versions of MediaWiki, anonymous users are recorded with a user ID of 0, and registered users are linked directly with their user ID. If most `actor_id` in your `revision` table are 0, it means your wiki was mostly edited by you (the sole registered user), and the corresponding `actor` entries were not created or linked correctly during the update process.
+> 
+> You could consider creating a mock "Anonymous" entry in the `actor` table with an `actor_id` of 0, linking it to a non-existent user, to maintain historical compatibility. However, please note that this is not the standard practice and might have far-reaching effects, especially if you plan further upgrades or need to maintain full compatibility with possible future extensions. MediaWiki 1.31+ expects each revision to be associated with a valid actor.
+> 
+> Hence, the best course of action is to correctly update your `actor` table. You can use the maintenance script `populateActorTable.php` provided by MediaWiki. Here is a short guide on how to do this:
+> 
+> 1. If you have shell access, navigate to the `maintenance` directory in your MediaWiki installation.
+> 2. Run the `populateActorTable.php` maintenance script:
+> 
+>    ```bash
+>    php populateActorTable.php --force
+>    ```
+>    
+> 3. Then execute the `actorMigration.php` maintenance script:
+> 
+>    ```bash
+>    php actorMigration.php --force
+>    ```
+>    
+> 4. Finally, run the `cleanupUsersWithNoId.php` maintenance script:
+> 
+>    ```bash
+>    php cleanupUsersWithNoId.php
+>    ```
+> 
+> Before running these scripts, ensure you have a **complete backup** of your database. These scripts will change your database structure, and the process cannot be easily reversed. After you run the scripts, check if the problem still persists. Feel free to ask if you have further questions.
+**user**:
+> I don't see these scripts, but I do see a findMissingActors.php maintenance script (and a migrateRevisionActorTemp.php script). Could this do what you're describing?
+**assistant**:
+> Apologies for the confusion. Yes, the `findMissingActors.php` and `migrateRevisionActorTemp.php` scripts can be used to address the actor-related issue you're facing during the upgrade process. These scripts will help you populate the `actor` table and establish the correct associations with the revisions.
+> 
+> Here's a step-by-step guide on using these scripts:
+> 
+> 1. Make sure you have a backup of your database before proceeding with any maintenance scripts.
+> 
+> 2. Start by running the `findMissingActors.php` script. This script will identify revisions in your database that lack corresponding entries in the `actor` table.
+> 
+>    ```bash
+>    php findMissingActors.php --fix
+>    ```
+> 
+>    The `--fix` flag prompts the script to attempt fixing the missing `actor` entries.
+> 
+> 3. After running `findMissingActors.php`, execute the `migrateRevisionActorTemp.php` script to migrate the revisions to the proper `actor` entries.
+> 
+>    ```bash
+>    php migrateRevisionActorTemp.php
+>    ```
+> 
+>    This script will transfer the revisions that were temporarily associated with the `actor_temp` table to the correct `actor` entries.
+> 
+> Please note that these steps assume you are running the scripts from the maintenance directory of your MediaWiki installation. Make sure you have the necessary permissions to execute the scripts.
+> 
+> Once you've completed these steps, check if the issue persists with the missing content in your MediaWiki pages. If needed, you may also need to clear any caches or rebuild any necessary indexes.
+> 
+> If you encounter any other issues or have further questions, feel free to ask.
+**user**:
+> --fix doesn't seem to be a valid option. Here's the message from calling the script:
+> $ php maintenance/run.php findMissingActors.php
+> 
+> ERROR: Option --field is required!
+> 
+> 
+> Find and fix invalid actor IDs.
+> 
+> Usage: php maintenance/run.php findMissingActors.php [OPTION]... --field <FIELD>
+> 
+> Script runner options:
+>     --conf <CONF>: Location of LocalSettings.php, if not default
+>     --globals: Output globals at the end of processing for debugging
+>     --help (-h): Display this help message
+>     --memory-limit <MEMORY-LIMIT>: Set a specific memory limit for the
+>         script, "max" for no limit or "default" to avoid changing it
+>     --profiler <PROFILER>: Profiler output format (usually "text")
+>     --quiet (-q): Whether to suppress non-error output
+>     --server <SERVER>: The protocol and server name to use in URLs, e.g.
+>         https://en.wikipedia.org. This is sometimes necessary because server
+>         name detection may fail in command line scripts.
+>     --wiki <WIKI>: For specifying the wiki ID
+> 
+> Common options:
+>     --batch-size <BATCH-SIZE>: Run this many operations per batch,
+>         default: 1000
+>     --dbgroupdefault <DBGROUPDEFAULT>: The default DB group to use.
+>     --dbpass <DBPASS>: The password to use for this script
+>     --dbuser <DBUSER>: The DB user to use for this script
+> 
+> Script specific options:
+>     --field <FIELD>: The name of a database field to process
+>     --overwrite-with <OVERWRITE-WITH>: Replace invalid actors with this
+>         user. Typically, this would be "Unknown user", but it could be any
+>         reserved system user (per $wgReservedUsernames) or locally registered
+>         user. If not given, invalid actors will only be listed, not fixed. You
+>         will be prompted for confirmation before data is written. 
+>     --skip <SKIP>: A comma-separated list of actor IDs to skip.
+>     --type <TYPE>: Which type of invalid actors to find or fix, missing
+>         or broken (with empty actor_name which can't be associated with an
+>         existing user).
+> 
+> So, how do I specify the field flag? Do I point it to the revision.rev_actor column?
+**assistant**:
+> Yes, the `--field` option is requiring you to specify which database column should be checked for missing actors. Since the issue appears to be related to the revisions being associated with missing actors, you would specify the `rev_actor` column from the `revision` table.
+> 
+> You also have an option to use the `--overwrite-with` argument, which will allow the script to substitute the missing actor entries with a specified username. As suggested in the help output, you might use a system user such as "Unknown user" or any reserved system usernames defined in `$wgReservedUsernames`. However, do so cautiously, as this will overwrite data, and you should confirm this is the desired outcome.
+> 
+> Would you like to create a new actor entry for your personal edits, or are you comfortable associating them with an "Unknown user"? If you have a specific username (e.g., your own user account on your wiki) that you'd prefer to associate these edits with, you could use that in the `--overwrite-with` option.
+> 
+> To run the script with the necessary options to check and fix missing actor IDs from the `rev_actor` column, you might execute:
+> 
+> ```bash
+> php maintenance/run.php findMissingActors.php --field rev_actor --overwrite-with "YourUsername"
+> ```
+> Replace `"YourUsername"` with the account name you'd like to use to replace the missing actors. Remember to take a database backup before running this operation, as it cannot be easily undone.
+> 
+> Keep in mind that options might vary between different versions of MediaWiki or specific configurations, so if you have a more recent version, the script usage might have changed slightly. Always consult the script's help output or the MediaWiki documentation for the most current information.

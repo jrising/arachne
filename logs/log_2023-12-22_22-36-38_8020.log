@@ -1,0 +1,193 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.
+> 
+> 
+>   2023-07-25:
+>   James asked how to get dimension keys in Mimi framework; Arachne suggested passing keys as argument to run_timestep function.
+> 
+> 
+> 
+>   2023-11-03:
+>   Exporting R Tables to Word and Resolving Installation Error
+> 
+> 
+> 
+>   2023-08-09:
+>   James encountered an import error between `statsmodels` and `pandas`; Arachne suggested updating or downgrading the packages.
+> 
+> 
+> 
+>   2023-08-30:
+>   Understanding Reviewer's Suggestion for `reset_index()` in Pandas Code
+> 
+> 
+> 
+>   2023-08-18:
+>   James wanted to convert a list of coordinates into a shapefile; Arachne provided a Python script using `geopandas` and `shapely`.
+> 
+> 
+> 
+>   2023-11-03:
+>   Error in ggplot with coord_map() and fix suggestions.
+> 
+> 
+> 
+>   2023-08-21:
+>   James asks for the Greek alphabet; Arachne provides a table with uppercase and lowercase letters, including the "final sigma" distinction.
+> 
+> 
+> 
+>   2023-09-01:
+>   HTML to LaTeX Table Translation
+> 
+> 
+> 
+>   2023-08-24:
+>   Understanding the Mean of Long-Tailed and Fat-Tailed Distributions
+> 
+> 
+> 
+>   2023-10-02:
+>   Creating Julia Matrices with Zeros and Missing Values
+> 
+> 
+>     
+**user**:
+> I have a mediawiki install from some time ago, and now when I go to the page I just see the message "A database query error has occurred. This may indicate a bug in the software.". Looking around online, it seems like this might be a problem with a plugin. But I don't know how to get to any kind of admin page to check or what I might need to do on the server to diagnose. Can you advise?
+**assistant**:
+> Indeed, the error "A database query error has occurred" in MediaWiki usually signifies a database issue which can be related to incompatible plugins, corrupt database, problems with the database server, or format errors in the wiki's PHP files (i.e., LocalSettings.php). Here's how to diagnose and potentially fix the issue:
+> 
+> 1. **Check the Error Log**: Look for the detailed error message in your server's error logs. You can usually find these in a directory like `/var/log/apache2/error.log` or `/var/log/httpd/error.log`, etc., depending on your distribution and whether you're using Apache or another web server. Check your PHP configuration file to find out where your PHP errors are being logged.
+> 
+> 2. **Enable Debug**: If the log files don't provide enough information, enabling debugging in MediaWiki might help. You'll have to modify `LocalSettings.php` file and add these lines at the end of the file:
+> 
+>     ```php
+>     $wgShowExceptionDetails = true;
+>     $wgDebugLogFile = "/path/to/debug-$(date +'%Y%m%d').log";
+>     ```
+>     Remember to replace `"/path/to/debug-$(date +'%Y%m%d').log"` with the actual path where you want to store the log file. Debug information will then be written to this file.
+> 
+> 3. **Check Extensions**: If debugging reveals an issue with an extension, you can deactivate all extensions by commenting out the lines in `LocalSettings.php` which load them (they usually start with `require_once "$IP/extensions/...`). After this, reload your wiki and see if the error persists. If it disappears, then an extension is likely at fault. To find out what extension is causing the issue, you can re-enable them one at a time until the error reappears.
+> 
+> 4. **Check Database Connection**: If the previous steps didn't help, verify that your database server is running and that MediaWiki can connect to it. Check the database settings in your `LocalSettings.php` file and try to connect to the database with the provided credentials from the same server where your MediaWiki installation resides.
+> 
+> Please be cautious with these procedures and make sure to create backups of any files before editing them. Let me know if you encounter any problems or need further assistance!
+**user**:
+> The underlying error appears to be "Unknown column 'page_links_updated' in 'field list'". I
+**assistant**:
+> The error "Unknown column 'page_links_updated' in 'field list'" indicates that the MediaWiki database is missing a required column. To resolve this issue, you can try the following steps:
+> 
+> 1. **Backup your database**: Before making any changes to your database, it's important to create a backup. This will allow you to restore the previous state if anything goes wrong.
+> 
+> 2. **Run the update script**: MediaWiki has an update script that can be used to update the database schema. To run the update script, navigate to your MediaWiki installation directory using the command line, and then execute the following command:
+> 
+>    ```bash
+>    php maintenance/update.php
+>    ```
+> 
+>    This script will check your database schema and make any necessary changes to bring it up to date. It should add any missing columns like `page_links_updated`.
+> 
+> 3. **Clear the cache**: After running the update script, clear the cache to ensure that the changes take effect. You can clear the cache by deleting the contents of the `cache` directory within your MediaWiki installation.
+> 
+>    ```bash
+>    rm -rf cache/*
+>    ```
+> 
+> 4. **Reload the wiki**: After completing the above steps, try reloading your wiki and see if the error message still appears. The missing column issue should now be resolved.
+> 
+> If the error persists after following these steps, it's possible that there may be an issue with the update script or a more complex database problem. In such cases, it may be necessary to seek further assistance from the MediaWiki support community or consult with a database administrator.
+> 
+> Remember to always have backups of your data before making any changes to the database. Let me know if you have any further questions or need additional help!
+**user**:
+> When I try to run update.php, I get a bunch of successes followed by the error "Exception from line 38 of /home/jrising/projects/openworld/www/includes/db/DatabaseMysqli.php: Table 'openworld_existencia_org.wiki_profiling' doesn't exist".
+**assistant**:
+> The error message "Table 'openworld_existencia_org.wiki_profiling' doesn't exist" suggests that the MediaWiki update script is trying to access a table that does not exist in your database. This can happen if there was a problem during the initial installation or if the table was accidentally deleted.
+> 
+> To resolve this issue, you can try the following steps:
+> 
+> 1. **Create the missing table**: If the `wiki_profiling` table is indeed missing, you can try recreating it by running the following SQL command in your database:
+> 
+>    ```sql
+>    CREATE TABLE wiki_profiling (
+>        pr_id int NOT NULL PRIMARY KEY AUTO_INCREMENT,
+>        pr_type varchar(32) NOT NULL,
+>        pr_timer real NOT NULL,
+>        pr_start microblob NOT NULL,
+>        pr_end microblob NOT NULL
+>    ) /*$wgDBTableOptions*/;
+>    ```
+> 
+>    After executing this command, rerun the `maintenance/update.php` script.
+> 
+> 2. **Check the logs**: If the issue persists, check the error logs for any additional details that could provide insight into the cause of the problem. The logs may contain more specific error messages or warnings that can help pinpoint the issue.
+> 
+> 3. **Seek assistance**: If the problem persists and you are unable to resolve it, it may be necessary to seek assistance from the MediaWiki support forums or community. They can provide further guidance specific to your setup and help troubleshoot the issue.
+> 
+> Remember to back up your database before making any modifications to its structure. If possible, test any changes on a development or staging environment rather than a production installation. Let me know if there is anything else I can assist you with!
+**user**:
+> I get an error with that create table line that microblob is not a recognized data type.
+**assistant**:
+> I apologize for the confusion; `microblob` is indeed not a recognized data type in MySQL. The table `wiki_profiling` typically refers to a logging table used by MediaWiki for profiling purposes, which likely isn't essential for the main functionality of your wiki.
+> 
+> However, the presence of the reference to `wiki_profiling` could be indicative of profiling being enabled or a leftover configuration from a previous state that is no longer applicable. Profiling should typically be disabled in a production environment unless you are specifically doing performance testing or debugging.
+> 
+> Here's what you can do:
+> 
+> 1. **Disable Profiling:**
+>    Check in the `LocalSettings.php` file if profiling has been enabled. Look for any line that references profiling, such as `$wgProfileToDatabase`, `$wgProfiler`, or any other profiling-related configurations, and comment them out:
+> 
+>    ```php
+>    // $wgProfiler['class'] = 'ProfilerX';
+>    // $wgProfileToDatabase = true; // make sure it is false or commented out
+>    ```
+> 
+> 2. **Retry Update Script:**
+>    After commenting out or removing the profiling configurations, save the `LocalSettings.php` file and try running the `update.php` script again.
+> 
+> 3. **Create the Profiling Table Manually:**
+>    If for some reason you need the profiling to continue to work, you'd have to look up the correct schema for the `wiki_profiling` table, which is generally not advised as it's not essential for wiki operation. Given that `microblob` is not a valid type, we would be looking for something more general like `BLOB` or `VARBINARY`, but it's best to consult the MediaWiki documentation or your version's schema files in the `maintenance` directory.
+> 
+> If you do want to perform profiling, I would advise checking the up-to-date MediaWiki documentation on how to configure it correctly.
+> 
+> Be cautious with changes, and ensure you have backups before executing any further. Let me know if you need additional guidance!
+**user**:
+> I also get the error that "Table 'openworld_existencia_org.wiki_sites' doesn't exist".
+**assistant**:
+> The error indicating that the `wiki_sites` table does not exist suggests a discrepancy between the expected database schema and your actual database. The `wiki_sites` table is a part of the core schema for MediaWiki installations starting with version 1.16, which is used to store information about interconnected wiki sites within a family of wikis (also known as wiki farms).
+> 
+> Here's how to approach this:
+> 
+> 1. **Check MediaWiki Version**: First, ensure that your MediaWiki version matches the database schema. If you updated your MediaWiki software without updating the database, this kind of error could occur.
+> 
+> 2. **Run the Update Script Again**: If you haven't yet, attempt to run the `maintenance/update.php` script from the command line. This script should create any missing core tables, including `wiki_sites`. To run this script, navigate to the maintenance directory in your MediaWiki installation and execute:
+> 
+>    ```bash
+>    php update.php
+>    ```
+> 
+>    This process should attempt to fix the missing tables based on the version of the MediaWiki software you're running.
+> 
+> 3. **Manually Create the Table**: If running the update script fails to create the `wiki_sites` table, you may need to add it manually. Here is an example SQL statement to create the `wiki_sites` table:
+> 
+>    ```sql
+>    CREATE TABLE wiki_sites (
+>      site_id int NOT NULL PRIMARY KEY AUTO_INCREMENT,
+>      site_global_key varchar(32) NOT NULL,
+>      site_type varchar(32) NOT NULL,
+>      site_group varchar(32) NOT NULL,
+>      site_source varchar(32) NOT NULL,
+>      site_language varchar(32) NOT NULL,
+>      site_protocol varchar(32) NOT NULL,
+>      site_domain varchar(255) NOT NULL,
+>      site_data blob NOT NULL,
+>      site_forwarded tinyint(1) NOT NULL,
+>      site_config blob NOT NULL,
+>      UNIQUE INDEX site_global_key (site_global_key)
+>    ) /*$wgDBTableOptions*/;
+>    ```
+> 
+>    **Note:** The "$wgDBTableOptions" comment at the end of the SQL statement should be replaced with the actual database table options used by your wiki.
+> 
+> 4. **Back Up Your Database**: Before making any manual changes to the database schema, ensure you have a complete backup. If you're unsure of any steps, consult with a database administrator or seek help from the MediaWiki community.
+> 
+> After taking these steps, if you're still facing issues or if there's any uncertainty, it might be wise to consult with someone with specific experience in MediaWiki database administration or reach out to the MediaWiki community for further support. Please proceed with caution to prevent data loss.

@@ -1,0 +1,88 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.
+> 
+> 
+>   2023-12-24:
+>   Fixing "Table doesn't exist" Error in MediaWiki Update
+> 
+> 
+> 
+>   2023-12-24:
+>   MediaWiki Upgrade Error Resolution
+> 
+> 
+> 
+>   2023-11-05:
+>   Playing Generated Speech with Minimal Latency
+> 
+> 
+> 
+>   2023-12-25:
+>   MediaWiki Upgrade: Missing Content and Rev Comment Issues
+> 
+> 
+> 
+>   2023-06-12:
+>   James wanted to encode a unicode object to ASCII in Python 2; Arachne provided methods to remove or replace unencodable characters.
+> 
+> 
+> 
+>   2023-05-05:
+>   How to create a sequence in Julia like R's `seq()`; Use `range()` function with `start`, `stop`, and `length` args to create desired sequence.
+> 
+> 
+> 
+>   2023-06-09:
+>   James asked how to create a vector with a value repeated N times in Julia; Arachne suggested using the `fill()` function.
+> 
+> 
+> 
+>   2023-07-29:
+>   Creating JS text field submission on return key while ignoring Shift; HTML/JS code provided.
+> 
+> 
+> 
+>   2023-07-16:
+>   James encountered "Incomplete response received from application" on Flask app with Passenger; Arachne advised adjusting timeout and considering alternative WSGI servers.
+> 
+> 
+> 
+>   2023-08-11:
+>   James requested a table without document details; Assistant unable to assist.
+> 
+> 
+>     
+**user**:
+> When I run the sql:
+> ```
+> CREATE TABLE IF NOT EXISTS tiki_groupalert (    `groupName` varchar(255) NOT NULL default '', `objectType` varchar( 20 ) NOT NULL default '', `objectId`  varchar(10) NOT NULL default '', `displayEachuser`  char( 1 ) default NULL , PRIMARY KEY ( `groupName`,`objectType`,`objectId`) ) ENGINE=MyISAM 
+> ```
+> I get the error "Specified key was too long; max key length is 1000 bytes". Why?
+**assistant**:
+> The error "Specified key was too long; max key length is 1000 bytes" that you're encountering is related to the cumulative size of the fields specified in the PRIMARY KEY constraint. MySQL's MyISAM engine has a limit of 1000 bytes for the total size of all fields in an index (or key). 
+> 
+> For string columns (like `varchar`), MySQL uses three bytes for each character to represent it in UTF-8 charset, which can handle any unicode character.
+> 
+> The size of an index entry for a table that uses the `utf8` (or `utf8mb3`) character set is calculated as follows:
+> 
+> - For `varchar(N)`, it is `(N * 3) + 2` bytes.
+> 
+> So if we calculate the index length for your table using UTF-8 encoding:
+> 
+> - `groupName (varchar(255))` will need `(255 * 3) + 2 = 767 bytes`
+> - `objectType (varchar(20))` will need `(20 * 3) + 2 = 62 bytes`
+> - `objectId (varchar(10))` will need `(10 * 3) + 2 = 32 bytes`
+> 
+> Adding these up gives us `767 + 62 + 32 = 861 bytes`, which is technically less than the 1000 bytes limit of MyISAM.
+> 
+> **If you are still getting the error**, it might be due to the character set of your MySQL database. If the MySQL server is set to use `utf8mb4` encoding, it uses 4 bytes to store each character, which would mean the size of your primary key is exceeding the 1000 bytes limit.
+> 
+> Wondering how to fix this?
+> 
+> You can:
+> 
+> 1.  Reduce the size of your `varchar` fields in the key.
+> 
+> 2.  Use a different storage engine like InnoDB, which has a larger limit on key size (3072 bytes).
+> 
+> 3.  Consider changing the character set of your tables to `utf8` and not `utf8mb4` if you don't need to store 4-byte characters. However, this might not be the best option as `utf8mb4` supports a wider range of characters.

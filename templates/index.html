@@ -12,8 +12,10 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.3.1/styles/default.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.3.1/highlight.min.js"></script>
     <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+    <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script>
     <script src="{{ url_for('static', filename='main.js') }}"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='main.css') }}">
+    <script src="{{ url_for('static', filename='menu.js') }}"></script>
     <style>
         .container {
             display: flex;
@@ -115,10 +117,19 @@
 
     <div class="container grid grid-cols-[1fr,3fr] gap-4">
       <!-- Sidebar -->
-      <div id="history" class="bg-gray-100 p-4 history hidden md:block">
-	Loading...
+      <div class="p-4 history hidden md:block">
+	<div id="history" class="bg-gray-100">
+	  Loading...
+	</div>
+
+	<div id="context-button" style="padding-top: 10px">
+	  <h2>Context <span id="arrow">&#x25B2;</span></h2>
+	</div>
+	<textarea id="context-text" rows="5" class="p-4" style="display: none;"></textarea>
+
+	{% include "menu-top.html" %}
       </div>
-      
+	
       <div class="box bg-white p-4">
         <div class="upper" id="upperid">
           <span class="downwarning">Type your message in box below.</span>
@@ -160,6 +171,8 @@
 		<option value="emailresp">Email response</option>
 		<option value="emailprog">Program response
 		  email</option>
+		<option value="eephdstate">EE Ph.D. Statement</option>
+		<option value="udmaststate">Masters Statement</option>
 		<option value="austin">Converse with Austin</option>
 		<option value="writing">Ghost writing</option>
 		<option value="johannacv">Johanna job search</option>
@@ -172,117 +185,6 @@
     </div>
 
     <script>
-      // for scrolling messages
-      function isAtBottom() {
-          var div = document.getElementById("upperid");
-	  return (div.scrollHeight - div.offsetHeight) - div.scrollTop < 1;
-      }
-      
-      function scrollToBottom() {
-          var div = document.getElementById("upperid");
-          div.scrollTop = div.scrollHeight;
-      }
-      scrollToBottom()
-
-      function stopStreaming(event) {
-	  fetch('/stop-stream', { method: 'POST' }).then((response) =>
-	      response.json()).then((data) => {
-		  if (data.status === 'success') {
-		      console.log(data.message); } });
-	  event.preventDefault();
-      }
-      document.querySelector("#interrupt").addEventListener("click", stopStreaming); 
-
-      function htmlDecode(input) {
-	  var doc = new DOMParser().parseFromString(input, "text/html");
-	  return doc.documentElement.textContent;
-      }
-
-      function htmlEscape(str) {
-	  return str
-              .replace(/>/g, '&gt')   
-              .replace(/</g, '&lt');
-      }
-
-      const md = window.markdownit({
-	  html: true, // Enable HTML tags in the source
-	  linkify: true, // Auto-convert URLs to links
-	  typographer: true, // Enable some language-neutral replacements + quotes beautification
-	  highlight: function (str, lang) {
-	      if (lang && hljs.getLanguage(lang)) {
-		  try {
-		      return hljs.highlight(str, { language: lang }).value;
-		  } catch (__) {}
-	      }
-	      return ''; // Use the external default escaping
-	  },
-      });
-
-      var searchForm = document.getElementById('input-form');
-      var textField = document.getElementById('input_text');
-
-      async function asyncSubmit() {
-          let userinput = document.getElementById('input_text').value
-          let upperdiv = document.getElementById('upperid')
-
-          upperdiv.innerHTML += `<div class="message">
-                <div class="usermessagediv">
-                        <div class="usermessage">
-                            ${userinput}
-                        </div>
-                </div>
-            </div>`
-          scrollToBottom()
-
-          var formData = new FormData(searchForm);
-          formData.append('input_text', userinput);
-          formData.append('past_messages', document.getElementById('upperid').innerHTML);
-	  formData.append('history', $('#history').text());
-          
-          try {
-              const response = await fetch('/completion', {
-                  method: 'POST',
-                  body: formData
-              });
-              const reader = response.body.getReader();
-
-	      upperdiv.innerHTML += `<div class="message">
-                <div class="appmessagediv">
-                    <div class="appmessage" id="temp" style="display: none"></div>
-                    <div class="mdrender" id="temprend"></div>
-                </div>
-            </div>`
-	      
-              let temp = document.getElementById('temp');
-	          let temprend = document.getElementById('temprend');
-              while (true) {
-                  const {done, value} = await reader.read();
-                  const text = new TextDecoder().decode(value);
-                  if (done) {
-                      endResponse(temp, temprend);
-		              break;
-		          }
-                  addToResponse(text, temp, temprend);
-              }
-          } catch (error) {
-              console.error(error);
-          }
-      }
-      
-      document.addEventListener('DOMContentLoaded', function () {
-	  textField.addEventListener('keydown', async function (event) {
-              if (event.keyCode === 13 && !event.shiftKey) {
-		  event.preventDefault();
-		  asyncSubmit();
-              }
-	  });
-      });
-      
-      searchForm.addEventListener('submit', async function(event) {
-          event.preventDefault();
-	  asyncSubmit();
-      });
-
       $(function() {
 	  $.get("/get-logs", function(data) {
 	      $('#history').html(data);
@@ -303,19 +205,15 @@
 	  $("#sidebarButton").click(function() {
 	      $("#history").toggle();
 	  });
-      });
 
-      window.addEventListener('beforeunload', function (e) {
-	  // Cancel the event as stated by the standard.
-	  e.preventDefault();
-    
-	  // Chrome requires returnValue to be set.
-	  e.returnValue = '';
-    
-	  // Send a request to your Flask app here
-	  $.ajax({
-              url: '/window_closed',
-              type: 'POST'
+	  $('#context-button').click(function() {
+	      $('#context-text').slideToggle(400, function() {
+		  if ($('#context-text').is(':visible')) {
+		      $('#arrow').html('&#x25BC;');
+		  } else {
+		      $('#arrow').html('&#x25B2;');
+		  }
+	      });
 	  });
       });
       </script>
