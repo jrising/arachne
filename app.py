@@ -60,7 +60,9 @@ def stream(input_text, past_messages, log_filename, history_text="",
             messages.append(message)
     messages.append({"role": "user", "content": input_text})
     if len(messages) < 4:
-        if custom_model:
+        if custom_model == 'cheap':
+            model = 'gpt-4-1106-preview'
+        elif custom_model:
             model = custom_model
         else:
             chatlen = chat_tokens(messages)
@@ -72,9 +74,7 @@ def stream(input_text, past_messages, log_filename, history_text="",
         completion = openai.ChatCompletion.create(model=model, messages=messages,
                                                   stream=True, max_tokens=2500, temperature=1)
     else:
-        if custom_model:
-            model = custom_model
-        else:
+        if not custom_model or custom_model == 'cheap':
             chatlen = chat_tokens(messages)
             if chatlen >= 15000:
                 model = 'gpt-4-1106-preview'
@@ -82,6 +82,8 @@ def stream(input_text, past_messages, log_filename, history_text="",
                 model = 'gpt-3.5-turbo'
             else:
                 model = 'gpt-3.5-turbo-16k'
+        else:
+            model = custom_model
 
         if custom_model:
             completion = openai.ChatCompletion.create(model=model, messages=messages,
@@ -171,7 +173,7 @@ def completion_api(custom_system=None, custom_model=None):
 def completion_custom():
     if request.method == "POST":
         custom_system = open('prompts/' + request.form['system'] + '.md', 'r').read()
-        return Response(completion_api(custom_system, "gpt-4-1106-preview"), mimetype='text/event-stream')
+        return Response(completion_api(custom_system, "cheap"), mimetype='text/event-stream')
     else:
         return Response(None, mimetype='text/event-stream')
 
