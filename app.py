@@ -34,11 +34,11 @@ def index():
     if request.headers['Host'] == 'coupling.existencia.org':
         return render_template('custom.html', title="Coupling Human to Natural Systems",
                                welcome="Welcome to your virtual teaching assistant. What can I help you with?",
-                               log_filename="", system="coupling")
+                               log_filename="", system="coupling", logofile="coupling.png")
     elif request.headers['Host'] == 'ccecon.existencia.org':
         return render_template('custom.html', title="Climate Change Economics",
                                welcome="Welcome to your virtual teaching assistant. What can I help you with?",
-                               log_filename="", system="ccecon")
+                               log_filename="", system="ccecon", logofile="ccecon.png")
     else:
         return render_template('index.html', log_filename=get_log_filename(), menu_html=get_menu())
  
