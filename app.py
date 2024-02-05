@@ -9,17 +9,20 @@ from dotenv import load_dotenv
 from whoosh.index import open_dir
 from whoosh import qparser
 
-try:
-    from TTS.api import TTS
-    import pygame
-    import threading
-    import queue
+do_tts = False
 
-    tts = TTS("tts_models/en/ljspeech/glow-tts")
-    pygame.init()
-except:
-    print("No text-to-speech functionality.")
-    pass
+if do_tts:
+    try:
+        from TTS.api import TTS
+        import pygame
+        import threading
+        import queue
+        
+        tts = TTS("tts_models/en/ljspeech/glow-tts")
+        pygame.init()
+    except:
+        print("No text-to-speech functionality.")
+        pass
 
 app = Flask(__name__)
 
@@ -28,6 +31,9 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
 openai.api_key = os.getenv('OPENAI_API_KEY')
 
 break_streaming = False
+
+training_end = {'gpt-4-turbo-preview': '2023-04', 'gpt-4': '2021-09',
+                'gpt-3.5-turbo-0125': '2021-09', 'gpt-3.5-turbo': '2021-09'}
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -50,7 +56,7 @@ def stream(input_text, past_messages, log_filename, history_text="",
     if custom_system:
         messages = [{"role": "system", "content": custom_system}]
     else:
-        messages = [{"role": "system", "content": "You are a helpful, super-intelligent AI assistant, called \"Arachne\" (she/her), for James Rising, an interdisciplinary modeler and father of two boys. You support James in pursuing global sustainability and a vibrant, enlightened life. You are creative, knowledgeable, and friendly, and not afraid to express opinions based on your technophilic, humanist good will for James and the future.\n\nAnswer as directly as possible, or ask for clarification. Your answer will be rendered as Markdown. Most recent training data: 2021-09; Current time: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]
+        messages = [{"role": "system", "content": "You are a helpful, super-intelligent AI assistant, called \"Arachne\" (she/her), for James Rising, an interdisciplinary modeler and father of two boys. You support James in pursuing global sustainability and a vibrant, enlightened life. You are creative, knowledgeable, and friendly, and not afraid to express opinions based on your technophilic, humanist good will for James and the future.\n\nAnswer as directly as possible, or ask for clarification. Your answer will be rendered as Markdown. Most recent training data: TRAINING_END; Current time: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]
 
     if history_text:
         messages.append({"role": "assistant", "content": history_text})
@@ -61,7 +67,7 @@ def stream(input_text, past_messages, log_filename, history_text="",
     messages.append({"role": "user", "content": input_text})
     if len(messages) < 4:
         if custom_model == 'cheap':
-            model = 'gpt-4-1106-preview'
+            model = 'gpt-4-turbo-preview'
         elif custom_model:
             model = custom_model
         else:
@@ -69,33 +75,37 @@ def stream(input_text, past_messages, log_filename, history_text="",
             if chatlen <= 3000:
                 model = 'gpt-4'
             else:
-                model = 'gpt-4-1106-preview'
-            
+                model = 'gpt-4-turbo-preview'
+
+        messages[0]['content'] = messages[0]['content'].replace("TRAINING_END", training_end.get(model, '2021-09'))
         completion = openai.ChatCompletion.create(model=model, messages=messages,
                                                   stream=True, max_tokens=2500, temperature=1)
     else:
         if not custom_model or custom_model == 'cheap':
             chatlen = chat_tokens(messages)
             if chatlen >= 15000:
-                model = 'gpt-4-1106-preview'
+                model = 'gpt-4-turbo-preview'
             elif chatlen <= 3000:
                 model = 'gpt-3.5-turbo'
             else:
-                model = 'gpt-3.5-turbo-16k'
+                model = 'gpt-3.5-turbo-0125'
         else:
             model = custom_model
 
         if custom_model:
+            messages[0]['content'] = messages[0]['content'].replace("TRAINING_END", training_end.get(model, '2021-09'))
             completion = openai.ChatCompletion.create(model=model, messages=messages,
                                                       stream=True, max_tokens=500, temperature=1)
         else:
             try:
+                messages[0]['content'] = messages[0]['content'].replace("TRAINING_END", training_end.get(model, '2021-09'))
                 completion = openai.ChatCompletion.create(model=model, messages=messages,
                                                           stream=True, max_tokens=2500, temperature=1)
             except openai.error.InvalidRequestError as ex:
-                if model == 'gpt-4-1106-preview':
+                if model == 'gpt-4-turbo-preview':
                     raise ex
-                completion = openai.ChatCompletion.create(model='gpt-4-1106-preview', messages=messages,
+                messages[0]['content'] = messages[0]['content'].replace("TRAINING_END", training_end.get('gpt-4-turbo-preview', '2021-09'))
+                completion = openai.ChatCompletion.create(model='gpt-4-turbo-preview', messages=messages,
                                                           stream=True, max_tokens=2500, temperature=1)
 
     response = ""
@@ -325,17 +335,46 @@ def play_audio(srm):
 
 @app.route("/get_menu", methods=["GET"])
 def get_menu():
-    if request.query_string[:5] == b'root=':
-        root = str(request.query_string[5:], encoding='utf8')
-    else:
-        root = None
-    #root = request.form.get("root", None)
+    root = request.args.get('root')
+    if request.headers['Host'] == 'ccecon.existencia.org':
+        if root is None:
+            items = [(entry, entry) for entry in os.listdir('ccecon')]
+        else:
+            # Check that this is a subdirectory of ccecon
+            topdir = os.path.abspath('ccecon')
+            askdir = os.path.abspath(os.path.join('ccecon', root))
+            if os.path.commonprefix([topdir, askdir]) != topdir:
+                items = []
+            else:
+                items = [(entry, entry) for entry in os.listdir(askdir)]
+
+        return render_template('menu-entry.html', items=items)
+                
     if root is None:
         items = [("~/", "File System"), ("tikiwiki", "TikiWiki"), ("mediawiki", "MediaWiki"), ("planet", "Planet Content")]
-    elif root[0] == "~":
-        items = [(os.path.join(root, entry), entry) for entry in os.listdir(os.path.expanduser(root))]
     else:
-        items = [("missing", "Planet Content not implemented yet.")]
+        parts = root.split('::')
+        if len(parts) == 2:
+            root = parts[0]
+            page = int(parts[1])
+        else:
+            page = 1
+            
+        if root == 'missing':
+            items = []
+        elif root[0] == "~":
+            if os.path.isdir(os.path.expanduser(root)):
+                try:
+                    items = [(os.path.join(root, entry), entry) for entry in os.listdir(os.path.expanduser(root))]
+                except:
+                    items = []
+            else:
+                items = []
+        else:
+            items = [("missing", "Planet/Wiki content not implemented yet.")]
+
+    if len(items) > 20 and page != 'all':
+        items = items[((page-1)*19):(page*19 + 1)] + [(root + '::' + str(page + 1), 'More...')]
 
     return render_template('menu-entry.html', items=items)
     

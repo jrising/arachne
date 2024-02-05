@@ -25,7 +25,7 @@ path. Here are the key differences between them:
 | Readings | Textbook chapters | Academic papers |
 | Assignments | More exercises | More self-directed |
 
-The final will be consistent with the path you follow.
+The final will conform to the path you follow.
 
 **Prerequisites**:
 - **MAST 488**: APEC/ECON 343 Environmental Economics or permission of the instructor.
@@ -49,13 +49,13 @@ Students from both classes will cover shared outcomes, with MAST 688 students en
 
 ## Learning Assessment
 
-| Components | MAST 488 | MAST 688 |
-|----------------|---------|---------|
-| Attendance & Participation | 8% | — |
-| Paper Presentation | — | 8% |
-| Weekly Quizzes | 12% | 12% |
-| Lab Assignments | 60% | 60% |
-| Final Exam | 20% | 20% |
+| Components | MAST 488 | MAST 688 | Assessment |
+|----------------|---------|---------|-|
+| Attendance & Participation | 8% | — | Exit Ticket |
+| Paper Presentation | — | 8% | 15 min. presentation |
+| Weekly Quizzes | 12% | 12% | Exit Ticket |
+| Lab Assignments | 60% | 60% | 6 Labs |
+| Final Exam | 20% | 20% | - |
 
 ## Course Calendar
 
