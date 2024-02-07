@@ -41,7 +41,7 @@ def index():
         return render_template('custom.html', title="Coupling Human to Natural Systems",
                                welcome="Welcome to your virtual teaching assistant. What can I help you with?",
                                log_filename="", system="coupling", logofile="coupling.png")
-    elif True or request.headers['Host'] == 'ccecon.existencia.org':
+    elif request.headers['Host'] == 'ccecon.existencia.org':
         return render_template('custom-menued.html', title="Climate Change Economics",
                                welcome="Welcome to your virtual teaching assistant. What can I help you with?",
                                log_filename="", system="ccecon", logofile="ccecon.png", menu_html=get_menu())
@@ -188,7 +188,7 @@ def completion_custom():
         custom_system = open('prompts/' + request.form['system'] + '.md', 'r').read()
         custom_context = ""
         if request.form.get('menu-option'):
-            if True or request.headers['Host'] == 'ccecon.existencia.org':
+            if request.headers['Host'] == 'ccecon.existencia.org':
                 with open(os.path.join('ccecon', request.form.get('menu-option')), 'r') as fp:
                     custom_context = "The question below may pertain to the following material from the course:\n===\n" + fp.read() + "\n===\n"
         return Response(completion_api(custom_system, "cheap", custom_context=custom_context), mimetype='text/event-stream')
@@ -344,7 +344,7 @@ def play_audio(srm):
 @app.route("/get_menu", methods=["GET"])
 def get_menu():
     root = request.args.get('root')
-    if True or request.headers['Host'] == 'ccecon.existencia.org':
+    if request.headers['Host'] == 'ccecon.existencia.org':
         if root is None:
             items = [(entry, entry) for entry in os.listdir('ccecon')]
         else:
