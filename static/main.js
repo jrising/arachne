@@ -59,7 +59,7 @@ completion_route = "/completion";
 
 async function asyncSubmit() {
     let userinput = document.getElementById('input_text').value
-    let upperdiv = document.getElementById('upperid')
+    let upperdiv = document.getElementById('pastmessages')
     
     upperdiv.innerHTML += `<div class="message">
                 <div class="usermessagediv">
@@ -72,11 +72,14 @@ async function asyncSubmit() {
 
     var formData = new FormData(searchForm);
     formData.append('input_text', userinput);
-    formData.append('past_messages', document.getElementById('upperid').innerHTML);
+    formData.append('past_messages', document.getElementById('pastmessages').innerHTML);
 
     formData.append('history', $('#history').text());
     if ($('#context-text').val() != "") {
 	formData.append('context', $('#context-text').val());
+    }
+    if ($('#menu-option').val() != "") {
+	formData.append('menu-option', $('#menu-option').val());
     }
 
     try {

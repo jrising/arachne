@@ -28,6 +28,12 @@ $(function() {
     // Fill in submenus for all entries
     addsubmenulist($menu.children(), function() {
 	$menu.menu({
+	    classes: { 'ui-menu': 'w200px' },
+	    select: function(event, ui) {
+		var $selectedItem = $(ui.item);
+		$('#menu-option').val($selectedItem.attr('id'));
+		$('#menu-display').html($selectedItem.attr('id'));
+	    },
             focus: function(event, ui) {
 		var $selectedItem = $(ui.item);
 		$nestedMenu = $selectedItem.find("ul");

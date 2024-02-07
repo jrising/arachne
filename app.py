@@ -41,10 +41,10 @@ def index():
         return render_template('custom.html', title="Coupling Human to Natural Systems",
                                welcome="Welcome to your virtual teaching assistant. What can I help you with?",
                                log_filename="", system="coupling", logofile="coupling.png")
-    elif request.headers['Host'] == 'ccecon.existencia.org':
-        return render_template('custom.html', title="Climate Change Economics",
+    elif True or request.headers['Host'] == 'ccecon.existencia.org':
+        return render_template('custom-menued.html', title="Climate Change Economics",
                                welcome="Welcome to your virtual teaching assistant. What can I help you with?",
-                               log_filename="", system="ccecon", logofile="ccecon.png")
+                               log_filename="", system="ccecon", logofile="ccecon.png", menu_html=get_menu())
     else:
         return render_template('index.html', log_filename=get_log_filename(), menu_html=get_menu())
  
@@ -141,7 +141,7 @@ def completion():
     else:
         return Response(None, mimetype='text/event-stream')
         
-def completion_api(custom_system=None, custom_model=None):
+def completion_api(custom_system=None, custom_model=None, custom_context=""):
     global break_streaming
     data = request.form
 
@@ -169,10 +169,13 @@ def completion_api(custom_system=None, custom_model=None):
                 preamble = open('prompts/' + data['preamble'] + '.md', 'r').read()
         input_text = preamble + data['input_text']
 
-    history_text = data.get('history', '')
-    if history_text:
-        history_text = history_text.replace("\n\n", "\n").replace("\n\n", "\n")
-        history_text = "Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.\n" + history_text
+    if custom_context:
+        history_text = custom_context
+    else:
+        history_text = data.get('history', '')
+        if history_text:
+            history_text = history_text.replace("\n\n", "\n").replace("\n\n", "\n")
+            history_text = "Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.\n" + history_text
 
     return stream(input_text, past_messages, data['log_filename'], history_text,
                   custom_system=custom_system, custom_model=custom_model)
@@ -183,7 +186,12 @@ def completion_api(custom_system=None, custom_model=None):
 def completion_custom():
     if request.method == "POST":
         custom_system = open('prompts/' + request.form['system'] + '.md', 'r').read()
-        return Response(completion_api(custom_system, "cheap"), mimetype='text/event-stream')
+        custom_context = ""
+        if request.form.get('menu-option'):
+            if True or request.headers['Host'] == 'ccecon.existencia.org':
+                with open(os.path.join('ccecon', request.form.get('menu-option')), 'r') as fp:
+                    custom_context = "The question below may pertain to the following material from the course:\n===\n" + fp.read() + "\n===\n"
+        return Response(completion_api(custom_system, "cheap", custom_context=custom_context), mimetype='text/event-stream')
     else:
         return Response(None, mimetype='text/event-stream')
 
@@ -336,7 +344,7 @@ def play_audio(srm):
 @app.route("/get_menu", methods=["GET"])
 def get_menu():
     root = request.args.get('root')
-    if request.headers['Host'] == 'ccecon.existencia.org':
+    if True or request.headers['Host'] == 'ccecon.existencia.org':
         if root is None:
             items = [(entry, entry) for entry in os.listdir('ccecon')]
         else:
@@ -345,8 +353,10 @@ def get_menu():
             askdir = os.path.abspath(os.path.join('ccecon', root))
             if os.path.commonprefix([topdir, askdir]) != topdir:
                 items = []
+            elif os.path.isdir(askdir):
+                items = [(os.path.join(root, entry), entry) for entry in os.listdir(askdir)]
             else:
-                items = [(entry, entry) for entry in os.listdir(askdir)]
+                items = []
 
         return render_template('menu-entry.html', items=items)
                 
