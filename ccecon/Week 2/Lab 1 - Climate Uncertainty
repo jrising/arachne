@@ -1,0 +1,358 @@
+\title{Lab 1: Working with Climate Projections}
+
+\section*{Short problems}
+
+The following questions may require you to do a little research on
+your own.
+
+\begin{questions}
+\question Approximately how long would temperatures remain elevated
+above pre-industrial levels, if all CO$_2$ emissions stop today?
+
+\begin{oneparchoices}
+  \choice 1 year
+  \choice 10 years
+  \choice 100 years
+  \choice 1000 years
+\end{oneparchoices}
+
+\question Approximately how long would temperatures continue to
+climb, if all CO$_2$ emissions stop today?
+
+\begin{oneparchoices}
+  \choice 1 year
+  \choice 10 years
+  \choice 100 years
+  \choice 1000 years
+\end{oneparchoices}
+
+\question Which process produces the most uncertainty in equilibrium
+climate sensitivity (ECS)?
+
+\begin{choices}
+  \choice Greenland ice sheet tipping point
+  \choice Water vapor feedback
+  \choice Cloud feedback
+  \choice CO$_2$ emissions scenarios
+\end{choices}
+
+\setlength\answerlinelength{2in}
+
+\question Different GCMs predict different patterns of warming for
+the same level of global warming.
+
+What is the term for the kind of uncertainty this reflects?
+
+\answerline
+
+\question If you run the same GCM multiple times, the initial
+conditions adjusted by very very small amounts, you will get very
+different outcomes.
+
+What is the term for the kind of uncertainty this reflects?
+
+\answerline
+\end{questions}
+
+\section*{Programming problems}
+
+In this lab, we will explore what global climate projections have to
+say about the future of the Mid-Atlantic region of the United States.
+
+Global climate projections are generated using Gridded Climate Models
+(GCMs), which provide data at low spatial resolution (typically
+coarser than 1$^\circ$ in latitude and longitude). For this data to be
+usable for most socioeconomic work, it needs to go through processes
+called ``downscaling'' and ``bias correction''.
+
+In this lab, we will use a dataset of results that have already gone
+through this process, producing locally plausible data at a 10-minute
+resolution, from WorldClim
+(\url{https://www.worldclim.org/}).% \footnote{The current website for
+% WorldClim is a mess, so we will include any necessary details here. If
+% you want to learn more about the method, look Hijmans, R.J.,
+% S.E. Cameron, J.L. Parra, P.G. Jones and A. Jarvis, 2005. Very high
+% resolution interpolated climate surfaces for global land
+% areas. International Journal of Climatology 25:
+% 1965-1978. \url{https://rmets.onlinelibrary.wiley.com/doi/epdf/10.1002/joc.1276}.}
+
+WorldClim also extracts a collection of broadly useful metrics to
+summarize climate, called bioclimatic variables. We will be using
+these variables which are represented as numbered layers in the
+files. Here is the list:
+
+\begin{tabular}{ll}
+BIO1 & Annual Mean Temperature \\
+BIO2 & Mean Diurnal Range (Mean of monthly (max temp - min temp)) \\
+BIO3 & Isothermality (BIO2/BIO7) (* 100) \\
+BIO4 & Temperature Seasonality (standard deviation *100) \\
+BIO5 & Max Temperature of Warmest Month \\
+BIO6 & Min Temperature of Coldest Month \\
+BIO7 & Temperature Annual Range (BIO5-BIO6) \\
+BIO8 & Mean Temperature of Wettest Quarter \\
+BIO9 & Mean Temperature of Driest Quarter \\
+BIO10 & Mean Temperature of Warmest Quarter \\
+BIO11 & Mean Temperature of Coldest Quarter \\
+BIO12 & Annual Precipitation \\
+BIO13 & Precipitation of Wettest Month \\
+BIO14 & Precipitation of Driest Month \\
+BIO15 & Precipitation Seasonality (Coefficient of Variation) \\
+BIO16 & Precipitation of Wettest Quarter \\
+BIO17 & Precipitation of Driest Quarter \\
+BIO18 & Precipitation of Warmest Quarter \\
+BIO19 & Precipitation of Coldest Quarter \\
+\end{tabular}
+
+Everyone answer questions 1 - 6. {\bf MAST 488} and {\bf MAST 688}
+students get different sections for questions 7 - 8 below.
+
+\section{Get the data}
+
+First, download all of the data for this lab. I have already extracted
+the mid-Atlantic region from the downscaled results and stored them
+here:
+\url{https://www.dropbox.com/scl/fo/cp06rtfx53w5kstr48043/h?rlkey=f4tnngodqpzy7bgx7jxbddrpc}
+
+These files describe future projections of the bioclimatic
+variables. The data is stored in NetCDF files (\verb+.nc+), which is a
+file format that stores matrices or arrays with any number of
+dimensions. A single file can include multiple arrays, and climate
+data is often stored as one 3-D array, with dimensions for time,
+latitude, and longitude, and the actual latitude and longitude
+coordinates are stored as separate 1-D arrays.
+
+The \verb+mab_bioc_GHCN_1970-2000.nc+ describes the historical weather
+conditions, from 1970 - 2000. The other files are all future
+projections, using different GCMs and different emissions
+scenarios. The format of these filenames is
+\verb+mab_bioc_[GCM]_[SSP]_[Years].nc+, where \verb+[GCM]+ is one of
+nine GCMs, \verb+[SSP]+ is either SSP1-2.6 or SSP3-7.0, and
+\verb+[Years]+ is the span of future years described.
+
+\subsection{Looking at historical average temperatures}
+
+We will be using R, and you will need the \verb+raster+, \verb+ncdf4+,
+and \verb+ggplot2+ packages. If you do not already have these, install
+them with \verb+install.packages(c("raster", "ncdf4", "ggplot2"))+.
+
+Then run the following code to load data from the historical file:
+
+\begin{lstlisting}
+library(raster)
+rr = raster("[path-to-data]/mab_bioc_GHCN_1970-2000.nc", band=1)
+rr
+\end{lstlisting}
+
+%% setwd("~/Dropbox/Climate Change Economics 2024/labs/lab1 - climate uncertainty")
+%% rr = raster("data/mab_bioc_GHCN_1970-2000.nc", band=1)
+
+The last line will print out some basic information about the
+file. \verb+band:+ tells you which bioclimatic variable you are
+viewing: this is BIO1, Annual Mean Temperature.
+
+{\bf 1. The \verb+extent:+ line describes the longitude and latitude
+  range in the data. Find or generate a map online which includes the
+  same spatial extent (and showing anything you think interesting:
+  physical geography, land use, cities and roads), and clip the map to
+  this approximate extent. Include this in your submission file.}
+
+The {\tt dimensions} entry in that information tells you the number of
+rows, the number of columns, and the total number of cells (rows x
+columns) in the matrix that holds the data.
+
+{\bf 2a. How are the three numbers on the \verb+dimensions:+ line
+  related to the \verb+resolution:+ and \verb+extent:+ lines? Write an
+  equation that calculates the reported number of rows, and an
+  equation to calculate the number of columns, from the
+  \verb+resolution:+ and \verb+extent:+ values.  2b. The data is a
+  grid of cells. What is the latitude and longitude of the {\it
+    center} of the grid cell in the north-west corner? This will not
+  be exactly equal to any of the reported numbers.}
+
+The next code graphs the annual mean temperature, in Celsius, by first
+converting the matrix into a long data frame, and then giving the data
+to \verb+ggplot+ to plot it.
+
+\begin{lstlisting}
+library(ggplot2)
+df = as.data.frame(rr, xy=T)
+head(df) # this is to see what the resulting data frame looks like
+ggplot(df, aes(x, y, fill=variable)) + geom_raster() +
+  scale_fill_gradient("Temperature (C)", low="yellow", high="red") + coord_fixed(expand=F)
+\end{lstlisting}
+
+{\bf 3. Make a similar graph for annual total precipitation. The
+  WorldClim data for annual precipitation is reported in mm.  When
+  plotting this, have the gradient go from white to blue, rather than
+  yellow to red. Include both plots in your submission.}
+
+% rr = raster("data/mab_bioc_GHCN_1970-2000.nc", band=12)
+% df = as.data.frame(rr, xy=T)
+% ggplot(df, aes(x, y, fill=variable)) + geom_raster() + scale_fill_gradient("Annual Precipitation (mm)", low="white", high="blue") + coord_fixed(expand=F)
+
+{\bf 4. Identify three broad features of the climate data, as bullet
+  point descriptions. For example, you might say, ``$\bullet$ Average
+  temperature increases from north to south.'' Relate these features
+  to your map from question 1, when possible. }
+
+\subsection{Expected future changes}
+
+It is common practice to use multiple GCMs when trying to understand
+how climate will change. We will do this by averaging over the nine
+GCMs provided by WorldClim.
+
+The following code loads in all of the annual temperature data and
+shows the change in the annual temperature by the end of the century
+under SSP3-7.0 (a high-emissions scenario).
+
+\iffalse
+## First, let's just load in the BIO1 data again
+rr = raster("data/mab_bioc_GHCN_1970-2000.nc", band=1)
+df = as.data.frame(rr, xy=T)
+
+## Now we will load in all future data
+future = matrix(NA, nrow(df), 0)
+for (filename in list.files("data", ".+_ssp370_2081-2100.nc")) {
+    rr2 = raster(file.path("data", filename), band=1)
+    future = cbind(future, as.data.frame(rr2))
+}
+
+## And add the difference as a column
+df$ssp370.mean = rowMeans(future - df$variable)
+
+## And plot it
+ggplot(df, aes(x, y, fill=ssp370.mean)) + geom_raster() +
+  scale_fill_gradient("Temperature\nchange (C)", low="yellow", high="red") + coord_fixed(expand=F)
+
+rr = raster("data/mab_bioc_GHCN_1970-2000.nc", band=12)
+df = as.data.frame(rr, xy=T)
+
+## Now we will load in all future data
+future = matrix(NA, nrow(df), 0)
+for (filename in list.files("data", ".+_ssp370_2081-2100.nc")) {
+    rr2 = raster(file.path("data", filename), band=12)
+    future = cbind(future, as.data.frame(rr2))
+}
+
+## And add the difference as a column
+df$ssp370.mean = rowMeans(future - df$variable)
+
+## And plot it
+ggplot(df, aes(x, y, fill=ssp370.mean)) + geom_raster() +
+  scale_fill_gradient("Annual Precipitation\nchange (mm)", low="white", high="blue") + coord_fixed(expand=F)
+\fi
+
+\begin{lstlisting}
+## First, let's just load in the BIO1 data again
+rr = raster("[path-to-data]/mab_bioc_GHCN_1970-2000.nc", band=1)
+df = as.data.frame(rr, xy=T)
+
+## Now we will load in all future data
+future = matrix(NA, nrow(df), 0)
+for (filename in list.files("[path-to-data]", ".+_ssp370_2081-2100.nc")) {
+    rr2 = raster(file.path("[path-to-data]", filename), band=1)
+    future = cbind(future, as.data.frame(rr2))
+}
+
+## And add the difference as a column
+df$ssp370.mean = rowMeans(future - df$variable)
+
+## And plot it
+ggplot(df, aes(x, y, fill=ssp370.mean)) + geom_raster() +
+  scale_fill_gradient("Temperature (C)", low="yellow", high="red") + coord_fixed(expand=F)
+\end{lstlisting}
+
+{\bf 5. Make a similar graph for the end of century change in annual
+total precipitation. Include both plots in your submission.}
+
+{\bf 6. Identify three broad features of these changes, as bullet
+point descriptions.}
+
+\subsection{Uncertainty in changes}
+
+Finally, we want to understand how much disagreement there is across
+the models. A mean value can be misleading if, for example, the GCMs
+cannot even agree on the sign of the change. This is the case for
+changes in rainfall in many areas.
+
+While the code in the previous section calculated a mean across the
+GCM-specific projected changes, we want to calculate a measure of GCM
+disagreement. The proposed measure of disagreement (for MAST 488 path
+students) is the standard deviation across GCM-specific changes,
+divided by the standard deviation over historical values across the
+region. This will be large if the models cannot agree, and the
+denominator here acts to normalize the changes, so we can understand
+how important a difference is.
+
+{\bf MAST 488 path students:}
+
+Modify the previous code above that calculates mean changes by
+replacing \lstinline{df$ssp370.mean = rowMeans(future - df$variable)}
+with the line \lstinline{df$ssp370.diff = apply(future - df$variable, 1, sd) / sd(df$variable, na.rm=T)}. % $
+
+Apply the code above to each of the 19 bioclimatic variables. For each
+bioclimatic variable, calculate the mean disagreement over all pixels
+using
+\lstinline{print(mean(df$ssp370.diff, na.rm=T))}. You may want to use %$
+a loop to do this, but you can also just run the code 19 times with
+different band numbers.
+
+{\bf 7. Which bioclimatic variable has the most uncertainty, according
+  to this metric?}
+
+{\bf 8. Look at the maps for the historical values of this bioclimatic
+  variable, it's expected future change, and it's level of agreement on
+  that change. Include each of these (properly labeled) in your
+  submission. Why is there so much disagreement here?}
+
+\iffalse
+
+\begin{lstlisting}
+for (bio in 1:19) {
+    ## First, load in the baseline data
+    rr = raster("data/mab_bioc_GHCN_1970-2000.nc", band=bio)
+    df = as.data.frame(rr, xy=T)
+
+    ## Now we will load in all future data
+    future = matrix(NA, nrow(df), 0)
+    for (filename in list.files("data", ".+_ssp370_2081-2100.nc")) {
+        rr2 = raster(file.path("data", filename), band=bio)
+        future = cbind(future, as.data.frame(rr2))
+    }
+
+    ## And add it on as a column
+    df$ssp370.mean = rowMeans(future - df$variable)
+    df$ssp370.diff = apply(future - df$variable, 1, sd) / sd(df$variable, na.rm=T)
+    print(c(bio, mean(df$ssp370.diff, na.rm=T)))
+}
+
+## bio = 8
+## Run code in loop above
+
+ggplot(df, aes(x, y, fill=variable)) + geom_raster() +
+    scale_fill_gradient("Baseline wet season\ntemperature (C)", low="yellow", high="red") + coord_fixed(expand=F)
+ggplot(df, aes(x, y, fill=ssp370.mean)) + geom_raster() +
+    scale_fill_gradient("Change in wet season\ntemperature (C)", low="yellow", high="red") + coord_fixed(expand=F)
+ggplot(df, aes(x, y, fill=ssp370.diff)) + geom_raster() +
+    scale_fill_gradient("Disagreement over wet season\ntemperature (score)", low="yellow", high="red") + coord_fixed(expand=F)
+
+\end{lstlisting}
+
+\fi
+
+{\bf MAST 688 path students:}
+
+Come up with {\bf two} different measures of disagreement between the
+GCMs. Your measure of disagreement should be calculated a the
+grid-cell level, and be applicable to some or all of the bioclimatic
+variables.
+
+{\bf 7. Write the equation for each of your measures and explain the
+  motivation for how it calculates disagreement. How or when is it
+  preferable to the ratio of standard deviations described above?}
+
+{\bf 8. Implement each measure in the code, by replacing the
+  \verb+df$ssp370.mean+ line as described in the {\bf MAST 488 path}
+  section. Produce plots of disagreement across space for your two
+  measures, for one of the bioclimatic variables. Explain why they
+  produce different spatial results.}
