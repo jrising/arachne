@@ -1,9 +1,9 @@
 function addToResponse(text, temp, temprend) {
-   	const atBottom = isAtBottom();
+    const atBottom = isAtBottom();
     temp.innerHTML += htmlEscape(text);
-	temprend.innerHTML = md.render(htmlDecode(temp.innerHTML));
-	if (atBottom)
-		scrollToBottom();
+    temprend.innerHTML = md.render(htmlDecode(temp.innerHTML));
+    if (atBottom)
+	scrollToBottom();
 }
 
 function endResponse(temp, temprend) {
@@ -60,11 +60,12 @@ completion_route = "/completion";
 async function asyncSubmit() {
     let userinput = document.getElementById('input_text').value;
     let upperdiv = document.getElementById('pastmessages');
-    
+
+    escapedinput = htmlEscape(userinput);
     upperdiv.innerHTML += `<div class="message">
                 <div class="usermessagediv">
                         <div class="usermessage">
-                            ${userinput}
+                            ${escapedinput}
                         </div>
                 </div>
             </div>`
