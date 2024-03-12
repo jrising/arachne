@@ -151,6 +151,8 @@ if __name__ == '__main__':
     syns = set(os.listdir("database/logs"))
 
     for done in logs:
+        if not os.path.isfile(os.path.join("logs", done)):
+            continue
         if done not in syns:
             log_filename = done
             print(log_filename)

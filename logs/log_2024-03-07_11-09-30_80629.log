@@ -1,0 +1,98 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.
+> 
+> 
+>   2023-07-16:
+>   Asks about Redis Queue's dependency on Redis storage; Is told RQ requires Redis for job management and data storage.
+> 
+> 
+> 
+>   2023-07-16:
+>   James seeks background processing in Flask; Arachne suggests using file system or lightweight task queue.
+> 
+> 
+> 
+>   2024-03-05:
+>   Python PDF Download and Save	Query
+> 
+> 
+> 
+>   2023-07-16:
+>   Flask app served under Passenger needs background processing; Arachne suggests using task queue (Celery/RQ) and shared state for progress updates.
+> 
+> 
+> 
+>   2023-09-29:
+>   Loading "MULTIPOLYGON" CSV into QGIS with Arachne's Guide
+> 
+> 
+> 
+>   2023-07-20:
+>   James asked for a concise way to read a file as a string in Python; Arachne provided a one-liner code snippet with `read()` and a context manager for proper file handling.
+> 
+> 
+> 
+>   2023-10-29:
+>   CSV Table: Finding Closest Point and Identifying Row in Python
+> 
+> 
+> 
+>   2023-11-19:
+>   Exporting GeoDataFrames to Import into QGIS
+> 
+> 
+> 
+>   2023-08-24:
+>   Pickle Files and the `with` Statement
+> 
+> 
+> 
+>   2023-12-21:
+>   Adding Meters to Latitude and Longitude in Python
+> 
+> 
+>     
+**user**:
+> Is there a library in python that acts like a queue but continually syncs the queue with a file, so that a crash can be recovered from?
+**assistant**:
+> Python itself doesn't provide a built-in way to persist data in a queue directly to the disk. However, you can use a combination of several libraries to achieve this.
+> 
+> Python's `queue` module can be used to create an in-memory queue. For storing the data into disk, `pickle` can be useful. `pickle` can serialize Python object structures, which can be written to a file and "un-pickled" back into memory later. Here's a simple implementation:
+> 
+> ```python
+> import queue
+> import os
+> import pickle
+> 
+> class PersistentQueue:
+>     def __init__(self, filename):
+>         self.filename = filename
+>         if os.path.exists(self.filename):
+>             with open(self.filename, 'rb') as f:
+>                 self.queue = pickle.load(f)
+>         else:
+>             self.queue = queue.Queue()
+> 
+>     def put(self, item):
+>         self.queue.put(item)
+>         self._persist()
+> 
+>     def get(self):
+>         item = self.queue.get()
+>         self._persist()
+>         return item
+> 
+>     def _persist(self):
+>         with open(self.filename, 'wb') as f:
+>             pickle.dump(self.queue, f)
+> ```
+> 
+> Each time you perform a put or get operation, the queue is persisted to disk. 
+> 
+> Remember though, this is a simple example. Depending upon the size and rate of data coming into your queue, continuously writing to disk could be a performance bottleneck. In such cases moving into a database based queuing system (like Redis or RabbitMQ) or distributed task queue like Celery would be a good idea. 
+> 
+> Also, there are concerns regarding the security and compatibility of `pickle`. You might want to consider using `json` or `msgpack` for serialization, or a task/job queue specifically designed to handle failure such as [RQ](https://python-rq.org/) or [Celery](https://docs.celeryproject.org/en/stable/). 
+> 
+> For lightweight needs, [sqlite3](https://docs.python.org/3/library/sqlite3.html) might be satisfying enough, acting as a file-based database to store queue data persistently. 
+> 
+> Always assess and then choose the technology that fits your specific needs.

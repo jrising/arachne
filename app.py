@@ -40,11 +40,11 @@ def index():
     if request.headers['Host'] == 'coupling.existencia.org':
         return render_template('custom.html', title="Coupling Human to Natural Systems",
                                welcome="Welcome to your virtual teaching assistant. What can I help you with?",
-                               log_filename="", system="coupling", logofile="coupling.png")
+                               log_filename=get_log_filename('coupling'), system="coupling", logofile="coupling.png")
     elif request.headers['Host'] == 'ccecon.existencia.org':
         return render_template('custom-menued.html', title="Climate Change Economics",
                                welcome="Welcome to your virtual teaching assistant. What can I help you with?",
-                               log_filename="", system="ccecon", logofile="ccecon.png", menu_html=get_menu())
+                               log_filename=get_log_filename('ccecon'), system="ccecon", logofile="ccecon.png", menu_html=get_menu())
     else:
         return render_template('index.html', log_filename=get_log_filename(), menu_html=get_menu())
  
@@ -243,7 +243,7 @@ def window_closed():
         subprocess.Popen(["python", "makelog.py"])
     return '', 200  # Respond with success status
 
-def get_log_filename():
+def get_log_filename(subdir=None):
     # Get current date and time without milliseconds
     current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
@@ -251,7 +251,12 @@ def get_log_filename():
     process_id = os.getpid()
 
     # Create a unique log file name
-    return f'log_{current_time}_{process_id}.log'
+    filename = f'log_{current_time}_{process_id}.log'
+
+    if subdir is None:
+        return filename
+    else:
+        return os.path.join(subdir, filename)
 
 ## Other Interfaces
 
