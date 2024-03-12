@@ -121,11 +121,18 @@ def stream(input_text, past_messages, log_filename, history_text="",
     ## Write all out to logs
     if log_filename:
         with open(os.path.join("logs", log_filename), 'w') as fp:
+            before_user = True
             for message in messages:
                 if message['role'] == 'system':
                     continue
+                messagetext = message['content']
+                if message['role'] == 'assistant' and before_user:
+                    messagetext = messagetext[:100]
+                else:
+                    before_user = False
+
                 fp.write(f"**{message['role']}**:\n")
-                for line in message['content'].split("\n"):
+                for line in messagetext.split("\n"):
                     fp.write(f"> {line}\n")
 
 @app.route('/stop-stream', methods=['POST'])
