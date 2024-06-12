@@ -2,12 +2,15 @@ from flask import Flask, render_template, request, Response
 
 import regex as re
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timedelta
 import os, pickle, subprocess, time
-import openai, tiktoken
+import openai
 from dotenv import load_dotenv
 from whoosh.index import open_dir
 from whoosh import qparser
+import numpy as np
+
+from utils import get_log_filename, create_chat, fillin_training_end, chat_tokens, chat_tokens_each
 
 do_tts = False
 
@@ -32,9 +35,6 @@ openai.api_key = os.getenv('OPENAI_API_KEY')
 
 break_streaming = False
 
-training_end = {'gpt-4-turbo-preview': '2023-04', 'gpt-4': '2021-09',
-                'gpt-3.5-turbo-0125': '2021-09', 'gpt-3.5-turbo': '2021-09'}
-
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.headers['Host'] == 'coupling.existencia.org':
@@ -53,38 +53,28 @@ def stream(input_text, past_messages, log_filename, history_text="",
     global break_streaming
     break_streaming = False
 
-    if custom_system:
-        messages = [{"role": "system", "content": custom_system}]
-    else:
-        messages = [{"role": "system", "content": "You are a helpful, super-intelligent AI assistant, called \"Arachne\" (she/her), for James Rising, an interdisciplinary modeler and father of two boys. You support James in pursuing global sustainability and a vibrant, enlightened life. You are creative, knowledgeable, and friendly, and not afraid to express opinions based on your technophilic, humanist good will for James and the future.\n\nAnswer as directly as possible, or ask for clarification. Your answer will be rendered as Markdown. Most recent training data: TRAINING_END; Current time: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]
+    messages = create_chat(input_text, past_messages, history_text=history_text, custom_system=custom_system)
 
-    if history_text:
-        messages.append({"role": "assistant", "content": history_text})
-
-    if past_messages:
-        for message in past_messages:
-            messages.append(message)
-    messages.append({"role": "user", "content": input_text})
     if len(messages) < 4:
         if custom_model == 'cheap':
-            model = 'gpt-4-turbo-preview'
+            model = 'gpt-4o'
         elif custom_model:
             model = custom_model
         else:
             chatlen = chat_tokens(messages)
             if chatlen <= 3000:
-                model = 'gpt-4'
+                model = 'gpt-4o'
             else:
-                model = 'gpt-4-turbo-preview'
+                model = 'gpt-4o'
 
-        messages[0]['content'] = messages[0]['content'].replace("TRAINING_END", training_end.get(model, '2021-09'))
+        fillin_training_end(messages, model)
         completion = openai.ChatCompletion.create(model=model, messages=messages,
                                                   stream=True, max_tokens=2500, temperature=1)
     else:
         if not custom_model or custom_model == 'cheap':
             chatlen = chat_tokens(messages)
             if chatlen >= 15000:
-                model = 'gpt-4-turbo-preview'
+                model = 'gpt-4o'
             elif chatlen <= 3000:
                 model = 'gpt-3.5-turbo'
             else:
@@ -93,19 +83,19 @@ def stream(input_text, past_messages, log_filename, history_text="",
             model = custom_model
 
         if custom_model:
-            messages[0]['content'] = messages[0]['content'].replace("TRAINING_END", training_end.get(model, '2021-09'))
+            fillin_training_end(messages, model)
             completion = openai.ChatCompletion.create(model=model, messages=messages,
                                                       stream=True, max_tokens=500, temperature=1)
         else:
             try:
-                messages[0]['content'] = messages[0]['content'].replace("TRAINING_END", training_end.get(model, '2021-09'))
+                fillin_training_end(messages, model)
                 completion = openai.ChatCompletion.create(model=model, messages=messages,
                                                           stream=True, max_tokens=2500, temperature=1)
             except openai.error.InvalidRequestError as ex:
-                if model == 'gpt-4-turbo-preview':
+                if model == 'gpt-4o':
                     raise ex
-                messages[0]['content'] = messages[0]['content'].replace("TRAINING_END", training_end.get('gpt-4-turbo-preview', '2021-09'))
-                completion = openai.ChatCompletion.create(model='gpt-4-turbo-preview', messages=messages,
+                fillin_training_end(messages, 'gpt-4o')
+                completion = openai.ChatCompletion.create(model='gpt-4o', messages=messages,
                                                           stream=True, max_tokens=2500, temperature=1)
 
     response = ""
@@ -250,21 +240,6 @@ def window_closed():
         subprocess.Popen(["python", "makelog.py"])
     return '', 200  # Respond with success status
 
-def get_log_filename(subdir=None):
-    # Get current date and time without milliseconds
-    current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-
-    # Get the process ID
-    process_id = os.getpid()
-
-    # Create a unique log file name
-    filename = f'log_{current_time}_{process_id}.log'
-
-    if subdir is None:
-        return filename
-    else:
-        return os.path.join(subdir, filename)
-
 ## Other Interfaces
 
 @app.route('/notes', methods=['GET'])
@@ -406,13 +381,116 @@ def get_menu():
 def get_ip():
     return request.remote_addr
 
-def chat_tokens(messages):
-    """Returns the number of tokens for a chat."""
-    encoding = tiktoken.get_encoding("cl100k_base")
-    num_tokens = 0
-    for message in messages:
-        num_tokens += len(encoding.encode(message['content'])) + 4
-    return num_tokens
+@app.route("/news", methods=["GET"])
+def news():
+    from memory import feeds, news
+
+    engine, items = feeds.get_engine_items()
+
+    now = datetime.now()
+    while not os.path.exists(news.get_daily_filepath(now).replace('.pkl', '.log')):
+        print("Nothing available for " + news.get_daily_filepath(now).replace('.pkl', ''))
+        now -= timedelta(days=1)
+
+    filepath = news.get_daily_filepath(now)
+    with open(filepath.replace('.pkl', '-texts.pkl'), 'rb') as fp:
+        texts = pickle.load(fp)
+
+    messages = load_log(filepath.replace('.pkl', '.log'))
+    
+    welcome = process_bulletin(messages[0]['content'], texts, lambda ids: feeds.incremenet_uses(engine, items, ids, 1))
+
+    return render_template('index.html', welcome=welcome, log_filename=filepath.replace('.pkl', '.log'))
+
+@app.route("/news-now", methods=["GET"])
+def news_now():
+    print("Preparing memo...")
+    from memory import feeds
+    
+    engine, items = feeds.get_engine_items()
+    print("Retrieving items...")
+    feeds.collect_feeds(engine, items)
+
+    print("Evaluating documents...")
+    texts = feeds.get_input_text(engine, items)
+    idtokens = dict(zip(texts.keys(), list(chat_tokens_each(texts.values()))))
+    for id, tokens in idtokens.items():
+        allowed_tokens = 100 + np.random.exponential(100)
+        if tokens > allowed_tokens:
+            texts[id] = texts[id][:int(len(texts[id]) * (allowed_tokens / tokens))]
+    print(texts)
+    for num in chat_tokens_each(texts.values()):
+        print(num)
+    
+    prompt = open('prompts/news.md', 'r').read()
+    prompt = prompt.replace("[CONTEXT]", "\n\n".join([f"ID: {ii}\n{text}" for ii, text in texts.items()]))
+
+    log_filename = get_log_filename('news')
+    welcome = ""
+    for content in stream(prompt, [], log_filename):
+        welcome += content
+
+    welcome2 = process_bulletin(welcome, texts, lambda ids: feeds.incremenet_uses(engine, items, ids, 1))
+
+    return render_template('index.html', welcome=welcome2, log_filename=log_filename)
+
+@app.route("/news-nonet", methods=["GET"])
+def news_nonet():
+    from memory import feeds
+
+    engine, items = feeds.get_engine_items()
+
+    print("Evaluating documents...")
+    texts = feeds.get_input_text(engine, items)
+
+    welcome = "# Daily Memo"
+    for ii, text in texts.items():
+        welcome += "\n - " + generate_news_links(ii, texts)
+        entries = text.split('\n')
+        welcome += "\n - " + "\n - ".join(entries[2:])
+
+    feeds.incremenet_uses(engine, items, texts.keys(), 1 / 3. - 0.1)
+        
+    log_filename = get_log_filename('news')
+    return render_template('index.html', welcome=welcome, log_filename=log_filename)
+
+def load_log(filepath):
+    messages = []
+    current_role = None
+    current_message = None
+    with open(filepath, 'r') as fp:
+        for line in fp:
+            if line[:2] == '**':
+                if current_role is not None:
+                    messages.append({'role': current_role, 'content': current_message})
+                current_role = line[2:-3]
+                current_message = ""
+            elif line[:2] == '> ':
+                current_message += line[2:]
+
+    messages.append({'role': current_role, 'content': current_message})
+    return messages
+
+def process_bulletin(welcome, texts, handle_ids):
+    # Look for numbers in brackets
+    pattern = re.compile(r'\[(\d+)\]')
+    ids = [int(match.group(1)) for match in pattern.finditer(welcome)]
+    handle_ids(ids)
+    return pattern.sub(lambda match: generate_news_links(int(match.group(1)), texts), welcome)
+
+def generate_news_links(index, texts):
+    entries = texts[index].split('\n')
+    url = entries[0][6:]
+    pubtime = entries[1][len('Published at: '):]
+    return render_template('news-link.html', url=url, pubtime=pubtime, link_id=index)
+
+@app.route("/vote-updown", methods=["GET"])
+def vote_updown():
+    from memory import feeds
+    id = int(request.args.get('id'))
+    prob = float(request.args.get('prob'))
+    feeds.vote_updown(id, prob)
+    return "Success."
 
 if __name__ == '__main__':
     app.run(debug=True)

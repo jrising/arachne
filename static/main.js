@@ -151,3 +151,40 @@ $(function() {
 	asyncSubmit();
     });
 });
+
+// Link voting
+// Function to apply the shake effect to newly added vote icons
+function applyShakeEffect() {
+    $('.vote-icons.clickable').last().effect('shake', {distance: 5}, 300);
+}
+
+// Function to handle up/down-vote and make AJAX call
+function voteUp() {
+    $(this).effect('shake', {distance: 5}, 300);
+    var linkId = $(this).closest('.vote-icons').data('link-id');
+    $.get({
+        url: '/vote-updown',
+	data: { id: linkId, prob: 1 },
+	function (data) {
+            // Handle successful up-vote
+            console.log('Up-vote successful for link ID:', linkId);
+        }}).fail(function() {
+            // Handle errors
+            console.error('Error occurred.');
+        });
+}
+
+function voteDown(linkId) {
+    $(this).effect('shake', {distance: 5}, 300);
+    var linkId = $(this).closest('.vote-icons').data('link-id');
+    $.get({
+        url: '/vote-updown',
+	data: { id: linkId, prob: 0 },
+	function (data) {
+            // Handle successful up-vote
+            console.log('Down-vote successful for link ID:', linkId);
+        }}).fail(function() {
+            // Handle errors
+            console.error('Error occurred.');
+        });
+}
