@@ -1,0 +1,18 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> I am fitting an HMM with depmix, where one of the output responses is 0 or 1 value. I'm not sure what family of distribution I should use, but I tried binomial. But I get strange values for the predicted response of that column across states, ranging from -3.664 to (positive) 4.350. How should I interpret or improve this?
+**assistant**:
+> It sounds like you're running into a problem because the binomial distribution, which you're using for your output distribution, maps to values between 0 and 1. Yet, your predicted values are ranging from -3.664 to 4.350. 
+> 
+> Keep in mind that depmixS4 uses the generalized linear model (GLM) parameterization of the binomial. This means it's in the logit space rather than probability space. To get probabilities from the output, one would generally use the logistic function (`plogis` in R) to transform the predicted values.
+> 
+> Here's how that transformation looks like in R: 
+> 
+> ```R
+> transformed_values <- plogis(predicted_values)
+> ```
+> 
+> Now `transformed_values` are back on a 0-1 scale.
+> 
+> If, however, the fitted model continues to behave unexpectedly, consider exploring other distribution families. Perhaps the binomial family is not the correct choice. The choice of family depends on the nature of your data and the scientific question at hand. If 0/1 represents two categories with no "success/failure" implications, considering a categorical (also known as a multinomial with two outcomes) distribution could be an alternative. With a categorical family, the response should be modeled as an integer factor.

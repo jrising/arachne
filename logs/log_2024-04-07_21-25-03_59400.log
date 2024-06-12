@@ -1,0 +1,60 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> In python, I would like to create a wrapper class object around another object, where any function or property that is requested is allowed and just passed to the internal object, but we can print what is requested with its arguments. How can I do this?
+**assistant**:
+> In Python, you can achieve this behaviour by using `__getattr__` and `__setattr__` magic methods. Here is an example of a wrapper that will log the calls done to the inner object:
+> 
+> ```python
+> class Wrapper:
+>     def __init__(self, wrapped):
+>         self._wrapped = wrapped
+> 
+>     def __getattr__(self, name):
+>         attr = getattr(self._wrapped, name)
+> 
+>         if callable(attr):
+>             def newfunc(*args, **kwargs):
+>                 print(f"Calling method {name} with arguments {args} and keyword arguments {kwargs}")
+>                 result = attr(*args, **kwargs)
+>                 print(f"Result: {result}")
+>                 return result
+>             return newfunc
+>         else:
+>             print(f"Accessing property {name}")
+>             return attr
+> 
+>     def __setattr__(self, name, value):
+>         if name == "_wrapped":  # allow the wrapper to initialize itself
+>             super().__setattr__(name, value)
+>         else:
+>             print(f"Setting property {name} to {value}")
+>             setattr(self._wrapped, name, value)
+> ```
+> 
+> With the `Wrapper` class, you can wrap any object, and all function calls and property accesses will be logged:
+> 
+> ```python
+> class ExampleClass:
+>     def __init__(self, x):
+>         self.x = x
+> 
+>     def add(self, y):
+>         return self.x + y
+> 
+> example = ExampleClass(10)
+> wrapped = Wrapper(example)
+> 
+> print(wrapped.x)
+> wrapped.x = 20
+> print(wrapped.add(5))
+> ```
+> This will print:
+> ```
+> Accessing property x
+> 10
+> Setting property x to 20
+> Calling method add with arguments (5,) and keyword arguments {}
+> Result: 25
+> 25
+> ```

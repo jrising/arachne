@@ -1,0 +1,80 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> I am trying to wrap a CTransformers LLM object with a wrapper that will report everything that's applied to that object, as follows:
+> 
+> ```
+> class Wrapper(CTransformers):
+>     def __init__(self, wrapped):
+>         self._wrapped = wrapped
+>         
+> 
+>     def __getattr__(self, name):
+>         attr = getattr(self._wrapped, name)
+> 
+>         if callable(attr):
+>             def newfunc(*args, **kwargs):
+>                 print(f"Calling method {name} with arguments {args} and keyword arguments {kwargs}")
+>                 result = attr(*args, **kwargs)
+>                 print(f"Result: {result}")
+>                 return result
+>             return newfunc
+>         else:
+>             print(f"Accessing property {name}")
+>             return attr
+> 
+>     def __setattr__(self, name, value):
+>         if name == "_wrapped":  # allow the wrapper to initialize itself
+>             super().__setattr__(name, value)
+>         else:
+>             print(f"Setting property {name} to {value}")
+>             setattr(self._wrapped, name, value)
+> ```
+> But I get an error because the super class has a `__setattr__` function, and so I get the error:
+> ```
+>   File "/Users/admin/projects/arachne/Llama-2-Open-Source-LLM-CPU-Inference/src/utils.py", line 71, in __setattr__
+>     super().__setattr__(name, value)
+>   File "/Users/admin/Library/Caches/pypoetry/virtualenvs/open-source_llm_-_cpu_inference-M3x3R0ZX-py3.12/lib/python3.12/site-packages/pydantic/v1/main.py", line 357, in __setattr__
+>     raise ValueError(f'"{self.__class__.__name__}" object has no field "{name}"')
+> ValueError: "Wrapper" object has no field "_wrapped"
+> ```
+> 
+> How can I fix this?
+**assistant**:
+> The issue is coming from your use of Python's `super()` function inside the `__setattr__()` method. `super()` is used to call a method in a parent class from a child class.
+> 
+> In your case, by calling `super().__setattr__(name, value)`, you're trying to call `__setattr__()` in `CTransformers`, which doesn't recognize `_wrapped` as a valid field, hence the `ValueError`.
+> 
+> A possible solution to your problem would be to modify the object's `__dict__` directly in the if clause for the `_wrapped` attribute, which bypasses the parent `__setattr__`:
+> 
+> ```python
+> class Wrapper(CTransformers):
+>     def __init__(self, wrapped):
+>         self._wrapped = wrapped
+>         
+> 
+>     def __getattr__(self, name):
+>         attr = getattr(self._wrapped, name)
+> 
+>         if callable(attr):
+>             def newfunc(*args, **kwargs):
+>                 print(f"Calling method {name} with arguments {args} and keyword arguments {kwargs}")
+>                 result = attr(*args, **kwargs)
+>                 print(f"Result: {result}")
+>                 return result
+>             return newfunc
+>         else:
+>             print(f"Accessing property {name}")
+>             return attr
+> 
+>     def __setattr__(self, name, value):
+>         if name == "_wrapped":  # allow the wrapper to initialize itself
+>             self.__dict__[name] = value
+>         else:
+>             print(f"Setting property {name} to {value}")
+>             setattr(self._wrapped, name, value)
+> ```
+> 
+> This directly adds `_wrapped` to the instance's dictionary and you won't have to deal with the parent's `__setattr__()` method not recognizing `_wrapped` as a valid property.
+> 
+> Please test this solution, as your implementation of `ctypes` or `pydantic` classes may affect how this specific problem can be addressed.

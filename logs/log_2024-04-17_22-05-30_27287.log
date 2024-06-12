@@ -1,0 +1,42 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> I am using the nnls package in R to get non-negative least squares, but it doesn't seem to report uncertainty in the coefficients. How can I get this?
+**assistant**:
+> The `nnls` package in R does not directly provide a method for computing uncertainties for the coefficient estimates. However, you can approximate these uncertainties using a bootstrap method, which involves repeatedly re-sampling your data and re-running your nnls regression.
+> 
+> Here's a basic example of how you could do this:
+> 
+> ```R
+> # Suppose `x` is your predictor matrix and `y` is your response vector:
+> # First, fit your model with nnls:
+> library(nnls)
+> fit <- nnls(A = x, b = y)
+> 
+> # Then, write a bootstrap function:
+> bootstrap_fn <- function(data, indices) {
+>   # Create a bootstrap sample:
+>   bootstrap_sample <- data[indices, ]
+>   
+>   # Split the sample into predictor and response:
+>   x_bootstrap <- bootstrap_sample[, -ncol(bootstrap_sample)]
+>   y_bootstrap <- bootstrap_sample[, ncol(bootstrap_sample)]
+>   
+>   # Fit the nnls model to the bootstrap sample and return coefficients:
+>   return(nnls(A = x_bootstrap, b = y_bootstrap)$x)
+> }
+> 
+> # We'll use the boot function from the boot library to do the bootstrapping:
+> library(boot)
+> data <- cbind(x, y)  # Your original data combined
+> results <- boot(data = data, statistic = bootstrap_fn, R = 1000)
+> 
+> # To get a 95% confidence interval for each coefficient, you can use boot.ci:
+> boot.ci(results, type = "bca", index = 1)  # For the first coefficient
+> ```
+> 
+> This script creates bootstrap confidence intervals for all your coefficients. You can adjust the number of resamples (`R`) as needed.
+> 
+> Please note that there's an assumption here: we're treating the coefficients as if they were estimated through ordinary least squares regression, which might not perfectly apply in the nnls case. If you need to work with data that substantially violates the assumptions underpinning bootstrapping, this method may not give reliable results.
+> 
+> Thus, while bootstrapping can give you an estimate of uncertainty, it might not be entirely accurate for nnls regression. Consider consulting with a statistician or an expert in non-negative least squares regression to ensure the validity of your approach.
