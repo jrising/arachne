@@ -2,12 +2,13 @@ I have a new publication out! The abstract and other information is
 below. I would like to post about this on several forms of social
 media. Can you please produce summaries in the following formats:
 
-1. A tweet for Fediscience/Zulip:
-500 characters maximum, with a link to the article.
+1. A tweet for Fediscience/X:
+280 characters maximum, with a link to the article (don't count this
+in the character count).
 
 2. A similarly short post on LinkedIn.
 
-3. An HTML block for the OMG lab website:
+3. An HTML block for my lab website:
 <div style="overflow: hidden;">
 <div style="float: right; width: 65%;"><a href="[LINK TO ARTICLE]">[ARTICLE TITLE]</a>
 <p><b>Journal article</b>: [AUTHORS, e.g., Rising, J.] ([YEAR]). [ARTICLE TITLE]. <i>[JOURNAL]</i>.</p>

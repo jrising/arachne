@@ -23,6 +23,8 @@ def create_chat(input_text, past_messages, history_text="", custom_system=None):
     else:
         messages = [{"role": "system", "content": "You are a helpful, super-intelligent AI assistant, called \"Arachne\" (she/her), for James Rising, an interdisciplinary modeler and father of two boys. You support James in pursuing global sustainability and a vibrant, enlightened life. You are creative, knowledgeable, and friendly, and not afraid to express opinions based on your technophilic, humanist good will for James and the future.\n\nAnswer as directly as possible, or ask for clarification. Your answer will be rendered as Markdown. Most recent training data: TRAINING_END; Current time: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]
 
+    print(history_text)
+
     if history_text:
         messages.append({"role": "assistant", "content": history_text})
 
@@ -32,6 +34,10 @@ def create_chat(input_text, past_messages, history_text="", custom_system=None):
     messages.append({"role": "user", "content": input_text})
 
     return messages
+
+def chat_tokens_one(text):
+    encoding = tiktoken.get_encoding("cl100k_base")
+    return len(encoding.encode(text))
 
 def chat_tokens_each(contents):
     """Yields the number of tokens for each message."""
@@ -46,7 +52,7 @@ def chat_tokens(messages):
         num_tokens += num + 4
     return num_tokens
 
-training_end = {'gpt-4o': '2023-10', 'gpt-4-turbo-preview': '2023-04', 'gpt-4': '2021-09',
+training_end = {'gpt-4o': '2023-10', 'gpt-4o-mini': '2023-10', 'gpt-4-turbo-preview': '2023-04', 'gpt-4': '2021-09',
                 'gpt-3.5-turbo-0125': '2021-09', 'gpt-3.5-turbo': '2021-09'}
 
 def fillin_training_end(messages, model):

@@ -1,16 +1,17 @@
 from flask import Flask, render_template, request, Response
 
+import os, pickle, subprocess, time, random
 import regex as re
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
-import os, pickle, subprocess, time
 import openai
 from dotenv import load_dotenv
 from whoosh.index import open_dir
 from whoosh import qparser
 import numpy as np
 
-from utils import get_log_filename, create_chat, fillin_training_end, chat_tokens, chat_tokens_each
+from wrappers import gemini
+from utils import get_log_filename, create_chat, fillin_training_end, chat_tokens, chat_tokens_each, chat_tokens_one
 
 do_tts = False
 
@@ -54,10 +55,10 @@ def stream(input_text, past_messages, log_filename, history_text="",
     break_streaming = False
 
     messages = create_chat(input_text, past_messages, history_text=history_text, custom_system=custom_system)
-
+    
     if len(messages) < 4:
         if custom_model == 'cheap':
-            model = 'gpt-4o'
+            model = 'gpt-4o-mini'
         elif custom_model:
             model = custom_model
         else:
@@ -68,17 +69,18 @@ def stream(input_text, past_messages, log_filename, history_text="",
                 model = 'gpt-4o'
 
         fillin_training_end(messages, model)
+        print(model)
         completion = openai.ChatCompletion.create(model=model, messages=messages,
-                                                  stream=True, max_tokens=2500, temperature=1)
+                                                  stream=True, max_tokens=max(2500, min(4096, chat_tokens_one(input_text) + 500)), temperature=1)
     else:
         if not custom_model or custom_model == 'cheap':
             chatlen = chat_tokens(messages)
             if chatlen >= 15000:
                 model = 'gpt-4o'
             elif chatlen <= 3000:
-                model = 'gpt-3.5-turbo'
+                model = 'gpt-4o-mini'
             else:
-                model = 'gpt-3.5-turbo-0125'
+                model = 'gpt-4o-mini'
         else:
             model = custom_model
 
@@ -169,10 +171,18 @@ def completion_api(custom_system=None, custom_model=None, custom_context=""):
     if custom_context:
         history_text = custom_context
     else:
-        history_text = data.get('history', '')
-        if history_text:
-            history_text = history_text.replace("\n\n", "\n").replace("\n\n", "\n")
-            history_text = "Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.\n" + history_text
+        histchoice = random.choice(["history", "gemini", "none"])
+        if histchoice == 'history':
+            history_text = data.get('history', '')
+            if history_text:
+                history_text = history_text.replace("\n\n", "\n").replace("\n\n", "\n")
+                history_text = "Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.\n" + history_text
+        elif histchoice == 'gemini':
+            results = get_logs_raw(input_text)
+            history_text = gemini.single_prompt("The following query has been submitted to a super-intelligent AI assistant named Arachne, which you support as a memory system:\n===\n" + input_text + "\n===\nThe following past discussion synopses have been retrieved, which may relate to this query:\n===\n" + "\n===\n".join([result['path'][9:19] + ' ' + result['path'][20:28].replace('-', ':') + ': ' + result['content'] for result in results]) + "\n===\nPlease excerpt and summarize any entries that are relevant to the query.")
+            print(history_text)
+        else:
+            history_text = ""
 
     return stream(input_text, past_messages, data['log_filename'], history_text,
                   custom_system=custom_system, custom_model=custom_model)
@@ -194,10 +204,8 @@ def completion_custom():
 
 ## Log Management
 
-@app.route('/get-logs',  methods=['GET', 'POST'])
-def get_logs():
-    if request.method == "POST":
-        query = request.form['query']
+def get_logs_raw(query=None):
+    if query:
         ix = open_dir("database/whoosh")
         with ix.searcher() as searcher:
             og = qparser.OrGroup.factory(0.9)
@@ -205,8 +213,13 @@ def get_logs():
             qp.add_plugin(qparser.FuzzyTermPlugin())
             parsed = qp.parse(query)
             results = searcher.search(parsed, limit=10)
-            
-            lines = [result['path'][9:19] + ' ' + result['path'][20:28].replace('-', ':') + ': ' + result['line'] for result in results]
+
+            allres = []
+            for result in results:
+                with open(os.path.join("database", result['path'])) as fp:
+                    allres.append(dict(path=result['path'], line=result['line'], content=fp.read()))
+
+            return allres
     else:
         ## Get the last 10 lines from running.log
         size = os.path.getsize("database/logs/running.log")
@@ -215,7 +228,17 @@ def get_logs():
                 fp.seek(-2048, 2)
             lines = fp.readlines()[1:][-10:]
 
-        lines = [line.decode() for line in lines]
+        return [dict(path='running.log', line=line.decode(), content=line) for line in lines]
+
+@app.route('/get-logs',  methods=['GET', 'POST'])
+def get_logs():
+    if request.method == "POST":
+        query = request.form['query']
+        results = get_logs_raw(query)
+        lines = [result['path'][9:19] + ' ' + result['path'][20:28].replace('-', ':') + ': ' + result['line'] for result in results]
+    else:
+        results = get_logs_raw()
+        lines = [result['line'] for result in results]
         
     ## Replace lines with titles, where available
     if os.path.exists("database/logs/titles.pkl"):
@@ -383,36 +406,41 @@ def get_ip():
 
 @app.route("/news", methods=["GET"])
 def news():
-    from memory import feeds, news
+    from memory import bulletin, news
+    nowstr = request.args.get('date')
+    if nowstr is not None:
+        now = datetime.strptime(nowstr, "%Y-%m-%d")
+    else:
+        now = datetime.now()
 
-    engine, items = feeds.get_engine_items()
+    engine, items = bulletin.get_engine_items()
 
-    now = datetime.now()
     while not os.path.exists(news.get_daily_filepath(now).replace('.pkl', '.log')):
         print("Nothing available for " + news.get_daily_filepath(now).replace('.pkl', ''))
         now -= timedelta(days=1)
+    prev = now - timedelta(days=1)
 
     filepath = news.get_daily_filepath(now)
     with open(filepath.replace('.pkl', '-texts.pkl'), 'rb') as fp:
         texts = pickle.load(fp)
-
+        
     messages = load_log(filepath.replace('.pkl', '.log'))
     
-    welcome = process_bulletin(messages[0]['content'], texts, lambda ids: feeds.incremenet_uses(engine, items, ids, 1))
+    welcome = now.strftime('# Daily Bulletin: %Y-%m-%d') + prev.strftime(' (<a href="/news?date=%Y-%m-%d">Previous</a>)\n\n') + process_bulletin(messages[0]['content'], texts, lambda ids: bulletin.incremenet_uses(engine, items, ids, 1))
 
     return render_template('index.html', welcome=welcome, log_filename=filepath.replace('.pkl', '.log'))
 
 @app.route("/news-now", methods=["GET"])
 def news_now():
     print("Preparing memo...")
-    from memory import feeds
+    from memory import bulletin
     
-    engine, items = feeds.get_engine_items()
+    engine, items = bulletin.get_engine_items()
     print("Retrieving items...")
-    feeds.collect_feeds(engine, items)
+    collect.collect_feeds(engine, items)
 
     print("Evaluating documents...")
-    texts = feeds.get_input_text(engine, items)
+    texts = bulletin.get_input_text(engine, items, 20)
     idtokens = dict(zip(texts.keys(), list(chat_tokens_each(texts.values()))))
     for id, tokens in idtokens.items():
         allowed_tokens = 100 + np.random.exponential(100)
@@ -430,18 +458,18 @@ def news_now():
     for content in stream(prompt, [], log_filename):
         welcome += content
 
-    welcome2 = process_bulletin(welcome, texts, lambda ids: feeds.incremenet_uses(engine, items, ids, 1))
+    welcome2 = process_bulletin(welcome, texts, lambda ids: bulletin.incremenet_uses(engine, items, ids, 1))
 
     return render_template('index.html', welcome=welcome2, log_filename=log_filename)
 
 @app.route("/news-nonet", methods=["GET"])
 def news_nonet():
-    from memory import feeds
+    from memory import bulletin
 
-    engine, items = feeds.get_engine_items()
+    engine, items = bulletin.get_engine_items()
 
     print("Evaluating documents...")
-    texts = feeds.get_input_text(engine, items)
+    texts = bulletin.get_input_text(engine, items, 20)
 
     welcome = "# Daily Memo"
     for ii, text in texts.items():
@@ -449,7 +477,7 @@ def news_nonet():
         entries = text.split('\n')
         welcome += "\n - " + "\n - ".join(entries[2:])
 
-    feeds.incremenet_uses(engine, items, texts.keys(), 1 / 3. - 0.1)
+    bulletin.incremenet_uses(engine, items, texts.keys(), 1 / 3. - 0.1)
         
     log_filename = get_log_filename('news')
     return render_template('index.html', welcome=welcome, log_filename=log_filename)
@@ -480,16 +508,17 @@ def process_bulletin(welcome, texts, handle_ids):
 
 def generate_news_links(index, texts):
     entries = texts[index].split('\n')
-    url = entries[0][6:]
-    pubtime = entries[1][len('Published at: '):]
-    return render_template('news-link.html', url=url, pubtime=pubtime, link_id=index)
+    feed = entries[0][6:]
+    url = entries[1][6:]
+    pubtime = entries[2][len('Published at: '):]
+    return render_template('news-link.html', feed=feed, url=url, pubtime=pubtime, link_id=index)
 
 @app.route("/vote-updown", methods=["GET"])
 def vote_updown():
-    from memory import feeds
+    from memory import bulletin
     id = int(request.args.get('id'))
     prob = float(request.args.get('prob'))
-    feeds.vote_updown(id, prob)
+    bulletin.vote_updown(id, prob)
     return "Success."
 
 if __name__ == '__main__':
