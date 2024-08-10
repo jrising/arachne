@@ -1,0 +1,54 @@
+**user**:
+> In Shiny, can I compute something in a renderPlotly function which I then use in a renderDT? Or how can I make sure that my common computation is performed first, and then use it for both?
+**assistant**:
+> Absolutely, you can share computations between different rendering functions in Shiny by using reactive expressions. This avoids redundant computations and ensures consistency across your app. Here's how you can do it:
+> 
+> 1. **Create a reactive expression for your common computation.**
+> 2. **Use this reactive expression in both `renderPlotly` and `renderDT`.**
+> 
+> Here's an example:
+> 
+> ```r
+> library(shiny)
+> library(plotly)
+> library(DT)
+> 
+> ui <- fluidPage(
+>   plotlyOutput("myPlot"),
+>   DTOutput("myTable")
+> )
+> 
+> server <- function(input, output, session) {
+>   # Reactive expression for the common computation
+>   common_computation <- reactive({
+>     # Replace with your actual computation
+>     data <- mtcars
+>     data$mpg_to_hp <- data$mpg / data$hp
+>     data
+>   })
+>   
+>   output$myPlot <- renderPlotly({
+>     data <- common_computation()
+>     plot_ly(data, x = ~mpg, y = ~mpg_to_hp) %>%
+>       add_markers()
+>   })
+>   
+>   output$myTable <- renderDT({
+>     data <- common_computation()
+>     datatable(data)
+>   })
+> }
+> 
+> shinyApp(ui, server)
+> ```
+> 
+> In this example:
+> 
+> - `common_computation` is a reactive expression that performs the needed computation once.
+> - This reactive value is then used in both the `renderPlotly` and `renderDT` functions.
+> 
+> **Key Points:**
+> - Reactive expressions are lazy, meaning they only run when their values are needed.
+> - When the reactive expression is updated, it will trigger updates in the outputs that depend on it.
+> 
+> This approach ensures efficient and consistent data handling across different rendering functions in your Shiny app.

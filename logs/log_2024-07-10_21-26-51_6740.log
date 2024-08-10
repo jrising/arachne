@@ -1,0 +1,1450 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> Below is a collection of material that I am in the process of
+> archiving. It starts with a short description, and then the content of
+> all files (typically generated with 
+> `find . -print -exec cat {} \; -printf "\n=====\n"`).
+> 
+> I will generally try to provide some context, in addition to the file
+> content. Please include this in your generated summary.
+> 
+> Please generate a summary document, using twiki syntax:
+> 
+> ! [Project title]
+> 
+> [Provide a summary description of the project.
+> 
+> Archived at: [James to Fill in]
+> 
+> !! Status when archived
+> 
+> [Give a summary of what was done and what was left to be done for a
+> working system.]
+> 
+> !! Notable contributions
+> 
+> [Give a summary of data, programming, or personal innovations to keep
+> track of.]
+> 
+> !! Keywords
+> 
+> [Provide a list of keywords for finding this project in the future.]
+> This is a preference voting system website, where new voting questions can be added and people can sort the options.
+> 
+> ./controllers/races_controller.rb
+> class RacesController < ApplicationController
+>   def splash
+>     @race = Race.new
+>   end
+> 
+>   def splash_create
+>     @race = Race.new({:title => params[:title]})
+>     @race.save
+>     redirect_to :controller => :vote, :action => :edit, :id => @race.id
+>   end
+> 
+>   # GET /races
+>   # GET /races.xml
+>   def index
+>     @races = Race.all
+> 
+>     respond_to do |format|
+>       format.html # index.html.erb
+>       format.xml  { render :xml => @races }
+>     end
+>   end
+> 
+>   # GET /races/1
+>   # GET /races/1.xml
+>   def show
+>     @race = Race.find(params[:id])
+> 
+>     respond_to do |format|
+>       format.html # show.html.erb
+>       format.xml  { render :xml => @race }
+>     end
+>   end
+> 
+>   # GET /races/new
+>   # GET /races/new.xml
+>   def new
+>     @race = Race.new
+> 
+>     respond_to do |format|
+>       format.html # new.html.erb
+>       format.xml  { render :xml => @race }
+>     end
+>   end
+> 
+>   # GET /races/1/edit
+>   def edit
+>     @race = Race.find(params[:id])
+>   end
+> 
+>   # POST /races
+>   # POST /races.xml
+>   def create
+>     @race = Race.new(params[:race])
+> 
+>     respond_to do |format|
+>       if @race.save
+>         flash[:notice] = 'Race was successfully created.'
+>         format.html { redirect_to(@race) }
+>         format.xml  { render :xml => @race, :status => :created, :location => @race }
+>       else
+>         format.html { render :action => "new" }
+>         format.xml  { render :xml => @race.errors, :status => :unprocessable_entity }
+>       end
+>     end
+>   end
+> 
+>   # PUT /races/1
+>   # PUT /races/1.xml
+>   def update
+>     @race = Race.find(params[:id])
+> 
+>     respond_to do |format|
+>       if @race.update_attributes(params[:race])
+>         flash[:notice] = 'Race was successfully updated.'
+>         format.html { redirect_to(@race) }
+>         format.xml  { head :ok }
+>       else
+>         format.html { render :action => "edit" }
+>         format.xml  { render :xml => @race.errors, :status => :unprocessable_entity }
+>       end
+>     end
+>   end
+> 
+>   # DELETE /races/1
+>   # DELETE /races/1.xml
+>   def destroy
+>     @race = Race.find(params[:id])
+>     @race.destroy
+> 
+>     respond_to do |format|
+>       format.html { redirect_to(races_url) }
+>       format.xml  { head :ok }
+>     end
+>   end
+> end
+> 
+> =====
+> ./controllers/vote_controller.rb~
+> class VoteController < ApplicationController
+>   layout "base"
+> 
+>   def edit
+>     @race = Race.find(params[:id])
+>   end
+> 
+>   def save
+>     @race = Race.find(params[:id])
+> 
+>     if @race.update_attributes(params[:race])
+>       flash[:notice] = 'Race was successfully updated.'
+>     end
+> 
+>     render :action => :edit
+>   end
+> 
+>   def candidate_name
+>     candidate = Candidate.find(params[:id])
+>     candidate.update_attributes(:name => params[:value])
+>     render :text => params[:value]
+>   end
+> 
+>   def candidate_new
+>     candidate = Candidate.new(:name => params[:name], :race_id => params[:id])
+>     candidate.save
+>     redirect_to :action => :edit
+>   end
+> 
+>   def candidate_delete
+>     candidate = Candidate.find(params[:id])
+>     @race = Race.find(candidate.race_id)
+>     candidate.destroy
+>     redirect_to :action => :edit, :id => @race.id
+>   end
+> 
+>   def form
+>     @race = Race.find(params[:id])
+>     @sorted = []
+>     @unsorted = [].concat @race.candidates
+> 
+>     # Find the user
+>     users = User.find(:all, :conditions => {:ip => request.remote_ip})
+> 
+>     if users.length == 1
+>       Ranking.find(:all, :conditions => {:user_id => users[0].id, :race_id => @race.id}, :order => :rank).each do |ranking|
+>         unless ranking.candidate.nil?
+>           @unsorted.delete ranking.candidate
+>           @sorted.push ranking.candidate
+>         end
+>       end
+>     end
+>   end
+> 
+>   def record
+>     # Find the user
+>     users = User.find(:all, :conditions => {:ip => request.remote_ip})
+>     if users.length == 0
+>       user = User.new :ip => request.remote_ip
+>       user.save
+>     else
+>       user = users[0]
+>       # Remove all this users current votes
+>       Ranking.delete_all :user_id => user.id, :race_id => params[:race]
+>     end
+> 
+>     params[:sorted].each_index do |rank|
+>       Ranking.new(:user_id => user.id, :race_id => params[:race], :candidate_id => params[:sorted][rank], :rank => rank).save
+>     end
+>   end
+> 
+>   def results
+>     @race = Race.find(params[:id])
+> 
+>     rankings = Ranking.find(:all, :conditions => {:race_id => @race.id})
+>     if rankings.length == 0
+>       render :text => "No results yet!"
+>     end
+> 
+>     @win_count = if params[:num].nil? then 1 else params[:num].to_i end
+>     # Assign colors to each candidate
+>     color_list = ['#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#00FFFF', '#FF00FF', '#800000', '#008000', '#000080', '#808000', '#008080', '#800080']
+>     @colors = []
+>     @race.candidates.each_index do |ii|
+>       @colors[@race.candidates[ii].id] = color_list[ii]
+>     end
+>     @excluded = []
+>   end
+> end
+> 
+> =====
+> ./controllers/candidates_controller.rb
+> class CandidatesController < ApplicationController
+>   # GET /candidates
+>   # GET /candidates.xml
+>   def index
+>     @candidates = Candidate.all
+> 
+>     respond_to do |format|
+>       format.html # index.html.erb
+>       format.xml  { render :xml => @candidates }
+>     end
+>   end
+> 
+>   # GET /candidates/1
+>   # GET /candidates/1.xml
+>   def show
+>     @candidate = Candidate.find(params[:id])
+> 
+>     respond_to do |format|
+>       format.html # show.html.erb
+>       format.xml  { render :xml => @candidate }
+>     end
+>   end
+> 
+>   # GET /candidates/new
+>   # GET /candidates/new.xml
+>   def new
+>     @candidate = Candidate.new
+> 
+>     respond_to do |format|
+>       format.html # new.html.erb
+>       format.xml  { render :xml => @candidate }
+>     end
+>   end
+> 
+>   # GET /candidates/1/edit
+>   def edit
+>     @candidate = Candidate.find(params[:id])
+>   end
+> 
+>   # POST /candidates
+>   # POST /candidates.xml
+>   def create
+>     @candidate = Candidate.new(params[:candidate])
+> 
+>     respond_to do |format|
+>       if @candidate.save
+>         flash[:notice] = 'Candidate was successfully created.'
+>         format.html { redirect_to(@candidate) }
+>         format.xml  { render :xml => @candidate, :status => :created, :location => @candidate }
+>       else
+>         format.html { render :action => "new" }
+>         format.xml  { render :xml => @candidate.errors, :status => :unprocessable_entity }
+>       end
+>     end
+>   end
+> 
+>   # PUT /candidates/1
+>   # PUT /candidates/1.xml
+>   def update
+>     @candidate = Candidate.find(params[:id])
+> 
+>     respond_to do |format|
+>       if @candidate.update_attributes(params[:candidate])
+>         flash[:notice] = 'Candidate was successfully updated.'
+>         format.html { redirect_to(@candidate) }
+>         format.xml  { head :ok }
+>       else
+>         format.html { render :action => "edit" }
+>         format.xml  { render :xml => @candidate.errors, :status => :unprocessable_entity }
+>       end
+>     end
+>   end
+> 
+>   # DELETE /candidates/1
+>   # DELETE /candidates/1.xml
+>   def destroy
+>     @candidate = Candidate.find(params[:id])
+>     @candidate.destroy
+> 
+>     respond_to do |format|
+>       format.html { redirect_to(candidates_url) }
+>       format.xml  { head :ok }
+>     end
+>   end
+> end
+> 
+> =====
+> ./controllers/vote_controller.rb
+> class VoteController < ApplicationController
+>   layout "base"
+> 
+>   def edit
+>     @race = Race.find(params[:id])
+>   end
+> 
+>   def save
+>     @race = Race.find(params[:id])
+> 
+>     if @race.update_attributes(params[:race])
+>       flash[:notice] = 'Race was successfully updated.'
+>     end
+> 
+>     render :action => :edit
+>   end
+> 
+>   def candidate_name
+>     candidate = Candidate.find(params[:id])
+>     candidate.update_attributes(:name => params[:value])
+>     render :text => params[:value]
+>   end
+> 
+>   def candidate_new
+>     candidate = Candidate.new(:name => params[:name], :race_id => params[:id])
+>     candidate.save
+>     redirect_to :action => :edit
+>   end
+> 
+>   def candidate_delete
+>     candidate = Candidate.find(params[:id])
+>     @race = Race.find(candidate.race_id)
+>     candidate.destroy
+>     redirect_to :action => :edit, :id => @race.id
+>   end
+> 
+>   def form
+>     @race = Race.find(params[:id])
+>     @sorted = []
+>     @unsorted = [].concat @race.candidates
+> 
+>     # Find the user
+>     users = User.find(:all, :conditions => {:ip => request.remote_ip})
+> 
+>     if users.length == 1
+>       Ranking.find(:all, :conditions => {:user_id => users[0].id, :race_id => @race.id}, :order => :rank).each do |ranking|
+>         unless ranking.candidate.nil?
+>           @unsorted.delete ranking.candidate
+>           @sorted.push ranking.candidate
+>         end
+>       end
+>     end
+>   end
+> 
+>   def record
+>     # Find the user
+>     users = User.find(:all, :conditions => {:ip => request.remote_ip})
+>     if users.length == 0
+>       user = User.new :ip => request.remote_ip
+>       user.save
+>     else
+>       user = users[0]
+>       # Remove all this users current votes
+>       Ranking.delete_all :user_id => user.id, :race_id => params[:race]
+>     end
+> 
+>     params[:sorted].each_index do |rank|
+>       Ranking.new(:user_id => user.id, :race_id => params[:race], :candidate_id => params[:sorted][rank], :rank => rank).save
+>     end
+>   end
+> 
+>   def results
+>     @race = Race.find(params[:id])
+> 
+>     rankings = Ranking.find(:all, :conditions => {:race_id => @race.id})
+>     if rankings.length == 0
+>       render :text => "No results yet!"
+>     end
+> 
+>     @win_count = if params[:num].nil? then 1 else params[:num].to_i end
+>     # Assign colors to each candidate
+>     color_list = ['#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#00FFFF', '#FF00FF', '#800000', '#008000', '#000080', '#808000', '#008080', '#800080', '#FF8000', '#80FF00', '#0080FF', '#00FF80', '#FF0080', '#8000FF']
+>     @colors = []
+>     @race.candidates.each_index do |ii|
+>       @colors[@race.candidates[ii].id] = color_list[ii]
+>     end
+>     @excluded = []
+>   end
+> end
+> 
+> =====
+> ./controllers/application_controller.rb
+> # Filters added to this controller apply to all controllers in the application.
+> # Likewise, all the methods added will be available for all controllers.
+> 
+> class ApplicationController < ActionController::Base
+>   helper :all # include all helpers, all the time
+>   protect_from_forgery # See ActionController::RequestForgeryProtection for details
+> 
+>   # Scrub sensitive parameters from your log
+>   # filter_parameter_logging :password
+> end
+> 
+> =====
+> ./controllers/races_controller.rb~
+> class RacesController < ApplicationController
+>   # GET /races
+>   # GET /races.xml
+>   def index
+>     @races = Race.all
+> 
+>     respond_to do |format|
+>       format.html # index.html.erb
+>       format.xml  { render :xml => @races }
+>     end
+>   end
+> 
+>   # GET /races/1
+>   # GET /races/1.xml
+>   def show
+>     @race = Race.find(params[:id])
+> 
+>     respond_to do |format|
+>       format.html # show.html.erb
+>       format.xml  { render :xml => @race }
+>     end
+>   end
+> 
+>   # GET /races/new
+>   # GET /races/new.xml
+>   def new
+>     @race = Race.new
+> 
+>     respond_to do |format|
+>       format.html # new.html.erb
+>       format.xml  { render :xml => @race }
+>     end
+>   end
+> 
+>   # GET /races/1/edit
+>   def edit
+>     @race = Race.find(params[:id])
+>   end
+> 
+>   # POST /races
+>   # POST /races.xml
+>   def create
+>     @race = Race.new(params[:race])
+> 
+>     respond_to do |format|
+>       if @race.save
+>         flash[:notice] = 'Race was successfully created.'
+>         format.html { redirect_to(@race) }
+>         format.xml  { render :xml => @race, :status => :created, :location => @race }
+>       else
+>         format.html { render :action => "new" }
+>         format.xml  { render :xml => @race.errors, :status => :unprocessable_entity }
+>       end
+>     end
+>   end
+> 
+>   # PUT /races/1
+>   # PUT /races/1.xml
+>   def update
+>     @race = Race.find(params[:id])
+> 
+>     respond_to do |format|
+>       if @race.update_attributes(params[:race])
+>         flash[:notice] = 'Race was successfully updated.'
+>         format.html { redirect_to(@race) }
+>         format.xml  { head :ok }
+>       else
+>         format.html { render :action => "edit" }
+>         format.xml  { render :xml => @race.errors, :status => :unprocessable_entity }
+>       end
+>     end
+>   end
+> 
+>   # DELETE /races/1
+>   # DELETE /races/1.xml
+>   def destroy
+>     @race = Race.find(params[:id])
+>     @race.destroy
+> 
+>     respond_to do |format|
+>       format.html { redirect_to(races_url) }
+>       format.xml  { head :ok }
+>     end
+>   end
+> end
+> 
+> =====
+> ./views
+> cat: ./views: Is a directory
+> ./views/candidates
+> cat: ./views/candidates: Is a directory
+> ./views/candidates/show.html.erb
+> <p>
+>   <b>Name:</b>
+>   <%=h @candidate.name %>
+> </p>
+> 
+> <p>
+>   <b>Race:</b>
+>   <%=h @candidate.race_id %>
+> </p>
+> 
+> 
+> <%= link_to 'Edit', edit_candidate_path(@candidate) %> |
+> <%= link_to 'Back', candidates_path %>
+> =====
+> ./views/candidates/new.html.erb
+> <h1>New candidate</h1>
+> 
+> <% form_for(@candidate) do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :name %><br />
+>     <%= f.text_field :name %>
+>   </p>
+>   <p>
+>     <%= f.label :race_id %><br />
+>     <%= f.text_field :race_id %>
+>   </p>
+>   <p>
+>     <%= f.submit 'Create' %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to 'Back', candidates_path %>
+> =====
+> ./views/candidates/index.html.erb
+> <h1>Listing candidates</h1>
+> 
+> <table>
+>   <tr>
+>     <th>Name</th>
+>     <th>Race</th>
+>   </tr>
+> 
+> <% @candidates.each do |candidate| %>
+>   <tr>
+>     <td><%=h candidate.name %></td>
+>     <td><%=h candidate.race_id %></td>
+>     <td><%= link_to 'Show', candidate %></td>
+>     <td><%= link_to 'Edit', edit_candidate_path(candidate) %></td>
+>     <td><%= link_to 'Destroy', candidate, :confirm => 'Are you sure?', :method => :delete %></td>
+>   </tr>
+> <% end %>
+> </table>
+> 
+> <br />
+> 
+> <%= link_to 'New candidate', new_candidate_path %>
+> =====
+> ./views/candidates/edit.html.erb
+> <h1>Editing candidate</h1>
+> 
+> <% form_for(@candidate) do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :name %><br />
+>     <%= f.text_field :name %>
+>   </p>
+>   <p>
+>     <%= f.label :race_id %><br />
+>     <%= f.text_field :race_id %>
+>   </p>
+>   <p>
+>     <%= f.submit 'Update' %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to 'Show', @candidate %> |
+> <%= link_to 'Back', candidates_path %>
+> =====
+> ./views/vote
+> cat: ./views/vote: Is a directory
+> ./views/vote/results.html.erb~
+> <h3>Race Results</h3>
+> 
+> <div id="rounds">
+>   <div>
+>     <% final_votes = {}
+>        score = score_candidates(@race)
+>        votes = {0 => 0}
+>        total = 2
+>        ii = 0
+>        winners = []
+>        while votes.values.max < total / (1.0 + @win_count) || winners.length < @win_count
+>          ii = ii + 1
+>     %>
+>     <b>Round <%= ii %>:</b>
+>     <% votes = vote_round(@race, @excluded)
+>        total = votes.values.inject(0) {|sum, item| sum + item} %>
+>     <%= render :partial => 'round', :locals => {:votes => votes, :colors => @colors, :total => total} %>
+>     <% # Did one of these win?  Drop it!
+>        if votes.values.max > total / (1.0 + @win_count)
+>          votes.each do |key, val|
+>            if val == votes.values.max
+>               winners.push key
+>               final_votes[key] = val
+>               @excluded.push key
+>            end
+>          end
+>          next
+>        end
+>        # Find the lowest score of the candidates to drop
+>        lowest = 1.0 / 0
+>        votes.each do |key, val|
+>          if val == votes.values.min && lowest > score[key]
+>             lowest = score[key]
+>          end
+>        end
+>        # Drop everything with this value and score
+>        votes.each do |key, val|
+>          if val == votes.values.min && score[key] <= lowest
+>             final_votes[key] = val
+>             @excluded.push key
+>          end
+>        end
+>      end %>
+>   </div>
+> </div>
+> 
+> <% # Fill in all other final votes
+>    votes.each do |key, val|
+>      unless final_votes.include? key
+>        final_votes[key] = val
+>      end
+>    end
+> %>
+> 
+> <div id="candidates">
+> <% @race.candidates.each do |candidate| %>
+>   <div>
+>     <%= candidate.name %> <span style="padding: 0 10px 0 10px; background-color: <%= @colors[candidate.id] %>"><%= pluralize final_votes[candidate.id], 'vote' %></span>
+>     <% if winners.include? candidate.id %>
+>     WON!
+>     <% end %>
+>   </div>
+> <% end %>
+> </div>
+> 
+> =====
+> ./views/vote/_round.erb
+> <div style="width: 400px; height: 20px;">
+> <% votes.each_key do |id| %>
+> <div style="float: left; height: 10px; width: <%= votes[id] * 400 / total %>px; background-color: <%= colors[id] %>">&nbsp;</div>
+> <% end %>
+> </div>
+> =====
+> ./views/vote/record.html.erb
+> Done.
+> =====
+> ./views/vote/results.html.erb
+> <h3>Race Results</h3>
+> 
+> <div id="rounds">
+>   <div>
+>     <% final_votes = {}
+>        score = score_candidates(@race)
+>        votes = {0 => 0}
+>        total = 2
+>        ii = 0
+>        winners = []
+>        while votes.values.max < total / (1.0 + @win_count) || winners.length < @win_count
+>          ii = ii + 1
+>     %>
+>     <b>Round <%= ii %>:</b>
+>     <% votes = vote_round(@race, @excluded)
+>        total = votes.values.inject(0) {|sum, item| sum + item} %>
+>     <%= render :partial => 'round', :locals => {:votes => votes, :colors => @colors, :total => total} %>
+>     <% # Did one of these win?  Drop it!
+>        if votes.values.max > total / (1.0 + @win_count)
+>          votes.each do |key, val|
+>            if val > total / (1.0 + @win_count)
+>               winners.push key
+>               final_votes[key] = val
+>               @excluded.push key
+>            end
+>          end
+>          next
+>        end
+>        # Find the lowest score of the candidates to drop
+>        lowest = 1.0 / 0
+>        votes.each do |key, val|
+>          if val == votes.values.min && lowest > score[key]
+>             lowest = score[key]
+>          end
+>        end
+>        # Drop everything with this value and score
+>        votes.each do |key, val|
+>          if val == votes.values.min && score[key] <= lowest
+>             final_votes[key] = val
+>             @excluded.push key
+>          end
+>        end
+>      end %>
+>   </div>
+> </div>
+> 
+> <% # Fill in all other final votes
+>    votes.each do |key, val|
+>      unless final_votes.include? key
+>        final_votes[key] = val
+>      end
+>    end
+> %>
+> 
+> <div id="candidates">
+> <% @race.candidates.each do |candidate| %>
+>   <div>
+>     <%= candidate.name %> <span style="padding: 0 10px 0 10px; background-color: <%= @colors[candidate.id] %>"><%= pluralize final_votes[candidate.id], 'vote' %></span>
+>     <% if winners.include? candidate.id %>
+>     WON!
+>     <% end %>
+>   </div>
+> <% end %>
+> </div>
+> 
+> =====
+> ./views/vote/form.html.erb~
+> <h1><%= @race.title %></h1>
+> 
+> <p><%= @race.description %></p>
+> 
+> <b>Your IP: <%= request.remote_ip %></b>
+> <% if @sorted.length > 0 %>
+> Using your previous rankings!
+> <% else %>
+> This is your first time, please order the options below.
+> <% end %>
+> 
+> <%= form_tag :controller => :vote, :action => :record, :id => @race.id %>
+> <h3>Your Rankings</h3>
+> <ol id="sorted" class="show_drag">
+> <% @sorted.each do |candidate| %>
+>   <li id="candidate_<%= candidate.id %>">
+>     <%= candidate.name %>
+>     <div style="width: 100px; float: right">
+>       <%= link_to_function image_tag("up.png"), "moveUp(this)" %> <%= link_to_function image_tag("down.png"), "moveDown(this)" %>
+>     </div>
+>   </li>
+> <% end %>
+> </ol>
+> <div style="height: 40px">
+>   <h3 style="width: 200px; height: 20px; float: left">Unranked Candidates</h3>
+>   <div id="drag_here" style="width: 100px; height: 20px; float: left; position: relative; top: -24px;">(drag here)</div>
+> </div>
+> <ul id="unsorted">
+> <% @unsorted.each do |candidate| %>
+>   <li id="candidate_<%= candidate.id %>">
+>     <%= candidate.name %>
+>     <div style="width: 100px; float: right">
+>       <%= link_to_function image_tag("up.png"), "moveUp(this)" %> <%= link_to_function image_tag("down.png"), "moveDown(this)" %>
+>     </div>
+>   </li>
+> <% end %>
+> </ul>
+> 
+> <%= hidden_field_tag "rankings", :id => "rankings" %>
+> <%= submit_tag "Record Votes", :onclick => "saveRankings(); return false;" %>
+> <span id="spinner" style="display: none;"><img src="/images/spinner.gif" alt="waiting" /></span>
+> <span id="saved" style="display: none;">Saved</span>
+> </form>
+> 
+> <script type="text/javascript">
+> Sortable.create('sorted', {containment: ['sorted', 'unsorted'], dropOnEmpty: true, onUpdate: function(elt) { checkUnsorted(); }});
+> Sortable.create('unsorted', {containment: ['sorted', 'unsorted'], dropOnEmpty: true});
+> 
+> function saveRankings() {
+>   $('saved').hide();
+>   $('spinner').show();
+>   new Ajax.Request('<%= url_for :controller => :vote, :action => :record, :id => @race.id %>', {
+>     method: 'post',
+>     parameters: Sortable.serialize('sorted') + '&race=<%= @race.id %>',
+>     onSuccess: function(transport) {
+>       $('spinner').hide();
+>       $('saved').show();
+>       new Effect.Highlight('saved');
+>     },
+>     onFailure: function() {
+>       $('spinner').hide();
+>       alert('Oh, no!  We were not able to save your rankings.  Check your internet connection and try again.');
+>     },
+>     onComplete: function(transport) {
+>       alert(transport.status);
+>     }
+>   });
+> }
+> 
+> function moveUp(elt) {
+>   var $elt = $(elt).up().up();
+>   if ($elt.previous())
+>     $elt.previous().insert({before: $elt});
+>   else if ($elt.up().readAttribute('id') == 'unsorted')
+>     $('sorted').insert({bottom: $elt});
+>   checkUnsorted();
+> }
+> 
+> function moveDown(elt) {
+>   var $elt = $(elt).up().up();
+>   if ($elt.next())
+>     $elt.next().insert({after: $elt});
+>   else if ($elt.up().readAttribute('id') == 'sorted')
+>     $('unsorted').insert({top: $elt});
+>   checkUnsorted();
+> }
+> 
+> function checkUnsorted() {
+>   if ($('unsorted').childElements().length > 0) {
+>     $('drag_here').show();
+>     $('sorted').addClassName('show_drag');
+>   } else {
+>     $('drag_here').hide();
+>     $('sorted').removeClassName('show_drag');
+>   }
+> }
+> 
+> checkUnsorted();
+> </script>
+> 
+> =====
+> ./views/vote/form.html.erb
+> <h1><%= @race.title %></h1>
+> 
+> <p><%= @race.description %></p>
+> 
+> <b>Your IP: <%= request.remote_ip %></b>
+> <% if @sorted.length > 0 %>
+> Using your previous rankings!
+> <% else %>
+> This is your first time, please order the options below.
+> <% end %>
+> 
+> <%= form_tag :controller => :vote, :action => :record, :id => @race.id %>
+> <h3>Your Rankings</h3>
+> <ol id="sorted" class="show_drag">
+> <% @sorted.each do |candidate| %>
+>   <li id="candidate_<%= candidate.id %>">
+>     <%= candidate.name %>
+>     <div style="width: 100px; float: right">
+>       <%= link_to_function image_tag("up.png"), "moveUp(this)" %> <%= link_to_function image_tag("down.png"), "moveDown(this)" %>
+>     </div>
+>   </li>
+> <% end %>
+> </ol>
+> <div style="height: 40px">
+>   <h3 style="width: 200px; height: 20px; float: left">Unranked Candidates</h3>
+>   <div id="drag_here" style="width: 100px; height: 20px; float: left; position: relative; top: -24px;">(drag here)</div>
+> </div>
+> <ul id="unsorted">
+> <% @unsorted.each do |candidate| %>
+>   <li id="candidate_<%= candidate.id %>">
+>     <%= candidate.name %>
+>     <div style="width: 100px; float: right">
+>       <%= link_to_function image_tag("up.png"), "moveUp(this)" %> <%= link_to_function image_tag("down.png"), "moveDown(this)" %>
+>     </div>
+>   </li>
+> <% end %>
+> </ul>
+> 
+> <%= hidden_field_tag "rankings", :id => "rankings" %>
+> <%= submit_tag "Record Votes", :onclick => "saveRankings(); return false;" %>
+> <span id="spinner" style="display: none;"><img src="/images/spinner.gif" alt="waiting" /></span>
+> <span id="saved" style="display: none;">Saved</span>
+> </form>
+> 
+> <script type="text/javascript">
+> Sortable.create('sorted', {containment: ['sorted', 'unsorted'], dropOnEmpty: true, onUpdate: function(elt) { checkUnsorted(); }});
+> Sortable.create('unsorted', {containment: ['sorted', 'unsorted'], dropOnEmpty: true});
+> 
+> function saveRankings() {
+>   $('saved').hide();
+>   $('spinner').show();
+>   new Ajax.Request('<%= url_for :controller => :vote, :action => :record, :id => @race.id %>', {
+>     method: 'post',
+>     parameters: Sortable.serialize('sorted') + '&race=<%= @race.id %>',
+>     onSuccess: function(transport) {
+>       $('spinner').hide();
+>       $('saved').show();
+>       new Effect.Highlight('saved');
+>     },
+>     onFailure: function() {
+>       $('spinner').hide();
+>       alert('Oh, no!  We were not able to save your rankings.  Check your internet connection and try again.');
+>     },
+>     onComplete: function(transport) {
+>       if (transport.status == 0)
+>         alert('Oh, no!  We were not able to save your rankings.  Check your internet connection and try again.');
+>     }
+>   });
+> }
+> 
+> function moveUp(elt) {
+>   var $elt = $(elt).up().up();
+>   if ($elt.previous())
+>     $elt.previous().insert({before: $elt});
+>   else if ($elt.up().readAttribute('id') == 'unsorted')
+>     $('sorted').insert({bottom: $elt});
+>   checkUnsorted();
+> }
+> 
+> function moveDown(elt) {
+>   var $elt = $(elt).up().up();
+>   if ($elt.next())
+>     $elt.next().insert({after: $elt});
+>   else if ($elt.up().readAttribute('id') == 'sorted')
+>     $('unsorted').insert({top: $elt});
+>   checkUnsorted();
+> }
+> 
+> function checkUnsorted() {
+>   if ($('unsorted').childElements().length > 0) {
+>     $('drag_here').show();
+>     $('sorted').addClassName('show_drag');
+>   } else {
+>     $('drag_here').hide();
+>     $('sorted').removeClassName('show_drag');
+>   }
+> }
+> 
+> checkUnsorted();
+> </script>
+> 
+> =====
+> ./views/vote/edit.html.erb~
+> <h1>Editing <%= @race.title %></h1>
+> 
+> <% form_for @race, :url => {:action => :save, :id => @race.id} do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :title %><br />
+>     <%= f.text_field :title %>
+>   </p>
+>   <p>
+>     <%= f.label :description %><br />
+>     <%= f.text_area :description, :rows => 10, :cols => 60 %>
+>   </p>
+>   <p>
+>     <%= f.submit 'Update' %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to "Public Voting Page", '/vote/' + @race.id.to_s %>
+> 
+> <h1>Listing candidates</h1>
+> 
+> <table>
+>   <tr>
+>     <th>Name</th>
+>     <td colspan="2"></td>
+>   </tr>
+> 
+> <% @race.candidates.each do |candidate| %>
+>   <tr>
+>     <td>
+>       <span id="candidate_name_<%= candidate.id %>"><%=h candidate.name %></span>
+>     </td>
+>     <td>
+>       <%= link_to 'Destroy', :action => :candidate_delete, :id => candidate.id, :confirm => 'Are you sure?' %>
+>       <script type="text/javascript">
+>       new Ajax.InPlaceEditor('candidate_name_<%= candidate.id %>', '<%= url_for :action => :candidate_name, :id => candidate.id %>', {rows:1, cols: 80});
+>       </script>
+>     </td>
+>   </tr>
+> <% end %>
+> </table>
+> 
+> <br />
+> 
+> <a href="#" onclick="$('candidate_new').show(); return false;">New Candidate</a>
+> <div id="candidate_new" style="display: none;">
+>   <%= form_tag :action => :candidate_new, :id => @race.id %>
+>     <input type="text" name="name" />
+>     <input type="submit" value="Create" />
+>   </form>
+> </div>
+> 
+> =====
+> ./views/vote/edit.html.erb
+> <h1>Editing <%= @race.title %></h1>
+> 
+> <% form_for @race, :url => {:action => :save, :id => @race.id} do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :title %><br />
+>     <%= f.text_field :title %>
+>   </p>
+>   <p>
+>     <%= f.label :description %><br />
+>     <%= f.text_area :description, :rows => 10, :cols => 60 %>
+>   </p>
+>   <p>
+>     <%= f.submit 'Update' %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to "Public Voting Page", '/vote/' + @race.id.to_s %>
+> <%= link_to "Results Page", '/results/' + @race.id.to_s %>
+> 
+> <h1>Listing candidates</h1>
+> 
+> <table>
+>   <tr>
+>     <th>Name</th>
+>     <td colspan="2"></td>
+>   </tr>
+> 
+> <% @race.candidates.each do |candidate| %>
+>   <tr>
+>     <td>
+>       <span id="candidate_name_<%= candidate.id %>"><%=h candidate.name %></span>
+>     </td>
+>     <td>
+>       <%= link_to 'Destroy', :action => :candidate_delete, :id => candidate.id, :confirm => 'Are you sure?' %>
+>       <script type="text/javascript">
+>       new Ajax.InPlaceEditor('candidate_name_<%= candidate.id %>', '<%= url_for :action => :candidate_name, :id => candidate.id %>', {rows:1, cols: 80});
+>       </script>
+>     </td>
+>   </tr>
+> <% end %>
+> </table>
+> 
+> <br />
+> 
+> <a href="#" onclick="$('candidate_new').show(); return false;">New Candidate</a>
+> <div id="candidate_new" style="display: none;">
+>   <%= form_tag :action => :candidate_new, :id => @race.id %>
+>     <input type="text" name="name" />
+>     <input type="submit" value="Create" />
+>   </form>
+> </div>
+> 
+> =====
+> ./views/vote/_round.erb~
+> <div>
+> <% votes.each_index do |id| %>
+> <span style="width: <%= votes[id] * 20 %>px; color-background: <%= colors[id] %>"></span>
+> <% end %>
+> </div>
+> =====
+> ./views/races
+> cat: ./views/races: Is a directory
+> ./views/races/show.html.erb
+> <p>
+>   <b>Title:</b>
+>   <%=h @race.title %>
+> </p>
+> 
+> <p>
+>   <b>Description:</b>
+>   <%=h @race.description %>
+> </p>
+> 
+> 
+> <%= link_to 'Edit', edit_race_path(@race) %> |
+> <%= link_to 'Back', races_path %>
+> =====
+> ./views/races/new.html.erb
+> <h1>New race</h1>
+> 
+> <% form_for(@race) do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :title %><br />
+>     <%= f.text_field :title %>
+>   </p>
+>   <p>
+>     <%= f.label :description %><br />
+>     <%= f.text_area :description %>
+>   </p>
+>   <p>
+>     <%= f.submit 'Create' %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to 'Back', races_path %>
+> =====
+> ./views/races/splash.html.erb
+> <style>
+> #center {
+>   width: 500px;
+>   height: 200px;
+>   border: 4px double #808080;
+>   background-color: #A0A0A0;
+>   margin: 60px 200px 60px 200px;
+> }
+> 
+> #center h1 {
+>   font-size: 2.5em;
+>   text-align: center;
+> }
+> 
+> .title_text label {
+>   font-size: 1.5em;
+>   display: block;
+>   padding: 10px 10px 4px 10px;
+> }
+> 
+> .title_text input {
+>   font-size: 1.5em;
+>   height: 30px;
+>   width: 450px;
+>   margin-left: 10px;
+> }
+> 
+> .submit {
+>   margin: 20px;
+>   text-align: center;
+> }
+> 
+> .submit input {
+>   font-size: 1.5em;
+>   height: 40px;
+>   width: 140px;
+> }
+> </style>
+> <div id="center">
+>   <h1>Instant Preference Voting</h1>
+>   <% form_for(@race, :url => {:action => 'splash_create'}) do |f| %>
+>   <div class="title_text">
+>     <label for="title">Enter a title:</label>
+>     <input type="text" name="title" />
+>   </div>
+>   <div class="submit">
+>     <input type="submit" value="Create" />
+>   </div>
+>   <% end %>
+> </div>
+> =====
+> ./views/races/index.html.erb
+> <h1>Listing races</h1>
+> 
+> <table>
+>   <tr>
+>     <th>Title</th>
+>     <th>Description</th>
+>   </tr>
+> 
+> <% @races.each do |race| %>
+>   <tr>
+>     <td><%=h race.title %></td>
+>     <td><%=h race.description %></td>
+>     <td><%= link_to 'Show', race %></td>
+>     <td><%= link_to 'Edit', edit_race_path(race) %></td>
+>     <td><%= link_to 'Destroy', race, :confirm => 'Are you sure?', :method => :delete %></td>
+>   </tr>
+> <% end %>
+> </table>
+> 
+> <br />
+> 
+> <%= link_to 'New race', new_race_path %>
+> =====
+> ./views/races/splash.html.erb~
+> <div id="center">
+>   <h1>Instant Preference Voting</h1>
+>   <label for="title" />
+>   <
+> </div>
+> =====
+> ./views/races/edit.html.erb
+> <h1>Editing race</h1>
+> 
+> <% form_for(@race) do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :title %><br />
+>     <%= f.text_field :title %>
+>   </p>
+>   <p>
+>     <%= f.label :description %><br />
+>     <%= f.text_area :description %>
+>   </p>
+>   <p>
+>     <%= f.submit 'Update' %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to 'Show', @race %> |
+> <%= link_to 'Back', races_path %>
+> =====
+> ./views/layouts
+> cat: ./views/layouts: Is a directory
+> ./views/layouts/candidates.html.erb
+> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+>        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+> 
+> <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+> <head>
+>   <meta http-equiv="content-type" content="text/html;charset=UTF-8" />
+>   <title>Candidates: <%= controller.action_name %></title>
+>   <%= stylesheet_link_tag 'scaffold' %>
+> </head>
+> <body>
+> 
+> <p style="color: green"><%= flash[:notice] %></p>
+> 
+> <%= yield %>
+> 
+> </body>
+> </html>
+> 
+> =====
+> ./views/layouts/base.html.erb
+> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+>        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+> 
+> <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+> <head>
+>   <meta http-equiv="content-type" content="text/html;charset=UTF-8" />
+>   <title>Vote Now!</title>
+>   <%= stylesheet_link_tag 'vote' %>
+>   <%= javascript_include_tag :defaults %>
+> </head>
+> <body>
+> 
+> <p style="color: green"><%= flash[:notice] %></p>
+> 
+> <%= yield %>
+> 
+> </body>
+> </html>
+> 
+> =====
+> ./views/layouts/base.html.erb~
+> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+>        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+> 
+> <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+> <head>
+>   <meta http-equiv="content-type" content="text/html;charset=UTF-8" />
+>   <title>Candidates: <%= controller.action_name %></title>
+>   <%= stylesheet_link_tag 'scaffold' %>
+> </head>
+> <body>
+> 
+> <p style="color: green"><%= flash[:notice] %></p>
+> 
+> <%= yield %>
+> 
+> </body>
+> </html>
+> 
+> =====
+> ./views/layouts/races.html.erb
+> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+>        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+> 
+> <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+> <head>
+>   <meta http-equiv="content-type" content="text/html;charset=UTF-8" />
+>   <title>Races: <%= controller.action_name %></title>
+>   <%= stylesheet_link_tag 'scaffold' %>
+> </head>
+> <body>
+> 
+> <p style="color: green"><%= flash[:notice] %></p>
+> 
+> <%= yield %>
+> 
+> </body>
+> </html>
+> 
+> =====
+> ./helpers
+> cat: ./helpers: Is a directory
+> ./helpers/candidates_helper.rb
+> module CandidatesHelper
+> end
+> 
+> =====
+> ./helpers/race_helper.rb
+> module RaceHelper
+> end
+> 
+> =====
+> ./helpers/application_helper.rb
+> # Methods added to this helper will be available to all templates in the application.
+> module ApplicationHelper
+> end
+> 
+> =====
+> ./helpers/vote_helper.rb~
+> module VoteHelper
+> 
+>   def show_round(race, excluded, colors)
+>     votes = vote_round(race, excluded)
+>     render :partial => 'round', :locals => {:votes => votes, :colors => colors}
+>   end
+> 
+>   def vote_round(race, excluded)
+>     voted_for = []
+>     votes = []
+>     rankings = Ranking.find(:all, :conditions => {:race_id => race.id}, :order => 'user_id, rank')
+>     rankings.each do |ranking|
+>       unless voted_for[ranking.user.id]
+>         unless (ranking.candidate.nil? || excluded.include?(ranking.candidate.id))
+>           votes[ranking.candidate.id] = (votes[ranking.candidate.id] || 0) + 1
+>           voted_for[ranking.user.id] = ranking.candidate.id
+>           break
+>         end
+>       end
+>     end
+> 
+>     votes
+>   end
+> end
+> 
+> =====
+> ./helpers/vote_helper.rb
+> module VoteHelper
+>   def vote_round(race, excluded)
+>     voted_for = {}
+>     votes = {}
+>     rankings = Ranking.find(:all, :conditions => {:race_id => race.id}, :order => 'user_id, rank')
+>     rankings.each do |ranking|
+>       if voted_for[ranking.user.id].nil?
+>         unless (ranking.candidate.nil? || excluded.include?(ranking.candidate.id))
+>           votes[ranking.candidate.id] = (if votes[ranking.candidate.id].nil? then 0 else votes[ranking.candidate.id] end) + 1
+>           voted_for[ranking.user.id] = ranking.candidate.id
+>         end
+>       end
+>     end
+> 
+>     votes
+>   end
+> 
+>   def score_candidates(race)
+>     score = {}
+>     rankings = Ranking.find(:all, :conditions => {:race_id => race.id}, :order => 'user_id')
+>     rankings.each do |ranking|
+>       unless ranking.candidate.nil?
+>         score[ranking.candidate.id] = (if score[ranking.candidate.id].nil? then 0 else score[ranking.candidate.id] end) + 1.0 / (ranking.rank + 1.0)
+>       end
+>     end
+> 
+>     score
+>   end
+> end
+> 
+> =====
+> ./helpers/races_helper.rb
+> module RacesHelper
+> end
+> 
+> =====
+> ./helpers/candidate_helper.rb
+> module CandidateHelper
+> end
+> 
+> =====
+> ./models
+> cat: ./models: Is a directory
+> ./models/ranking.rb
+> class Ranking < ActiveRecord::Base
+>   belongs_to :candidate
+>   belongs_to :user
+> end
+> 
+> =====
+> ./models/ranking.rb~
+> class Ranking < ActiveRecord::Base
+>   belongs_to :candidate
+> end
+> 
+> =====
+> ./models/candidate.rb~
+> class Candidate < ActiveRecord::Base
+> end
+> 
+> =====
+> ./models/race.rb
+> class Race < ActiveRecord::Base
+>   has_many :candidates
+> end
+> 
+> =====
+> ./models/race.rb~
+> class Race < ActiveRecord::Base
+> end
+> 
+> =====
+> ./models/candidate.rb
+> class Candidate < ActiveRecord::Base
+>   belongs_to :race
+> end
+> 
+> =====
+> ./models/user.rb~
+> class User < ActiveRecord::Base
+> end
+> 
+> =====
+> ./models/user.rb
+> class User < ActiveRecord::Base
+> end
+> 
+> =====
+**assistant**:
+> ```
+> ! Preference Voting System
+> 
+> This is a preference voting system website, where new voting questions can be added and people can sort the options.
+> 
+> Archived at: [James to Fill in]
+> 
+> !! Status when archived
+> 
+> The system includes the functionality to create races (voting questions), add and edit candidates, and record user votes. Notably, it includes:
+> 
+> - Adding new races via a splash page.
+> - Editing races and their associated candidates.
+> - Recording user rankings through drag-and-drop interfaces.
+> - Displaying results, including a visualization of the voting rounds and final winners.
+> 
+> Some aspects to verify for a working system include the user IP-based tracking and ensuring all CRUD operations for races and candidates function as expected. 
+> 
+> !! Notable contributions
+> 
+> - Implementation of a preference voting mechanism, including the ranking of candidates and tallying votes.
+> - User rankings saved through AJAX requests.
+> - The use of color-coded visualizations to depict results.
+> - Automatic handling of user sessions based on IP addresses.
+> 
+> !! Keywords
+> 
+> voting, preference voting, election system, Ruby on Rails, user ranking, AJAX
+> ```

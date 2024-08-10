@@ -1,0 +1,197 @@
+**user**:
+> Can you write a section for a paper supplementary information giving a precise description of the principles behind the following code? This code implements our method of inferring missing data based on data for taxonomically related species:
+> ```
+> library(readxl)
+> 
+> larvdyn2 <- read.csv(file.path(datapath, "floating/larvdyncustom.csv"))
+> taxonomy1 <- read.csv(file.path(datapath, "taxonomy/taxonomy-fixed.csv"))
+> 
+> hr.taxonomy <- read_xlsx(file.path(datapath, "homerange/Homerange Existing Data.xlsx"), sheet=6)
+> hrkeep <- is.na(hr.taxonomy$Drop)
+> withalt <- hrkeep & !is.na(hr.taxonomy$species.rename)
+> taxonomy2 <- data.frame(scientific=c(hr.taxonomy$species[hrkeep], hr.taxonomy$species.rename[withalt]),
+>                         alphaid=NA, kingdom=c(hr.taxonomy$kingdom[hrkeep], hr.taxonomy$kingdom[withalt]),
+>                         phylum=c(hr.taxonomy$phylum[hrkeep], hr.taxonomy$phylum[withalt]),
+>                         class=c(hr.taxonomy$class[hrkeep], hr.taxonomy$class[withalt]),
+>                         order=c(hr.taxonomy$order[hrkeep], hr.taxonomy$order[withalt]),
+>                         family=c(hr.taxonomy$family[hrkeep], hr.taxonomy$family[withalt]),
+>                         genus=c(hr.taxonomy$genus[hrkeep], hr.taxonomy$genus[withalt]))
+> 
+> taxonomy <- rbind(taxonomy1, taxonomy2,
+>                   data.frame(scientific=paste(larvdyn2$genus, larvdyn2$species),
+>                              alphaid=NA, kingdom="Animalia", phylum=larvdyn2$phylum,
+>                              class=larvdyn2$class, order=NA, family=NA, genus=larvdyn2$genus))
+> taxonomy <- taxonomy[!duplicated(taxonomy$scientific),]
+> 
+> lowest.hierarchy <- function(scientific, callback) {
+>     if (length(grep(" ", scientific)) == 0)
+>         scientific <- paste(scientific, "spp.")
+> 
+>     taxrow <- taxonomy[taxonomy$scientific == scientific,]
+>     if (nrow(taxrow) >= 1)
+>         taxrow <- taxrow[1, -c(1:2)] # Drop title
+>     else {
+>         genus <- strsplit(scientific, " ")[[1]][1]
+>         taxrow <- taxonomy[!is.na(taxonomy$genus) & taxonomy$genus == genus,]
+>         if (nrow(taxrow) >= 1)
+>             taxrow <- taxrow[1, -c(1:2)] # Drop title
+>         else
+>             taxrow <- data.frame(kingdom="Animalia", genus)
+>     }
+>     columns <- c('scientific', rev(names(taxrow)))
+>     entries <- c(scientific, rev(as.character(t(taxrow))))
+> 
+>     for (cc in 1:length(columns)) {
+>         if (columns[cc] == 'scientific')
+>             specwithin <- scientific
+>         else
+>             specwithin <- taxonomy$scientific[taxonomy[, columns[cc]] == entries[cc]]
+> 
+>         values <- callback(specwithin)
+>         if (is.data.frame(values)) {
+>             if (nrow(values) > 0) {
+>                 values$level <- columns[cc]
+>                 return(values)
+>             }
+>         } else if (length(values) > 0)
+>             return(list(values=values, level=columns[cc]))
+>     }
+> 
+>     stopifnot(F) # Should never get here
+> }
+> ```
+> For additional reference, the top of larvdyncustom.csv (which has information on larvae for some species) looks like this:
+> ```
+>       phylum        class           genus       species duration                                                 source
+> 1 Arthropoda Malacostraca     Callichirus    islagrande     14.0 http://www.int-res.com/articles/suppl/m393p001_app.xls
+> 2 Arthropoda Malacostraca     Hemigrapsus   oregonensis     24.5 http://www.int-res.com/articles/suppl/m393p001_app.xls
+> 3 Arthropoda Malacostraca Lepidophthalmus louisianensis      3.0 http://www.int-res.com/articles/suppl/m393p001_app.xls
+> 4 Arthropoda Malacostraca    Pachygrapsus     crassipes     88.0 http://www.int-res.com/articles/suppl/m393p001_app.xls
+> 5 Arthropoda Malacostraca        Pandalus      borealis    105.0 http://www.int-res.com/articles/suppl/m393p001_app.xls
+> 6 Arthropoda Malacostraca         Penaeus       monodon     14.0 http://www.int-res.com/articles/suppl/m393p001_app.xls
+> ```
+> The top of taxonomy-fixed.csv (which has information on species taxonomies) looks like this:
+> ```
+>          scientific alphaid  kingdom        phylum          class             order     family    genus
+> 1   Cyprinus carpio      NA Animalia      Chordata Actinopterygii     Cypriniformes Cyprinidae Cyprinus
+> 2 Perca fluviatilis      NA Animalia      Chordata Actinopterygii       Perciformes   Percidae    Perca
+> 3   Sphyrnidae spp.  105694 Animalia      Chordata Elasmobranchii Carcharhiniformes Sphyrnidae         
+> 4     Bramidae spp.  125520 Animalia      Chordata Actinopterygii       Perciformes   Bramidae         
+> 5   Asteroidea spp.  123080 Animalia Echinodermata     Asteroidea                                      
+> 6     Soleidae spp.  125581 Animalia      Chordata Actinopterygii Pleuronectiformes   Soleidae         
+> ```
+> and Homerange Existing Data.xlsx sheet 6 (which has information used to determine home ranges) looks like this:
+> ```
+>   species               species.rename length.mm length.desc length.link dist.mean.m homerange.notes functional_group kingdom phylum class order family genus Drop 
+>   <chr>                 <chr>              <dbl> <chr>       <chr>             <dbl> <chr>           <chr>            <chr>   <chr>  <chr> <chr> <chr>  <chr> <chr>
+> 1 Makaira indica        <NA>                4400 <NA>        <NA>           513800    <NA>           Large pelagics … Animal… Chord… Acti… Perc… Istio… Maka… <NA> 
+> 2 Pagrus auratus        <NA>                 178 <NA>        <NA>              266.   <NA>           Large demersals… Animal… Chord… Acti… Perc… Spari… Pagr… <NA> 
+> 3 Cheilodactylus fuscus <NA>                 350 <NA>        <NA>               68.1  <NA>           Medium reef ass… Animal… Chord… Acti… Perc… Cheil… Chei… <NA> 
+> 4 Parupeneus porphyreus <NA>                 233 <NA>        <NA>              156.   <NA>           Medium reef ass… Animal… Chord… Acti… Perc… Mulli… Paru… <NA> 
+> 5 Paralabrax clathratus <NA>                 720 max total … https://ww…        65.3 "wikipedia ent… Medium benthope… Animal… Chord… Acti… Perc… Serra… Para… <NA> 
+> 6 Semicossyphus pulcher <NA>                 910 max total … https://ww…       139.   <NA>           Medium benthope… Animal… Chord… Acti… Perc… Labri… Semi… <NA> 
+> ```
+**assistant**:
+> ## Supplementary Information: Principles of Missing Data Inference for Taxonomically Related Species
+> 
+> ### Introduction
+> 
+> This supplementary section elucidates the principles and procedures employed to infer missing data for various species based on available data on taxonomically related species. Our approach leverages taxonomic hierarchies to seek relevant data within proximate taxonomic groups, thereby enabling the reasonable estimation of missing values from relationally inferred data sets.
+> 
+> ### Data Sources and Structures
+> 
+> We utilize three primary data sets:
+> 1. **Larval Dynamics Data (`larvdyncustom.csv`)**: Provides information on larvae duration and other attributes for specific species.
+> 2. **Taxonomy Data (`taxonomy-fixed.csv`)**: Includes taxonomic classifications for various species.
+> 3. **Home Range Data (`Homerange Existing Data.xlsx`, sheet 6)**: Contains home range and additional information for different species, some of which are renamed or marked to be dropped.
+> 
+> ### Data Preparation
+> 
+> The essential steps in preparing the data involve reading and merging the data sets, ensuring consistency across taxonomic classifications, and eliminating duplicates. Here is a precise breakdown:
+> 
+> 1. **Reading Data**: We import the larval dynamics, taxonomy, and home range data into R.
+>    ```r
+>    larvdyn2 <- read.csv(file.path(datapath, "floating/larvdyncustom.csv"))
+>    taxonomy1 <- read.csv(file.path(datapath, "taxonomy/taxonomy-fixed.csv"))
+>    hr.taxonomy <- read_xlsx(file.path(datapath, "homerange/Homerange Existing Data.xlsx"), sheet=6)
+>    ```
+> 
+> 2. **Filtering and Merging Home Range Data**:
+>    - Rows marked for dropping (`Drop` column) are excluded.
+>    - Alternate species names (`species.rename`) are incorporated.
+>    ```r
+>    hrkeep <- is.na(hr.taxonomy$Drop)
+>    withalt <- hrkeep & !is.na(hr.taxonomy$species.rename)
+>    taxonomy2 <- data.frame(scientific=c(hr.taxonomy$species[hrkeep], hr.taxonomy$species.rename[withalt]),
+>                            alphaid=NA, kingdom=c(hr.taxonomy$kingdom[hrkeep], hr.taxonomy$kingdom[withalt]),
+>                            phylum=c(hr.taxonomy$phylum[hrkeep], hr.taxonomy$phylum[withalt]),
+>                            class=c(hr.taxonomy$class[hrkeep], hr.taxonomy$class[withalt]),
+>                            order=c(hr.taxonomy$order[hrkeep], hr.taxonomy$order[withalt]),
+>                            family=c(hr.taxonomy$family[hrkeep], hr.taxonomy$family[withalt]),
+>                            genus=c(hr.taxonomy$genus[hrkeep], hr.taxonomy$genus[withalt]))
+>    ```
+> 
+> 3. **Aggregating Taxonomy Data**:
+>    - We combine the taxonomy from `taxonomy-fixed.csv`, home range derived taxonomy, and extracted taxonomy from `larvdyncustom.csv`.
+>    - Duplicate species are eliminated to form a comprehensive taxonomy dataset.
+>    ```r
+>    taxonomy <- rbind(taxonomy1, taxonomy2,
+>                      data.frame(scientific=paste(larvdyn2$genus, larvdyn2$species),
+>                                 alphaid=NA, kingdom="Animalia", phylum=larvdyn2$phylum,
+>                                 class=larvdyn2$class, order=NA, family=NA, genus=larvdyn2$genus))
+>    taxonomy <- taxonomy[!duplicated(taxonomy$scientific),]
+>    ```
+> 
+> ### Inference Methodology
+> 
+> The core of our inference method lies in the `lowest.hierarchy` function. This function works as follows:
+> 
+> 1. **Hierarchy Traversal**:
+>     - The function processes species names by checking specific taxonomic levels sequentially from the species down to the genus level.
+>     - Species names for which inference is made usually have some taxonomic data provided (e.g., genus, phylum) or default to "spp." if not fully detailed.
+>     ```r
+>     if (length(grep(" ", scientific)) == 0)
+>         scientific <- paste(scientific, "spp.")
+>     ```
+> 
+> 2. **Data Extraction**:
+>     - Attempts to retrieve a row matching the species name provided.
+>     - If no matching entry is found, the function searches within the genus-level taxonomy.
+>     ```r
+>     taxrow <- taxonomy[taxonomy$scientific == scientific,]
+>     if (nrow(taxrow) >= 1)
+>         taxrow <- taxrow[1, -c(1:2)]  # Drop title
+>     else {
+>         genus <- strsplit(scientific, " ")[[1]][1]
+>         taxrow <- taxonomy[!is.na(taxonomy$genus) & taxonomy$genus == genus,]
+>         if (nrow(taxrow) >= 1)
+>             taxrow <- taxrow[1, -c(1:2)]  # Drop title
+>         else
+>             taxrow <- data.frame(kingdom="Animalia", genus)
+>     }
+>     ```
+> 
+> 3. **Callback Function and Level Checking**:
+>     - Iteratively checks main hierarchical levels, invoking the callback function to retrieve values based on taxonomy.
+>     - If values are found, they are returned along with the taxonomic level at which they were inferred.
+>     ```r
+>     for (cc in 1:length(columns)) {
+>         if (columns[cc] == 'scientific')
+>             specwithin <- scientific
+>         else
+>             specwithin <- taxonomy$scientific[taxonomy[, columns[cc]] == entries[cc]]
+> 
+>         values <- callback(specwithin)
+>         if (is.data.frame(values)) {
+>             if (nrow(values) > 0) {
+>                 values$level <- columns[cc]
+>                 return(values)
+>             }
+>         } else if (length(values) > 0)
+>             return(list(values=values, level=columns[cc]))
+>     }
+>     ```
+> 
+> ### Conclusion
+> 
+> By utilizing the hierarchical taxonomy structure and progressively searching for data at different taxonomic levels, our method ensures robust and systematic inference of missing data. Species with missing values are supplemented with taxonomically related data or proximate species information, thus enabling comprehensive analyses and interpretations in our studies.

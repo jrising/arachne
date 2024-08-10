@@ -1,0 +1,264 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> Below is a collection of material that I am in the process of
+> archiving. It starts with a short description, and then the content of
+> all files (typically generated with 
+> `find . -print -exec cat {} \; -printf "\n=====\n"`).
+> 
+> I will generally try to provide some context, in addition to the file
+> content. Please include this in your generated summary.
+> 
+> Please generate a summary document, using twiki syntax:
+> 
+> ! [Project title]
+> 
+> [Provide a summary description of the project.
+> 
+> Archived at: [James to Fill in]
+> 
+> !! Status when archived
+> 
+> [Give a summary of what was done and what was left to be done for a
+> working system.]
+> 
+> !! Notable contributions
+> 
+> [Give a summary of data, programming, or personal innovations to keep
+> track of.]
+> 
+> !! Keywords
+> 
+> [Provide a list of keywords for finding this project in the future.]
+> A simple webtool to scrape friend information from facebook.
+> 
+> =====
+> ./controllers/facebook_controller.rb
+> class FacebookController < ApplicationController
+>   include Geonames
+> 
+>   def access
+>     s = Geocoder.search(params[:addr])
+>     unless s.kind_of?(Array)
+>       render :text => "Could not find address" + params[:addr]
+>     end
+> 
+>     session[:origin] = s[0]
+> 
+>     @oauth = oauth
+>     redirect_to @oauth.url_for_oauth_code(:permissions => "friends_about_me,friends_location")
+>   end
+> 
+>   def callback
+>     @oauth = oauth
+>     result = @oauth.get_access_token_info(params[:code])
+>     @graph = Koala::Facebook::GraphAPI.new(result['access_token'])
+>     @rest = Koala::Facebook::RestAPI.new(result['access_token'])
+> 
+>     user = @graph.get_object("me")
+>     friends = @graph.get_connections("me", "friends")
+> 
+>     ids = friends.map { |friend| friend['id'].to_i }
+>     results = '<table>' + @graph.get_objects(ids).map do |id, user|
+>       if user['location'].nil?
+>         '<tr><td>' + user['name'] + '</td><td>' + (if user['location'].nil? then 'unknown' else user['location']['name'] end) + '</td><td></td><td></td></tr>'
+>       else
+>         geoloc = geoloc_plus(user['location']['name'])
+>         if geoloc.nil?
+>           '<tr><td>' + user['name'] + '</td><td>' + user['location']['name'] + '</td><td>unknown</td><td></td></tr>'
+>         else
+>           '<tr><td>' + user['name'] + '</td><td>' + user['location']['name'] + '</td><td>' + geoloc.lat.to_s + ', ' + geoloc.lng.to_s + '</td><td>' + Geocoder::Calculations.distance_between(session[:origin].coordinates, [geoloc.lat, geoloc.lng]).to_s + '</td></tr>'
+>         end
+>       end
+>     end.join("\n") + '</table>'
+> 
+>     render :text => results
+>   end
+> 
+>   private
+> 
+>   def oauth
+>     Koala::Facebook::OAuth.new("455049447911110", "c7a36e98449c069eb99ebbe62b4469ae", "http://friends.existencia.org/facebook/callback")
+>   end
+> end
+> 
+>     # results = friends.map { |friend| friend['name'] }.join(', ')
+>     # results << @graph.get_objects(ids).map { |id, user| user.to_json }.join("\n")
+>     # results << @rest.fql_query("SELECT uid,name,first_name,middle_name,last_name,pic_square,hometown_location,current_location,profile_url,email,website FROM user WHERE uid IN (SELECT uid2 FROM friend WHERE uid1 = me())").to_json
+> 
+> 
+> =====
+> ./controllers/api_controller.rb
+> class ApiController < ApplicationController
+>   include Geonames
+> 
+>   def Api
+>   end
+> 
+>   def geoloc_db1
+>     @locs = GclLocs.find(:all, :conditions => {:city => params[:city]})
+>     render :text => @locs.to_json
+>   end
+> end
+> 
+> =====
+> ./controllers/application_controller.rb
+> class ApplicationController < ActionController::Base
+>   protect_from_forgery
+> 
+>   def index
+>     render :text => "Nothing to see here"
+>   end
+> end
+> 
+> =====
+> ./views
+> cat: ./views: Is a directory
+> ./views/api
+> cat: ./views/api: Is a directory
+> ./views/api/Api.html.erb
+> <h1>Api#Api</h1>
+> <p>Find me in app/views/api/Api.html.erb</p>
+> 
+> =====
+> ./views/api/geoloc.html.erb
+> <h1>Api#geoloc</h1>
+> <p>Find me in app/views/api/geoloc.html.erb</p>
+> 
+> =====
+> ./views/facebook
+> cat: ./views/facebook: Is a directory
+> ./views/facebook/callback.html.erb
+> <h1>Facebook#callback</h1>
+> <p>Find me in app/views/facebook/callback.html.erb</p>
+> 
+> =====
+> ./views/facebook/access.html.erb
+> <h1>Facebook#access</h1>
+> <p>Find me in app/views/facebook/access.html.erb</p>
+> 
+> =====
+> ./views/layouts/application.html.erb
+> <!DOCTYPE html>
+> <html>
+> <head>
+>   <title>Friends</title>
+>   <%= stylesheet_link_tag :all %>
+>   <%= javascript_include_tag :defaults %>
+>   <%= csrf_meta_tag %>
+> </head>
+> <body>
+> 
+> <%= yield %>
+> 
+> </body>
+> </html>
+> 
+> =====
+> ./helpers
+> cat: ./helpers: Is a directory
+> ./helpers/facebook_helper.rb
+> module FacebookHelper
+> end
+> 
+> =====
+> ./helpers/api_helper.rb
+> module ApiHelper
+> end
+> 
+> =====
+> ./helpers/application_helper.rb
+> module ApplicationHelper
+> end
+> 
+> =====
+> ./mailers
+> cat: ./mailers: Is a directory
+> ./mailers/.gitkeep
+> 
+> =====
+> ./models
+> cat: ./models: Is a directory
+> ./models/.gitkeep
+> 
+> =====
+> ./models/gcl_locs.rb
+> class GclLocs < ActiveRecord::Base
+> end
+> 
+> =====
+> ./models/geoloc.rb
+> class Geoloc < ActiveRecord::Base
+> end
+> 
+> =====
+> ./assets
+> cat: ./assets: Is a directory
+> ./assets/javascripts
+> cat: ./assets/javascripts: Is a directory
+> ./assets/javascripts/facebook.js.coffee
+> # Place all the behaviors and hooks related to the matching controller here.
+> # All this logic will automatically be available in application.js.
+> # You can use CoffeeScript in this file: http://jashkenas.github.com/coffee-script/
+> 
+> =====
+> ./assets/javascripts/application.js
+> // This is a manifest file that'll be compiled into including all the files listed below.
+> // Add new JavaScript/Coffee code in separate files in this directory and they'll automatically
+> // be included in the compiled file accessible from http://example.com/assets/application.js
+> // It's not advisable to add code directly here, but if you do, it'll appear at the bottom of the
+> // the compiled file.
+> //
+> //= require jquery
+> //= require jquery_ujs
+> //= require_tree .
+> 
+> =====
+> ./assets/stylesheets
+> cat: ./assets/stylesheets: Is a directory
+> ./assets/stylesheets/application.css
+> /*
+>  * This is a manifest file that'll automatically include all the stylesheets available in this directory
+>  * and any sub-directories. You're free to add application-wide styles to this file and they'll appear at
+>  * the top of the compiled file, but it's generally better to create a new file per style scope.
+>  *= require_self
+>  *= require_tree . 
+> */
+> =====
+> ./assets/stylesheets/facebook.css.scss
+> // Place all the styles related to the Facebook controller here.
+> // They will automatically be included in application.css.
+> // You can use Sass (SCSS) here: http://sass-lang.com/
+**assistant**:
+> ```twiki
+> ---+ Simple Webtool to Scrape Friend Information from Facebook
+> 
+> This project is a basic web application designed to scrape friend information from Facebook, using the Koala gem for interfacing with the Facebook Graph API. 
+> 
+> Archived at: [James to Fill in]
+> 
+> ---++ Status When Archived
+> The project includes a working implementation for accessing Facebook friend information, with functionalities to retrieve and display friends' names, locations, and geographic coordinates. It also calculates distances between the user's location and friends' locations. The application interfaces with external APIs for geolocation data.
+> 
+> Remaining tasks for a fully operational system:
+> - Comprehensive error handling for various edge cases and API failures.
+> - Enhancements to the user interface for better user experience.
+> - Security improvements, such as handling OAuth tokens more securely.
+> - Deployment and testing on a production environment, with proper database configurations.
+> 
+> ---++ Notable Contributions
+> - **data**: Collected and processed friend data from Facebook using the Koala gem.
+> - **programming**: Developed methods for OAuth authentication, API calls, and geocoding.
+> - **innovations**: Integrated with Geonames for enhanced location data and implemented distance calculations using Geocoder.
+> 
+> ---++ Keywords
+>    * Facebook API
+>    * Friend Scraping
+>    * Geolocation
+>    * OAuth
+>    * Koala Gem
+>    * Ruby on Rails
+> 
+> ```
+> 
+> This summary document, formatted in Twiki syntax, provides a concise overview of the project, its status, notable contributions, and relevant keywords for easy retrieval in the future.

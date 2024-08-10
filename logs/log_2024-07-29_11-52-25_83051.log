@@ -1,0 +1,1452 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> The following is code for interacting with Schwab's stock trading API, from a github user that I don't know:
+> ```
+> ./example/generate_totp.py
+> from schwab_api import generate_totp
+> 
+> symantec_id, totp_secret = generate_totp()
+> 
+> print("Your symantec ID is: " + symantec_id)
+> print("Your TOTP secret is: " + totp_secret)
+> ./example/generate_totp.py
+> ./example/example.py
+> from schwab_api import Schwab
+> from dotenv import load_dotenv
+> import os
+> import pprint
+> 
+> load_dotenv()
+> 
+> username = os.getenv("SCHWAB_USERNAME")
+> password = os.getenv("SCHWAB_PASSWORD")
+> totp_secret = os.getenv("SCHWAB_TOTP")
+> 
+> # Initialize our schwab instance
+> api = Schwab(
+>     # Optional session cache - uncomment to enable:
+>     # session_cache="session.json"
+> )
+> 
+> # Login using playwright
+> print("Logging into Schwab")
+> logged_in = api.login(
+>     username=username,
+>     password=password,
+>     totp_secret=totp_secret # Get this using itsjafer.com/#/schwab.
+> )
+> 
+> # Get information about a few tickers
+> quotes = api.quote_v2(["PFE", "AAPL"])
+> pprint.pprint(quotes)
+> 
+> # Get information about your accounts holdings
+> print("Getting account holdings information")
+> account_info = api.get_account_info_v2()
+> pprint.pprint(account_info)
+> account_numbers = list(account_info.keys())
+> print("The following account numbers were found: " + str(account_numbers))
+> 
+> # Get the lot info for a position in an account
+> positions = account_info[account_numbers[0]]["positions"]
+> if positions:
+>     print(
+>         f"""Getting lot info for position {positions[0]["security_id"]} in account {account_numbers[0]}""")
+>     lot_info = api.get_lot_info_v2(
+>         account_numbers[0], positions[0]["security_id"])
+>     pprint.pprint(lot_info)
+> 
+> # Get transaction history for an account
+> print("Getting full transaction history for account " + str(account_numbers[0]))
+> transaction_history = api.get_transaction_history_v2(account_numbers[0])
+> pprint.pprint(transaction_history)
+> 
+> print("Placing a dry run trade for PFE stock")
+> # Place a dry run trade for each account
+> messages, success = api.trade_v2(
+>     ticker="PFE",
+>     side="Buy", #or Sell
+>     qty=1,
+>     account_id=next(iter(account_info)), # Replace with your account number
+>     dry_run=True # If dry_run=True, we won't place the order, we'll just verify it.
+> )
+> 
+> print("The order verification was " + "successful" if success else "unsuccessful")
+> print("The order verification produced the following messages: ")
+> pprint.pprint(messages)
+> 
+> orders = api.orders_v2()
+> 
+> pprint.pprint(orders)
+> ./example/example.py
+> ./example/example_options.py
+> from schwab_api import Schwab
+> from dotenv import load_dotenv
+> import os
+> import pandas as pd
+> import pprint
+> 
+> load_dotenv()
+> 
+> username = os.getenv("SCHWAB_USERNAME")
+> password = os.getenv("SCHWAB_PASSWORD")
+> totp_secret = os.getenv("SCHWAB_TOTP")
+> 
+> # Initialize our schwab instance
+> api = Schwab()
+> 
+> # Login using playwright
+> print("Logging into Schwab")
+> logged_in = api.login(
+>     username=username,
+>     password=password,
+>     totp_secret=totp_secret # Get this using itsjafer.com/#/schwab.
+> )
+> 
+> # Get quotes for options.
+> option_chain = api.get_options_chains_v2('$RUT') #try also with parameter greeks = True 
+> 
+> # The json output is deeply nested so here is how you can work with it:
+> # Normalizing the data into a pandas DataFrame
+> df1 = pd.json_normalize(option_chain,['Expirations','Chains','Legs'],[['Expirations','ExpirationGroup']])
+> # Normalizing Expirations.ExpirationGroup
+> df2 = pd.json_normalize(df1['Expirations.ExpirationGroup'])
+> # Dropping the column Expirations.ExpirationGroup in df1 and concatenating the two dataframes (side by side)
+> df1.drop('Expirations.ExpirationGroup',axis=1, inplace=True)
+> df = pd.concat([df1,df2],axis=1)
+> # Converting strings to numbers when relevant. Keeping strings is conversion is not possible.
+> df = df.apply(lambda col: pd.to_numeric(col, errors='coerce')).fillna(df)
+> 
+> # Let's isolate options with closest expiration date:
+> closest_expiration_options = df[(df.DaysUntil==df.DaysUntil.min())]
+> 
+> # Let's find the call and put options with closest strike price to current price:
+> # First let's grab the current price. No need to use api.quote_v2(), it's already in chains
+> current_price = float(option_chain['UnderlyingData']['Last'])
+> # Finding the index of the closest strike prices
+> ATM_call_index = abs(closest_expiration_options[closest_expiration_options.OptionType=="C"].Strk - current_price).idxmin()
+> ATM_put_index = abs(closest_expiration_options[closest_expiration_options.OptionType=="P"].Strk - current_price).idxmin()
+> # Grabbing the rows at those indexes 
+> ATM_call_option = closest_expiration_options.iloc[ATM_call_index]
+> ATM_put_option = closest_expiration_options.iloc[ATM_put_index]
+> print(f"Call and Put ATM options (At The Money) with the closest expiration:")
+> print(f"Call: {ATM_call_option.Sym}         Ask: {ATM_call_option.Ask}      Bid: {ATM_call_option.Bid}")
+> print(f"Put:  {ATM_put_option.Sym}         Ask: {ATM_put_option.Ask}      Bid: {ATM_put_option.Bid}")
+> 
+> # Now let's place an at the money straddle for the closest expiration date
+> # Preparing the parameters
+> # Setting the straddle strategy code:
+> strategy = 226 # for more codes, look at the comment section of option_trade_v2().
+> symbols = [ATM_call_option.Sym,ATM_put_option.Sym]
+> instructions = ["BTO","BTO"] #Buy To Open. To close the position, it would be STC (Sell To Close)
+> quantities = [1,1]
+> # Note that the elements are paired. So the first symbol of the list will be associated with the first element of instructions and quantities.
+> account_info = api.get_account_info_v2()
+> account_id = next(iter(account_info))
+> order_type = 202 #net debit. 201 for net credit. You probably should avoid 49 market with options...
+> # Let's set the limit price at the median between bid and ask.
+> limit_price = (ATM_call_option.Ask + ATM_call_option.Bid + ATM_put_option.Ask + ATM_put_option.Bid) / 2
+> # Let's place the trade:
+> messages, success = api.option_trade_v2(
+>     strategy=strategy, 
+>     symbols = symbols, 
+>     instructions=instructions, 
+>     quantities=quantities, 
+>     account_id=account_id, 
+>     order_type = order_type,
+>     dry_run=True,
+>     limit_price = limit_price
+> )
+> 
+> print("The order verification was " + "successful" if success else "unsuccessful")
+> print("The order verification produced the following messages: ")
+> pprint.pprint(messages)
+> 
+> # Happy coding!!
+> ./example/example_options.py
+> ./example/example_legacy.py
+> from schwab_api import Schwab
+> from dotenv import load_dotenv
+> import os
+> import pprint
+> 
+> load_dotenv()
+> 
+> username = os.getenv("SCHWAB_USERNAME")
+> password = os.getenv("SCHWAB_PASSWORD")
+> totp_secret = os.getenv("SCHWAB_TOTP")
+> 
+> # Initialize our schwab instance
+> api = Schwab()
+> 
+> # Login using playwright
+> print("Logging into Schwab")
+> logged_in = api.login(
+>     username=username,
+>     password=password,
+>     totp_secret=totp_secret # Get this using itsjafer.com/#/schwab.
+> )
+> 
+> # Get information about your accounts holdings
+> print("Getting account holdings information")
+> account_info = api.get_account_info()
+> pprint.pprint(account_info)
+> print("The following account numbers were found: " + str(account_info.keys()))
+> 
+> print("Placing a dry run trade for PFE stock")
+> # Place a dry run trade for each account
+> messages, success = api.trade(
+>     ticker="PFE", 
+>     side="Buy", #or Sell
+>     qty=1, 
+>     account_id=98494830, # Replace with your account number
+>     dry_run=True # If dry_run=True, we won't place the order, we'll just verify it.
+> )
+> 
+> print("The order verification was " + "successful" if success else "unsuccessful")
+> print("The order verification produced the following messages: ")
+> pprint.pprint(messages)
+> ./example/example_legacy.py
+> ./schwab_api/account_information.py
+> class Account(dict):
+>     def __init__(self, account_id, positions, market_value, available_cash, account_value, cost_basis):
+>         self.account_id = account_id
+>         self.positions = positions
+>         self.market_value = market_value
+>         self.available_cash = available_cash
+>         self.account_value = account_value
+>         self.cost_basis = cost_basis
+> 
+>     def _as_dict(self):
+>         return {
+>             "account_id": self.account_id,
+>             "positions": self.positions,
+>             "market_value": self.market_value,
+>             "available_cash": self.available_cash,
+>             "account_value": self.account_value,
+>             "cost_basis": self.cost_basis,
+>         }
+> 
+>     def __repr__(self) -> str:
+>         return str(self._as_dict())
+>         
+>     def __str__(self) -> str:
+>         return str(self._as_dict())
+> 
+> class Position(dict):
+>     def __init__(self, symbol, description, quantity, cost, market_value, security_id):
+>         self.symbol = symbol
+>         self.description = description
+>         self.quantity = quantity
+>         self.cost = cost
+>         self.market_value = market_value
+>         self.security_id = security_id
+> 
+>     def _as_dict(self):
+>         return {
+>             "symbol": self.symbol,
+>             "description": self.description,
+>             "quantity": self.quantity,
+>             "cost": self.cost,
+>             "market_value": self.market_value,
+>             "security_id": self.security_id
+>         }
+> 
+>     def __repr__(self) -> str:
+>         return str(self._as_dict())
+> 
+>     def __str__(self) -> str:
+>         return str(self._as_dict())./schwab_api/account_information.py
+> ./schwab_api/__init__.py
+> from .schwab import Schwab
+> from .totp_generator import generate_totp./schwab_api/__init__.py
+> ./schwab_api/schwab.py
+> import json
+> import urllib.parse
+> import requests
+> import sys
+> 
+> from . import urls
+> from .account_information import Position, Account
+> from .authentication import SessionManager
+> 
+> class Schwab(SessionManager):
+>     def __init__(self, session_cache=None, **kwargs):
+>         """
+>         The Schwab class. Used to interact with the Schwab API.
+> 
+>         :type session_cache: str
+>         :param session_cache: Path to an optional session file, used to save/restore credentials
+>         """
+>         self.headless = kwargs.get("headless", True)
+>         self.browserType = kwargs.get("browserType", "firefox")
+>         self.session_cache = session_cache
+>         super(Schwab, self).__init__()
+> 
+>     def get_account_info(self):
+>         """
+>         Returns a dictionary of Account objects where the key is the account number
+>         """
+> 
+>         account_info = dict()
+>         # In order for this to return info for all accounts, the web interface excludes the
+>         # AcctInfo cookie and sets the CustAccessInfo cookie to a value like:
+>         # '<something>|<some_acct_num>|AllAccts'
+>         # instead of:
+>         # '<something>|<some_acct_num>|'
+>         # There can be multiple cookies with the same name but having different attributes,
+>         # i.e. domains '' and '.schwab.com', so we need to be careful when deleting or modifying
+>         # cookies with a certain name
+>         requests.cookies.remove_cookie_by_name(self.session.cookies, 'AcctInfo')
+>         for cookie in self.session.cookies:
+>             if cookie.name == 'CustAccessInfo':
+>                 if cookie.value.endswith('|'):
+>                     cookie.value += 'AllAccts'
+>                     self.session.cookies.set_cookie(cookie)
+>         r = self.session.get(urls.positions_data())
+>         response = json.loads(r.text)
+>         for account in response['Accounts']:
+>             positions = list()
+>             for security_group in account["SecurityGroupings"]:
+>                 for position in security_group["Positions"]:
+>                     positions.append(
+>                         Position(
+>                             position["DefaultSymbol"],
+>                             position["Description"],
+>                             float(position["Quantity"]),
+>                             float(position["Cost"]),
+>                             float(position["MarketValue"]),
+>                             position["ItemIssueId"]
+>                         )._as_dict()
+>                     )
+> 
+>                     if not "ChildOptionPositions" in position:
+>                         continue
+> 
+>                     # Add call positions if they exist
+>                     for child_position in position["ChildOptionPositions"]:
+>                         positions.append(
+>                             Position(
+>                                 child_position["DefaultSymbol"],
+>                                 child_position["Description"],
+>                                 float(child_position["Quantity"]),
+>                                 float(child_position["Cost"]),
+>                                 float(child_position["MarketValue"]),
+>                                 child_position["ItemIssueId"]
+>                             )._as_dict()
+>                         )
+>             account_info[int(account["AccountId"])] = Account(
+>                 account["AccountId"],
+>                 positions,
+>                 account["Totals"]["MarketValue"],
+>                 account["Totals"]["CashInvestments"],
+>                 account["Totals"]["AccountValue"],
+>                 account["Totals"]["Cost"],
+>             )._as_dict()
+> 
+>         return account_info
+> 
+>     def get_transaction_history_v2(self, account_id):
+>         """
+>             account_id (int) - The account ID to place the trade on. If the ID is XXXX-XXXX,
+>                         we're looking for just XXXXXXXX.
+> 
+>             Returns a dictionary of transaction history entries for the provided account ID.
+>         """
+> 
+>         data = {
+>             "timeFrame": "All",
+>             "selectedTransactionTypes": [
+>                 "Adjustments",
+>                 "AtmActivity",
+>                 "BillPay",
+>                 "CorporateActions",
+>                 "Checks",
+>                 "Deposits",
+>                 "DividendsAndCapitalGains",
+>                 "ElectronicTransfers",
+>                 "Fees",
+>                 "Interest",
+>                 "Misc",
+>                 "SecurityTransfers",
+>                 "Taxes",
+>                 "Trades",
+>                 "VisaDebitCard",
+>                 "Withdrawals"
+>             ],
+>             "exportType": "Json",
+>             "selectedAccountId": str(account_id),
+>             "sortColumn": "Date",
+>             "sortDirection": "Descending"
+>         }
+>         r = requests.post(urls.transaction_history_v2(), json=data, headers=self.headers)
+>         if r.status_code != 200:
+>             return [r.text], False
+>         return json.loads(r.text)
+> 
+>     def trade(self, ticker, side, qty, account_id, dry_run=True):
+>         """
+>             ticker (Str) - The symbol you want to trade,
+>             side (str) - Either 'Buy' or 'Sell',
+>             qty (int) - The amount of shares to buy/sell,
+>             account_id (int) - The account ID to place the trade on. If the ID is XXXX-XXXX,
+>                          we're looking for just XXXXXXXX.
+> 
+>             Returns messages (list of strings), is_success (boolean)
+>         """
+> 
+>         if side == "Buy":
+>             buySellCode = 1
+>         elif side == "Sell":
+>             buySellCode = 2
+>         else:
+>             raise Exception("side must be either Buy or Sell")
+> 
+>         data = {
+>             "IsMinQty":False,
+>             "CustomerId":str(account_id),
+>             "BuySellCode":buySellCode,
+>             "Quantity":str(qty),
+>             "IsReinvestDividends":False,
+>             "SecurityId":ticker,
+>             "TimeInForce":"1", # Day Only
+>             "OrderType":1, # Market Order
+>             "CblMethod":"FIFO",
+>             "CblDefault":"FIFO",
+>             "CostBasis":"FIFO",
+>             }
+> 
+>         r = self.session.post(urls.order_verification(), data)
+> 
+>         if r.status_code != 200:
+>             return [r.text], False
+> 
+>         response = json.loads(r.text)
+> 
+>         messages = list()
+>         for message in response["Messages"]:
+>             messages.append(message["Message"])
+> 
+>         if dry_run:
+>             return messages, True
+> 
+>         data = {
+>             "AccountId": str(account_id),
+>             "ActionType": side,
+>             "ActionTypeText": side,
+>             "BuyAction": side == "Buy",
+>             "CostBasis": "FIFO",
+>             "CostBasisMethod": "FIFO",
+>             "IsMarketHours": True,
+>             "ItemIssueId": int(response['IssueId']),
+>             "NetAmount": response['NetAmount'],
+>             "OrderId": int(response["Id"]),
+>             "OrderType": "Market",
+>             "Principal": response['QuoteAmount'],
+>             "Quantity": str(qty),
+>             "ShortDescription": urllib.parse.quote_plus(response['IssueShortDescription']),
+>             "Symbol": response["IssueSymbol"],
+>             "Timing": "Day Only"
+>         }
+> 
+>         r = self.session.post(urls.order_confirmation(), data)
+> 
+>         if r.status_code != 200:
+>             messages.append(r.text)
+>             return messages, False
+> 
+>         response = json.loads(r.text)
+>         if response["ReturnCode"] == 0:
+>             return messages, True
+> 
+>         return messages, False
+> 
+>     def trade_v2(self,
+>         ticker,
+>         side,
+>         qty,
+>         account_id,
+>         dry_run=True,
+>         # The Fields below are experimental fields that should only be changed if you know what you're doing.
+>         order_type=49,
+>         duration=48,
+>         limit_price=0,
+>         stop_price=0,
+>         primary_security_type=46,
+>         valid_return_codes = {0,10},
+>         affirm_order=False,
+>         costBasis='FIFO'
+>         ):
+>         """
+>             ticker (Str) - The symbol you want to trade,
+>             side (str) - Either 'Buy' or 'Sell',
+>             qty (int) - The amount of shares to buy/sell,
+>             account_id (int) - The account ID to place the trade on. If the ID is XXXX-XXXX,
+>                         we're looking for just XXXXXXXX.
+>             order_type (int) - The order type. This is a Schwab-specific number, and there exists types
+>                         beyond 49 (Market) and 50 (Limit). This parameter allows setting specific types
+>                         for those willing to trial-and-error. For reference but not tested:
+>                         49 - Market
+>                         50 - Limit
+>                         51 - Stop market
+>                         52 - Stop limit
+>                         84 - Trailing stop
+>                         53 - Market on close
+>             duration (int) - The duration type for the order. For now, all that's been
+>                         tested is value 48 mapping to Day-only orders.
+>                         48 - Day
+>                         49 - GTC Good till canceled
+>                         201 - Day + extended hours
+>             limit_price (number) - The limit price to set with the order, if necessary.
+>             stop_price (number) -  The stop price to set with the order, if necessary.
+>             primary_security_type (int) - The type of the security being traded.
+>                         46 - For stocks and funds.
+>                         48 - For options. For option strategies, use option_trade_v2()
+>                         49 - For mutual fund - not supported. Requires different parameters.
+>             valid_return_codes (set) - Schwab returns an orderReturnCode in the response to both
+>                         the verification and execution requests, and it appears to be the
+>                         "severity" for the highest severity message.
+>                         Verification response messages with severity 10 include:
+>                             - The market is now closed. This order will be placed for the next
+>                               trading day
+>                             - You are purchasing an ETF...please read the prospectus
+>                             - It is your responsibility to choose the cost basis method
+>                               appropriate to your tax situation
+>                             - Quote at the time of order verification: $xx.xx
+>                         Verification response messages with severity 20 include at least:
+>                             - Insufficient settled funds (different from insufficient buying power)
+>                         Verification response messages with severity 25 include at least:
+>                             - This order is executable because the buy (or sell) limit is higher
+>                               (lower) than the ask (bid) price.
+>                         For the execution response, the orderReturnCode is typically 0 for a
+>                         successfully placed order.
+>                         Execution response messages with severity 30 include:
+>                             - Order Affirmation required (This means Schwab wants you to confirm
+>                               that you really meant to place this order as-is since something about
+>                               it meets Schwab's criteria for requiring verification. This is
+>                               usually analogous to a checkbox you would need to check when using
+>                               the web interface)
+>             affirm_order (bool) - Schwab requires additional verification for certain orders, such
+>                         as when a limit order is executable, or when buying some commodity ETFs.
+>                         Setting this to True will likely provide the verification needed to execute
+>                         these orders. You will likely also have to include the appropriate return
+>                         code in valid_return_codes.
+>             costBasis (str) - Set the cost basis for a sell order. Important tax implications. See:
+>                          https://help.streetsmart.schwab.com/edge/1.22/Content/Cost%20Basis%20Method.htm
+>                          Only tested FIFO and BTAX.
+>                         'FIFO': First In First Out
+>                         'HCLOT': High Cost
+>                         'LCLOT': Low Cost
+>                         'LIFO': Last In First Out
+>                         'BTAX': Tax Lot Optimizer
+>                         ('VSP': Specific Lots -> just for reference. Not implemented: Requires to select lots manually.)
+>             Note: this function calls the new Schwab API, which is flakier and seems to have stricter authentication requirements.
+>             For now, only use this function if the regular trade function doesn't work for your use case.
+> 
+>             Returns messages (list of strings), is_success (boolean)
+>         """
+> 
+>         if side == "Buy":
+>             buySellCode = "49"
+>         elif side == "Sell":
+>             buySellCode = "50"
+>         else:
+>             raise Exception("side must be either Buy or Sell")
+> 
+>         # Handling formating of limit_price to avoid error.
+>         # Checking how many decimal places are in limit_price.
+>         decimal_places = len(str(float(limit_price)).split('.')[1])
+>         limit_price_warning = None
+>         # Max 2 decimal places allowed for price >= $1 and 4 decimal places for price < $1.
+>         if limit_price >= 1:
+>             if decimal_places > 2:
+>                 limit_price = round(limit_price,2)
+>                 limit_price_warning = f"For limit_price >= 1, Only 2 decimal places allowed. Rounded price_limit to: {limit_price}"
+>         else:
+>             if decimal_places > 4:
+>                 limit_price = round(limit_price,4)
+>                 limit_price_warning = f"For limit_price < 1, Only 4 decimal places allowed. Rounded price_limit to: {limit_price}"
+> 
+>         self.update_token(token_type='update')
+> 
+>         data = {
+>             "UserContext": {
+>                 "AccountId":str(account_id),
+>                 "AccountColor":0
+>             },
+>             "OrderStrategy": {
+>                 "PrimarySecurityType":primary_security_type,
+>                 "CostBasisRequest": {
+>                     "costBasisMethod":costBasis,
+>                     "defaultCostBasisMethod":costBasis
+>                 },
+>                 "OrderType":str(order_type),
+>                 "LimitPrice":str(limit_price),
+>                 "StopPrice":str(stop_price),
+>                 "Duration":str(duration),
+>                 "AllNoneIn":False,
+>                 "DoNotReduceIn":False,
+>                 "OrderStrategyType":1,
+>                 "OrderLegs":[
+>                     {
+>                         "Quantity":str(qty),
+>                         "LeavesQuantity":str(qty),
+>                         "Instrument":{"Symbol":ticker},
+>                         "SecurityType":primary_security_type,
+>                         "Instruction":buySellCode
+>                     }
+>                     ]},
+>             # OrderProcessingControl seems to map to verification vs actually placing an order.
+>             "OrderProcessingControl":1
+>         }
+> 
+>         # Adding this header seems to be necessary.
+>         self.headers['schwab-resource-version'] = '1.0'
+> 
+>         r = requests.post(urls.order_verification_v2(), json=data, headers=self.headers)
+>         if r.status_code != 200:
+>             return [r.text], False
+> 
+>         response = json.loads(r.text)
+> 
+>         orderId = response['orderStrategy']['orderId']
+>         firstOrderLeg = response['orderStrategy']['orderLegs'][0]
+>         if "schwabSecurityId" in firstOrderLeg:
+>             data["OrderStrategy"]["OrderLegs"][0]["Instrument"]["ItemIssueId"] = firstOrderLeg["schwabSecurityId"]
+> 
+>         messages = list()
+>         if limit_price_warning is not None:
+>             messages.append(limit_price_warning)
+>         for message in response["orderStrategy"]["orderMessages"]:
+>             messages.append(message["message"])
+> 
+>         # TODO: This needs to be fleshed out and clarified.
+>         if response["orderStrategy"]["orderReturnCode"] not in valid_return_codes:
+>             return messages, False
+> 
+>         if dry_run:
+>             return messages, True
+> 
+>         # Make the same POST request, but for real this time.
+>         data["UserContext"]["CustomerId"] = 0
+>         data["OrderStrategy"]["OrderId"] = int(orderId)
+>         data["OrderProcessingControl"] = 2
+>         if affirm_order:
+>             data["OrderStrategy"]["OrderAffrmIn"] = True
+>         self.update_token(token_type='update')
+>         r = requests.post(urls.order_verification_v2(), json=data, headers=self.headers)
+> 
+>         if r.status_code != 200:
+>             return [r.text], False
+> 
+>         response = json.loads(r.text)
+> 
+>         messages = list()
+>         if limit_price_warning is not None:
+>             messages.append(limit_price_warning)
+>         if "orderMessages" in response["orderStrategy"] and response["orderStrategy"]["orderMessages"] is not None:
+>             for message in response["orderStrategy"]["orderMessages"]:
+>                 messages.append(message["message"])
+> 
+>         if response["orderStrategy"]["orderReturnCode"] in valid_return_codes:
+>             return messages, True
+> 
+>         return messages, False
+> 
+> 
+>     def option_trade_v2(self,
+>         strategy,
+>         symbols,
+>         instructions,
+>         quantities,
+>         account_id,
+>         order_type,
+>         dry_run=True,
+>         duration=48,
+>         limit_price=0,
+>         stop_price=0,
+>         valid_return_codes = {0,10},
+>         affirm_order=False
+>         ):
+>         """
+>             Disclaimer:
+>             Use at own risk.
+>             Make sure you understand what you are doing when trading options and using this function.
+>             Option trading requires an application and approval process at Schwab.
+> 
+>             strategy (int) - Type of options strategy:
+>                         2 leg strategies:
+>                         201 - vertical call spread
+>                         202 - vertical put spread
+>                         203 - calendar call spread (level 3)
+>                         204 - calendar put spread (level 3)
+>                         205 - diagonal call spread
+>                         206 - diagonal put spread
+>                         207 - ratio call spread (level 3)
+>                         208 - ratio put spread (level 3)
+>                         217 - custom 2 legs:
+>                         3 leg strategies:
+>                         209 - Butterfly call spread
+>                         210 - Butterfly put spread
+>                         218 - custom 3 legs
+>                         4 leg strategies:
+>                         211 - condor call spread
+>                         212 - condor put spread
+>                         214 - iron condor
+>                         219 - custom 4 legs
+>                         Combinations:
+>                         226 - straddle
+>                         227 - strangle
+>             symbols (list of str) - List of the contracts you want to trade, each element being a leg of the trade,
+>             instructions (list str) - is a list containing the instructions for each leg
+>                         "BTO" - Buy to open
+>                         "BTC" - Buy to close
+>                         "STO" - Sell to open
+>                         "STC" - Sell to close
+>             quantities (list int) - The amount of contracts to buy/sell for each symbol / contract,
+>             account_id (int) - The account ID to place the trade on. If the ID is XXXX-XXXX,
+>                         we're looking for just XXXXXXXX.
+>             order_type (int) - The order type. This is a Schwab-specific number.
+>                          49 - Market. Warning: Options are typically less liquid than stocks! limit orders strongly recommended!
+>                         201 - Net credit. To be used in conjuncture with limit price.
+>                         202 - Net debit. To be used in conjunture with limit price.
+>             duration (int) - The duration type for the order.
+>                         48 - Day
+>                         49 - GTC Good till canceled
+>             limit_price (number) - The limit price to set with the order. Usage recommended.
+>             stop_price (number) - The stop price to set with the order, if necessary.
+>                         Not sure when to use this. Never tested.
+>             valid_return_codes (set) - Schwab returns an orderReturnCode in the response to both
+>                         the verification and execution requests, and it appears to be the
+>                         "severity" for the highest severity message.
+>                         Verification response messages with severity 10 include:
+>                             - The market is now closed. This order will be placed for the next
+>                               trading day
+>                             - You are purchasing an ETF...please read the prospectus
+>                             - It is your responsibility to choose the cost basis method
+>                               appropriate to your tax situation
+>                             - Quote at the time of order verification: $xx.xx
+>                         Verification response messages with severity 20 include at least:
+>                             - Insufficient settled funds (different from insufficient buying power)
+>                         Verification response messages with severity 25 include at least:
+>                             - This order is executable because the buy (or sell) limit is higher
+>                               (lower) than the ask (bid) price.
+>                         For the execution response, the orderReturnCode is typically 0 for a
+>                         successfully placed order.
+>                         Execution response messages with severity 30 include:
+>                             - Order Affirmation required (This means Schwab wants you to confirm
+>                               that you really meant to place this order as-is since something about
+>                               it meets Schwab's criteria for requiring verification. This is
+>                               usually analogous to a checkbox you would need to check when using
+>                               the web interface)
+>             affirm_order (bool) - Schwab requires additional verification for certain orders, such
+>                         as when a limit order is executable, or when buying some commodity ETFs.
+>                         Setting this to True will likely provide the verification needed to execute
+>                         these orders. You will likely also have to include the appropriate return
+>                         code in valid_return_codes.
+>             Note: this function calls the new Schwab API, which is flakier and seems to have stricter authentication requirements.
+>             For now, only use this function if the regular trade function doesn't work for your use case.
+> 
+>             Returns messages (list of strings), is_success (boolean)
+>         """
+>         if not (len(quantities) == len(symbols) and len(symbols) == len(instructions)):
+>             raise ValueError("variables quantities, symbols and instructions must have the same length")
+> 
+>         instruction_code = {
+>             "BTO": "201",
+>             "BTC": "202",
+>             "STO": "203",
+>             "STC": "204"
+>         }
+>         instruction_codes = [instruction_code[i] for i in instructions]
+> 
+>         self.update_token(token_type='update')
+> 
+>         data = {
+>               "UserContext": {
+>                 "AccountId": str(account_id),
+>                 "AccountColor": 0
+>               },
+>               "OrderStrategy": {
+>                 "PrimarySecurityType": 48,
+>                 "CostBasisRequest": None,
+>                 "OrderType": str(order_type),
+>                 "Duration": str(duration),
+>                 "LimitPrice": str(limit_price),
+>                 "StopPrice": str(stop_price),
+>                 "ReinvestDividend": False,
+>                 "MinimumQuantity": 0,
+>                 "AllNoneIn": False,
+>                 "DoNotReduceIn": False,
+>                 "Strategy": strategy,
+>                 "OrderStrategyType": 1,
+>                 "OrderLegs": [
+>                     {
+>                         "Quantity": str(qty),
+>                         "LeavesQuantity": str(qty),
+>                         "Instrument": {"Symbol": symbol},
+>                         "SecurityType": 48,
+>                         "Instruction": instruction
+>                     } for qty, symbol, instruction in zip(quantities, symbols, instruction_codes)
+>                     ]},
+>             # OrderProcessingControl seems to map to verification vs actually placing an order.
+>             "OrderProcessingControl": 1
+>         }
+> 
+>         # Adding this header seems to be necessary.
+>         self.headers['schwab-resource-version'] = '1.0'
+> 
+>         r = requests.post(urls.order_verification_v2(), json=data, headers=self.headers)
+>         if r.status_code != 200:
+>             return [r.text], False
+> 
+>         response = json.loads(r.text)
+> 
+>         orderId = response['orderStrategy']['orderId']
+>         for i in range(len(symbols)):
+>             OrderLeg = response['orderStrategy']['orderLegs'][i]
+>             if "schwabSecurityId" in OrderLeg:
+>                 data["OrderStrategy"]["OrderLegs"][i]["Instrument"]["ItemIssueId"] = OrderLeg["schwabSecurityId"]
+> 
+>         messages = list()
+>         for message in response["orderStrategy"]["orderMessages"]:
+>             messages.append(message["message"])
+> 
+>         # TODO: This needs to be fleshed out and clarified.
+>         if response["orderStrategy"]["orderReturnCode"] not in valid_return_codes:
+>             return messages, False
+> 
+>         if dry_run:
+>             return messages, True
+> 
+>         # Make the same POST request, but for real this time.
+>         data["UserContext"]["CustomerId"] = 0
+>         data["OrderStrategy"]["OrderId"] = int(orderId)
+>         data["OrderProcessingControl"] = 2
+>         if affirm_order:
+>             data["OrderStrategy"]["OrderAffrmIn"] = True
+>         self.update_token(token_type='update')
+>         r = requests.post(urls.order_verification_v2(), json=data, headers=self.headers)
+> 
+>         if r.status_code != 200:
+>             return [r.text], False
+> 
+>         response = json.loads(r.text)
+> 
+>         messages = list()
+>         if "orderMessages" in response["orderStrategy"] and response["orderStrategy"]["orderMessages"] is not None:
+>             for message in response["orderStrategy"]["orderMessages"]:
+>                 messages.append(message["message"])
+> 
+>         if response["orderStrategy"]["orderReturnCode"] in valid_return_codes:
+>             return messages, True
+> 
+>         return messages, False
+> 
+>     def cancel_order_v2(
+>             self, account_id, order_id,
+>             # The fields below are experimental and should only be changed if you know what
+>             # you're doing.
+>             instrument_type=46,
+>             order_management_system=2, # You may need to change this based on the value returned from calling orders_v2
+>             ):
+>         """
+>         Cancels an open order (specified by order ID) using the v2 API
+> 
+>         account_id (int) - The account ID of the order. If the ID is XXXX-XXXX, we're looking for
+>             just XXXXXXXX.
+>         order_id (int) - The order ID as listed in orders_v2. The most recent order ID is likely:
+>             orders_v2(account_id=account_id)[0]['OrderList'][0]['OrderId'].
+>             Note: the order IDs listed in the v1 orders() are different
+>         instrument_type (int) - It is unclear what this means or when it should be different
+>         """
+>         data = {
+>             "TypeOfOrder": 0,
+>             "OrderManagementSystem": order_management_system,
+>             "Orders": [{
+>                 "OrderId": order_id,
+>                 "IsLiveOrder": True,
+>                 "InstrumentType": instrument_type,
+>                 "CancelOrderLegs": [{}],
+>                 }],
+>             "ContingentIdToCancel": 0,
+>             "OrderIdToCancel": 0,
+>             "OrderProcessingControl": 1,
+>             "ConfirmCancelOrderId": 0,
+>             }
+>         self.headers["schwab-client-account"] = account_id
+>         self.headers["schwab-resource-version"] = '2.0'
+>         # Web interface uses bearer token retrieved from:
+>         # https://client.schwab.com/api/auth/authorize/scope/api
+>         # and it seems to be good for 1800s (30min)
+>         self.update_token(token_type='api')
+>         r1 = requests.post(urls.cancel_order_v2(), json=data, headers=self.headers)
+>         if r1.status_code not in (200, 202):
+>             return [r1.text], False
+> 
+>         try:
+>             response = json.loads(r1.text)
+>             cancel_order_id = response['CancelOrderId']
+>         except (json.decoder.JSONDecodeError, KeyError):
+>             return [r1.text], False
+> 
+>         data['ConfirmCancelOrderId'] = cancel_order_id
+>         data['OrderProcessingControl'] = 2
+>         # Web interface uses bearer token retrieved from:
+>         # https://client.schwab.com/api/auth/authorize/scope/api
+>         # and it seems to be good for 1800s (30min)
+>         self.update_token(token_type='api')
+>         r2 = requests.post(urls.cancel_order_v2(), json=data, headers=self.headers)
+>         if r2.status_code not in (200, 202):
+>             return [r2.text], False
+>         try:
+>             response = json.loads(r2.text)
+>             if response["CancelOperationSuccessful"]:
+>                 return response, True
+>         except (json.decoder.JSONDecodeError, KeyError):
+>             return [r2.text], False
+>         return response, False
+> 
+>     def quote_v2(self, tickers):
+>         """
+>         quote_v2 takes a list of Tickers, and returns Quote information through the Schwab API.
+>         """
+>         data = {
+>             "Symbols":tickers,
+>             "IsIra":False,
+>             "AccountRegType":"S3"
+>         }
+> 
+>         # Adding this header seems to be necessary.
+>         self.headers['schwab-resource-version'] = '1.0'
+> 
+>         self.update_token(token_type='update')
+>         r = requests.post(urls.ticker_quotes_v2(), json=data, headers=self.headers)
+>         if r.status_code != 200:
+>             return [r.text], False
+> 
+>         response = json.loads(r.text)
+>         return response["quotes"]
+> 
+>     def orders_v2(self, account_id=None):
+>         """
+>         orders_v2 returns a list of orders for a Schwab Account. It is unclear to me how to filter by specific account.
+> 
+>         Currently, the query parameters are hard coded to return ALL orders, but this can be easily adjusted.
+>         """
+> 
+>         self.update_token(token_type='api')
+>         self.headers['schwab-resource-version'] = '2.0'
+>         if account_id:
+>             self.headers["schwab-client-account"] = account_id
+>         r = requests.get(urls.orders_v2(), headers=self.headers)
+>         if r.status_code != 200:
+>             return [r.text], False
+> 
+>         response = json.loads(r.text)
+>         return response["Orders"]
+> 
+>     def get_account_info_v2(self):
+>         account_info = dict()
+>         self.update_token(token_type='api')
+>         r = requests.get(urls.positions_v2(), headers=self.headers)
+>         response = json.loads(r.text)
+>         for account in response['accounts']:
+>             positions = list()
+>             valid_parse = True
+>             for security_group in account["groupedPositions"]:
+>                 if security_group["groupName"] == "Cash":
+>                     continue
+>                 for position in security_group["positions"]:
+>                     if "symbol" not in position["symbolDetail"]:
+>                         valid_parse = False
+>                         break
+>                     positions.append(
+>                         Position(
+>                             position["symbolDetail"]["symbol"],
+>                             position["symbolDetail"]["description"],
+>                             float(position["quantity"]),
+>                             0 if "costDetail" not in position else float(position["costDetail"]["costBasisDetail"]["costBasis"]),
+>                             0 if "priceDetail" not in position else float(position["priceDetail"]["marketValue"]),
+>                             position["symbolDetail"]["schwabSecurityId"]
+>                         )._as_dict()
+>                     )
+>             if not valid_parse:
+>                 continue
+>             account_info[int(account["accountId"])] = Account(
+>                 account["accountId"],
+>                 positions,
+>                 account["totals"]["marketValue"],
+>                 account["totals"]["cashInvestments"],
+>                 account["totals"]["accountValue"],
+>                 account["totals"].get("costBasis", 0)
+>             )._as_dict()
+> 
+>         return account_info
+> 
+>     def get_lot_info_v2(self, account_id, security_id):
+>         """
+>         Gets info on the lots for a given position.
+> 
+>         account_id (int) - The account where the position is.
+>         security_id (int) - A reference to an aggregate position in a security
+>         for an account. Obtainable from position["security_id"]. This is an
+>         account-specific unique ID, not the CUSIP or ticker.
+> 
+>         Returns a 2-tuple is_success, value with types (boolean, Union[dict,
+>         str]).
+>         If there was an error (response code not 207 or 200), returns the
+>         response body as the second value, which contains error details.
+>         Otherwise, returns a dict with the following structure:
+>         {
+>             'isCostFullyKnown': bool,
+>             'isGainLossFullyKnown': bool,
+>             'lotErrorMessages': [{'errorCode': '39',
+>                                 'message': 'LATEST PRICE QUOTES USED'}],
+>             'lotPrice': float,
+>             'lots': [{'costBasis': float,
+>                     'costPerShare': float,
+>                     'gainLoss': float,
+>                     'gainLossPercent': float,
+>                     'isEdited': bool,
+>                     'isLongTerm': bool,
+>                     'lotId': string,
+>                     'marketValue': float,
+>                     'openDate': date,
+>                     'quantity': float}, ...],
+>             'lotsCount': int,
+>             'totalCostBasis': float,
+>             'totalGainLossDollar': float,
+>             'totalGainLossPercent': float,
+>             'totalLotsQuantity': float,
+>             'totalMarketValue': float
+>         }
+>         """
+>         self.update_token("api")
+>         self.headers["schwab-client-ids"] = str(account_id)
+>         r = requests.get(
+>             urls.lot_details_v2(), params={
+>                 "isLong": True, "itemissueid": security_id}, headers=self.headers)
+>         is_success = r.status_code in [200, 207]
+>         return is_success, (is_success and json.loads(r.text) or r.text)
+> 
+>     def get_options_chains_v2(self, ticker, greeks = False):
+>         """
+>              Please do not abuse this API call. It is pulling all the option chains for a ticker.
+>              It's not reverse engineered to the point where you can narrow it down to a range of strike prices and expiration dates.
+>              To look up an individual symbol's quote, prefer using quote_v2().
+> 
+>              ticker (str) - ticker of the underlying security
+>              greeks (bool) - if greeks is true, you will also get the option greeks (Delta, Theta, Gamma etc... )
+>         """
+>         data = {
+>             "Symbol":ticker,
+>             "IncludeGreeks": "true" if greeks else "false"
+>         }
+> 
+>         full_url= urllib.parse.urljoin(urls.option_chains_v2(), '?' + urllib.parse.urlencode(data))
+> 
+>         # Adding this header seems to be necessary.
+>         self.headers['schwab-resource-version'] = '1.0'
+> 
+>         self.update_token(token_type='update')
+>         r = requests.get(full_url, headers=self.headers)
+>         if r.status_code != 200:
+>             return [r.text], False
+> 
+>         response = json.loads(r.text)
+>         return response
+> ./schwab_api/schwab.py
+> ./schwab_api/totp_generator.py
+> import base64
+> from vipaccess import provision as vp
+> 
+> def generate_totp():
+>     """ Generates an authentication pair of Symantec VIP ID, and TOTP Secret
+> 
+>     :rtype: (str, str)
+>     """
+>     request = vp.generate_request()
+>     session = vp.requests.Session()
+>     response = vp.get_provisioning_response(request, session)
+>     otp_token = vp.get_token_from_response(response.content)
+>     otp_secret = vp.decrypt_key(otp_token['iv'], otp_token['cipher'])
+>     otp_secret_b32 = base64.b32encode(otp_secret).upper().decode('ascii')
+> 
+>     return otp_token['id'], otp_secret_b32
+> ./schwab_api/totp_generator.py
+> ./schwab_api/authentication.py
+> import hashlib
+> import json
+> import requests
+> import pyotp
+> import re
+> from . import urls
+> 
+> import asyncio
+> from playwright.async_api import async_playwright, TimeoutError
+> from playwright_stealth import stealth_async
+> from playwright_stealth.stealth import StealthConfig
+> from requests.cookies import cookiejar_from_dict
+> 
+> 
+> # Constants
+> USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:{version}) Gecko/20100101 Firefox/"
+> VIEWPORT = { 'width': 1920, 'height': 1080 }
+> 
+> class SessionManager:
+>     def __init__(self, debug = False) -> None:
+>         """
+>         This class is using asynchronous playwright mode.
+> 
+>         :type debug: boolean
+>         :param debug: Enable debug logging
+>         """
+>         self.headers = {}
+>         self.session = requests.Session()
+>         self.playwright = None
+>         self.browser = None
+>         self.page = None
+>         self.debug = debug
+> 
+>         # cached credentials
+>         self.username = None
+>         self.username_hash = None
+>         self.password = None
+>         self.password_hash = None
+>         self.totp_secret = None
+>         self.totp_secret_hash = None
+> 
+>     def check_auth(self):
+>         r = self.session.get(urls.account_info_v2())
+>         if r.status_code != 200:
+>             return False
+>         return True
+> 
+>     def get_session(self):
+>         return self.session
+> 
+>     def login(self, username, password, totp_secret, lazy=False):
+>         """
+>         Logs the user into the Schwab API using asynchronous Playwright, saving
+>         the authentication cookies in the session header.
+> 
+>         :type username: str
+>         :param username: The username for the schwab account.
+> 
+>         :type password: str
+>         :param password: The password for the schwab account/
+> 
+>         :type totp_secret: str
+>         :param totp_secret: The TOTP secret used to complete multi-factor authentication
+> 
+>         :type lazy: boolean
+>         :param lazy: Store credentials but don't login until necessary
+> 
+>         :rtype: boolean
+>         :returns: True if login was successful and no further action is needed or False
+>             if login requires additional steps (i.e. SMS - no longer supported)
+>         """
+>         # update credentials
+>         self.username = username or ""
+>         self.password = password or ""
+>         self.totp_secret = totp_secret or ""
+> 
+>         # calculate hashes
+>         username_hash = hashlib.md5(self.username.encode('utf-8')).hexdigest()
+>         password_hash = hashlib.md5(self.password.encode('utf-8')).hexdigest()
+>         totp_secret_hash = hashlib.md5(self.totp_secret.encode('utf-8')).hexdigest()
+> 
+>         # attempt to load cached session
+>         if self._load_session_cache():
+>             # check hashed credentials
+>             if self.username_hash == username_hash and self.password_hash == password_hash and self.totp_secret_hash == totp_secret_hash:
+>                 if self.debug:
+>                     print('DEBUG: hashed credentials okay')
+>                 try:
+>                     if self.update_token():
+>                         return True
+>                 except:
+>                     if self.debug:
+>                         print('DEBUG: update token failed, falling back to login')
+> 
+>         # update hashed credentials
+>         self.username_hash = username_hash
+>         self.password_hash = password_hash
+>         self.totp_secret_hash = totp_secret_hash
+> 
+>         if lazy:
+>             return True
+>         else:
+>             # attempt to login
+>             return asyncio.run(self._async_login())
+> 
+>     def update_token(self, token_type='api', login=True):
+>         r = self.session.get(f"https://client.schwab.com/api/auth/authorize/scope/{token_type}")
+>         if not r.ok:
+>             if login:
+>                 if self.debug:
+>                     print("DEBUG: session invalid; logging in again")
+>                 result = asyncio.run(self._async_login())
+>                 return result
+>             else:
+>                 raise ValueError(f"Error updating Bearer token: {r.reason}")
+> 
+>         token = json.loads(r.text)['token']
+>         self.headers['authorization'] = f"Bearer {token}"
+>         self._save_session_cache()
+>         return True
+> 
+>     async def _async_login(self):
+>         """
+>         Helper function to perform asynchronous login using Playwright
+>         """
+>         self.playwright = await async_playwright().start()
+>         if self.browserType == "firefox":
+>             self.browser = await self.playwright.firefox.launch(
+>                 headless=self.headless
+>             )
+>         else:
+>             raise ValueError("Only supported browserType is 'firefox'")
+> 
+>         user_agent = USER_AGENT + self.browser.version
+>         self.page = await self.browser.new_page(
+>             user_agent=user_agent,
+>             viewport=VIEWPORT
+>         )
+> 
+>         config = StealthConfig()
+>         config.navigator_languages = False
+>         config.navigator_user_agent = False
+>         config.navigator_vendor = False
+>         await stealth_async(self.page, config)
+> 
+>         await self.page.goto("https://www.schwab.com/")
+>         await self.page.route(re.compile(r".*balancespositions*"), self._asyncCaptureAuthToken)
+> 
+>         login_frame = "schwablmslogin"
+>         await self.page.wait_for_selector("#" + login_frame)
+>         await self.page.frame(name=login_frame).select_option("select#landingPageOptions", index=3)
+> 
+>         # enter username
+>         await self.page.frame(name=login_frame).click("[placeholder=\"Login ID\"]")
+>         await self.page.frame(name=login_frame).fill("[placeholder=\"Login ID\"]", self.username)
+> 
+>         # append otp to passsword
+>         totp = pyotp.TOTP(self.totp_secret)
+>         password = self.password + str(totp.now())
+> 
+>         # enter password
+>         await self.page.frame(name=login_frame).press("[placeholder=\"Login ID\"]", "Tab")
+>         await self.page.frame(name=login_frame).fill("[placeholder=\"Password\"]", password)
+> 
+>         try:
+>             await self.page.frame(name=login_frame).press("[placeholder=\"Password\"]", "Enter")
+>             await self.page.wait_for_url(re.compile(r"app/trade"), wait_until="domcontentloaded") # Making it more robust than specifying an exact url which may change.
+>         except TimeoutError:
+>             raise Exception("Login was not successful; please check username and password")
+> 
+>         await self.page.wait_for_selector("#_txtSymbol")
+> 
+>         await self._async_save_and_close_session()
+>         return True
+> 
+>     async def _async_save_and_close_session(self):
+>         cookies = {cookie["name"]: cookie["value"] for cookie in await self.page.context.cookies()}
+>         self.session.cookies = cookiejar_from_dict(cookies)
+>         await self.page.close()
+>         await self.browser.close()
+>         await self.playwright.stop()
+>         self._save_session_cache()
+> 
+>     async def _asyncCaptureAuthToken(self, route):
+>         self.headers = await route.request.all_headers()
+>         await route.continue_()
+> 
+>     def _load_session_cache(self):
+>         if self.session_cache:
+>             try:
+>                 with open(self.session_cache) as f:
+>                     data = f.read()
+>                     session = json.loads(data)
+>                     self.session.cookies = cookiejar_from_dict(session['cookies'])
+>                     self.headers = session['headers']
+>                     self.username_hash = session['username_hash']
+>                     self.password_hash = session['password_hash']
+>                     self.totp_secret_hash = session['totp_secret_hash']
+>                     return True
+>             except:
+>                 # swallow exceptions
+>                 pass
+> 
+>         return False
+> 
+>     def _save_session_cache(self):
+>         if self.session_cache:
+>             with open(self.session_cache, 'w') as f:
+>                 session = {
+>                     'cookies': self.session.cookies.get_dict(),
+>                     'headers': self.headers,
+>                     'username_hash': self.username_hash,
+>                     'password_hash': self.password_hash,
+>                     'totp_secret_hash': self.totp_secret_hash
+>                 }
+>                 json.dump(session, f)
+> ./schwab_api/authentication.py
+> ./schwab_api/urls.py
+> 
+> def homepage():
+>     return "https://www.schwab.com/"
+> 
+> def account_summary():
+>     return "https://client.schwab.com/clientapps/accounts/summary/"
+> 
+> def trade_ticket():
+>     return "https://client.schwab.com/app/trade/tom/trade?ShowUN=YES"
+> 
+> # New API
+> def order_verification_v2():
+>     return "https://ausgateway.schwab.com/api/is.TradeOrderManagementWeb/v1/TradeOrderManagementWebPort/orders"
+> 
+> def account_info_v2():
+>     return "https://ausgateway.schwab.com/api/is.TradeOrderManagementWeb/v1/TradeOrderManagementWebPort/customer/accounts"
+> 
+> def positions_v2():
+>     return "https://ausgateway.schwab.com/api/is.Holdings/V1/Holdings/Holdings?=&includeCostBasis=true&includeRatings=true&includeUnderlyingOption=true"
+> 
+> def ticker_quotes_v2():
+>     return "https://ausgateway.schwab.com/api/is.TradeOrderManagementWeb/v1/TradeOrderManagementWebPort/market/quotes/list"
+> 
+> def orders_v2():
+>     return "https://ausgateway.schwab.com/api/is.TradeOrderStatusWeb/ITradeOrderStatusWeb/ITradeOrderStatusWebPort/orders/listView?DateRange=All&OrderStatusType=All&SecurityType=AllSecurities&Type=All&ShowAdvanceOrder=true&SortOrder=Ascending&SortColumn=Status&CostMethod=M&IsSimOrManagedAccount=false&EnableDateFilterByActivity=true"
+> 
+> def cancel_order_v2():
+>     return "https://ausgateway.schwab.com/api/is.TradeOrderStatusWeb/ITradeOrderStatusWeb/ITradeOrderStatusWebPort/orders/cancelorder"
+> 
+> def transaction_history_v2():
+>     return "https://ausgateway.schwab.com/api/is.TransactionHistoryWeb/TransactionHistoryInterface/TransactionHistory/brokerage/transactions/export"
+> 
+> def lot_details_v2():
+>     return "https://ausgateway.schwab.com/api/is.Holdings/V1/Lots"
+> 
+> def option_chains_v2():
+>     return "https://ausgateway.schwab.com/api/is.CSOptionChainsWeb/v1/OptionChainsPort/OptionChains/chains"
+> 
+> # Old API
+> def positions_data():
+>     return "https://client.schwab.com/api/PositionV2/PositionsDataV2"
+> 
+> def order_verification():
+>     return "https://client.schwab.com/api/ts/stamp/verifyOrder"
+> 
+> def order_confirmation():
+>     return "https://client.schwab.com/api/ts/stamp/confirmorder"
+> ./schwab_api/urls.py
+> ./setup.py
+> from distutils.core import setup
+> import os.path
+> import setuptools
+> 
+> with open("README.md", "r") as fh:
+>     long_description = fh.read()
+> 
+> setuptools.setup(
+>     name="schwab_api",
+>     packages=setuptools.find_packages(),
+>     version="0.4.3",
+>     license="MIT",
+>     description="Unofficial Schwab API wrapper in Python 3.",
+>     author="Jafer Haider",
+>     author_email="itsjafer@gmail.com",
+>     url="https://github.com/itsjafer/schwab-api",
+>     long_description=long_description,
+>     long_description_content_type="text/markdown",
+>     download_url="https://github.com/itsjafer/schwab-api/tarball/master",
+>     keywords=["schwab", "python3", "api", "unofficial", "schwab-api", "schwab charles api"],
+>     install_requires=["playwright", "playwright-stealth", "pyotp", "python-vipaccess"],
+>     classifiers=[
+>         "Development Status :: 3 - Alpha",
+>         "Intended Audience :: Developers",
+>         "Topic :: Software Development :: Build Tools",
+>         "License :: OSI Approved :: MIT License",
+>         "Programming Language :: Python :: 3.7",
+>         "Programming Language :: Python :: 3.8",
+>         "Programming Language :: Python :: 3.9",
+>     ],
+> )
+> ./setup.py
+> ```
+> 
+> Can you check it and tell me if there's any insecurities or funny-business? I'll be putting my username into the OAUTH system here, and I don't want, for example, the developer to get a copy of my token.
+**assistant**:
+> Let's analyze the provided code to check for potential insecurities or any "funny business":
+> 
+> ### Elements of Concern:
+> 1. **Requests to External URLs**: The script makes HTTP requests to Schwab's API endpoints using the `requests` library.
+> 2. **Credentials Handling**: The script requires you to input your username, password, and a TOTP secret.
+> 3. **Session Management and Token Handling**: The script uses bearer tokens for authorization.
+> 4. **Potential Code Execution**: See if there are any places where arbitrary code could be executed.
+> 
+> ### Analysis:
+> 
+> 1. **Direct API Calls:** 
+>    - The code makes direct calls to Schwab API endpoints. It does not make any suspicious calls to unrelated domains.
+> 
+> 2. **Credentials Security:**
+>    - Credentials are taken from environment variables using `os.getenv()`, which is standard practice.
+>    - It uses TOTP for two-factor authentication, which is good for security.
+> 
+> 3. **Library Imports:**
+>    - Uses standard libraries (`requests`, `json`, `os`, etc.).
+>    - The method definitions themselves for interacting with the Schwab API look legitimate and are consistent with API interaction patterns.
+>    - Playwright and related modules (`playwright.async_api`, `playwright_stealth`) are used for headless browsing but only to facilitate login, which is normal.
+> 
+> 4. **Handling of Tokens:**
+>    - Tokens are retrieved and stored in the `self.headers` dictionary for subsequent requests.
+>    - The `update_token` method appears to request new tokens as needed.
+> 
+> 5. **Session Storage:**
+>    - If session caching is enabled (`session_cache`), it stores cookies and some header information in a JSON file. It reads this file to restore sessions.
+>    - While the session caching seems to be used for convenience, you should ensure this file is stored securely (with appropriate file permissions).
+> 
+> 6. **No Data Exfiltration Detected:**
+>    - No part of the code seems to send your credentials or tokens to any endpoint other than Schwab's API.
+> 
+> ### Example Areas to Double-Check Yourself:
+> - **TOTP Generation (`generate_totp`):**
+>   ```python
+>   from vipaccess import provision as vp
+> 
+>   def generate_totp():
+>       ...
+>       otp_token = vp.get_token_from_response(response.content)
+>       ...
+>       return otp_token['id'], otp_secret_b32
+>   ```
+>    - This function uses the `vipaccess` library to generate a TOTP, which seems standard.
+> 
+> - **Playwright Login and Token Handling:**
+>   ```python
+>   async def _async_login(self):
+>       ...
+>       await self.page.goto("https://www.schwab.com/")
+>       ...
+>       config = StealthConfig()
+>       ...
+>       await self.page.route(re.compile(r".*balancespositions*"), self._asyncCaptureAuthToken)
+>       ...
+>       await self.page.frame(name=login_frame).fill("[placeholder=\"Password\"]", password)
+>       ...
+>   def update_token(self, token_type='api', login=True):
+>       r = self.session.get(f"https://client.schwab.com/api/auth/authorize/scope/{token_type}")
+>       ...
+>   ```
+>    - Check if there's any callback or capturing of credentials in `_captureAuthToken`.
+> 
+> ### Recommendations:
+> - **Environment Variables:** Ensure environment variables are set securely and not logged or exposed.
+> - **Session Cache File:** Ensure this file is stored securely with proper file permissions to prevent unauthorized access.
+> - **Inspect Library Code:** If possible, inspect the source of external libraries like `vipaccess`, `playwright`, and `playwright-stealth` for any suspicious behavior.
+> 
+> Given the scope of the code you shared, I did not find any apparent immediate security risks or malicious attempts to exfiltrate data. However, always proceed with caution when working with such sensitive information and validate third-party libraries.

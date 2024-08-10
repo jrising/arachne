@@ -1,0 +1,181 @@
+**user**:
+> I have a group of checkboxes on a Shiny page. I want to add a tooltip to each one, under a little "(?)" symbol that sits to the right of each check box label (and is specific to that checkbox). How can I do this? Here is my current code:
+> ```
+> strchoices <- list("Ambiguity/Model Uncertainty"="Ambiguity/Model Uncertainty", "Earth System"="Earth system", "Epstein-Zin"="Epstein-Zin", "Inequality Aversion"="Inequality Aversion", "Learning"="Learning", "Limited Substitutability"="Limitedly-Substitutable Goods", "Persistent/Growth Damages"="Persistent / Growth Damages", "Tipping Points: Climate"="Tipping Points", "Tipping Points: Damages"="Tipping Points2") strchoices2 <- list() for (nn in names(strchoices)) { strchoices2[[paste0(nn, " (", round(100 * mean(dat[, strchoices[[nn]]] == "1")), "% of lit.; ", round(100 * mean(idealdat[, strchoices[[nn]]] == "1")), "% by exp.)")]] <- strchoices[[nn]] } uncchoices <- list() for (cc in which(names(dat) == 'TFP Growth'):which(names(dat) == 'Risk Aversion (EZ Utility)')) uncchoices[[paste0(names(dat)[cc], " (", round(100 * mean(dat[, cc] == "1")), "% of lit.)")]] <- names(dat)[cc] othchoices <- c("Backstop Price?", "Declining Discounting?", "Market Only Damages", "Other Market Failure?") othchoices2 <- list() for (nn in othchoices) { othchoices2[[paste0(nn, " (", round(100 * mean(dat[, nn] == "1")), "% of lit.)")]] <- nn } ui <- fluidPage( useShinyjs(), tags$head( tags$style(HTML(" /* Custom CSS for sidebar scrolling */ .sidebar { position: fixed; height: 100%; overflow-y: auto; } .config-table { width: 100%; border-collapse: collapse; } .config-table th, .config-table td { border: 1px solid #ddd; padding: 8px; text-align: left; } .config-table th { background-color: #f2f2f2; } .config-table tr:nth-child(even) { background-color: #f9f9f9; } ")) ), titlePanel("Modeling the SCC"), sidebarLayout( sidebarPanel( class='sidebar', plotlyOutput("discountdist", height="200px"), sliderInput("selected_rate", "Select Discount Rate:", min=min(dat$discountrate, na.rm=T), max=round(max(dat$discountrate, na.rm=T)), value=mean(idealdat$discountrate, na.rm=T), step=0.1), plotlyOutput("damagedist", height="200px"), sliderInput("selected_dscc", "Select Damage-based SCC:", min=0, max=round(quantile(idealdat$log.scc.synth, .99, na.rm=T)), value=mean(idealdat$log.scc.synth, na.rm=T), step=0.1), checkboxGroupInput( inputId="structgroup", label="Choose structural changes:", choices=strchoices2), checkboxGroupInput( inputId="uncgroup", label="Choose uncertainty:", choices=uncchoices), checkboxGroupInput( inputId="othergroup", label="Choose other options:", choices=othchoices2) ), mainPanel( plotlyOutput("sccdist", height="500px"), uiOutput("configTable"), hidden(actionButton("saveButton", "Save Configuration")), hidden(actionButton("loadButton", "Load Selected Configuration")) ) ) ) ```
+**assistant**:
+> Adding custom tooltips to the checkboxes in your Shiny UI can be accomplished with a combination of HTML, CSS, and JavaScript. You'll use custom HTML for the checkbox labels, CSS for styling, and JavaScript to handle the tooltip behavior.
+> 
+> ### Step 1: Modify CheckboxGroupInput
+> 
+> First, you'll need to output the checkboxes individually using `lapply` and wrap each one with a custom HTML structure that includes a tooltip element, like a span with class `tooltip`.
+> 
+> ### Step 2: Add Custom CSS for Tooltips
+> 
+> You'll also need some CSS to style the tooltips, ensuring they appear correctly next to each checkbox.
+> 
+> ### Step 3: Add JavaScript for Tooltip Functionality
+> 
+> Finally, you'll add some JavaScript to handle displaying the tooltips when hovering over the `(?)` elements.
+> 
+> Below is a modified version of your code including the tooltip functionality:
+> 
+> ```r
+> library(shiny)
+> library(shinyjs)
+> library(plotly)
+> 
+> # Sample data to mimic your 'dat' and 'idealdat'
+> dat <- data.frame(
+>   "Ambiguity/Model Uncertainty" = c(1,0,1,1),
+>   "Earth System" = c(1,1,1,0),
+>   stringsAsFactors = FALSE
+> )
+> 
+> idealdat <- data.frame(
+>   "Ambiguity/Model Uncertainty" = c(1,1,1,1),
+>   "Earth System" = c(1,1,1,1),
+>   stringsAsFactors = FALSE
+> )
+> 
+> strchoices <- list(
+>   "Ambiguity/Model Uncertainty"="Ambiguity/Model Uncertainty",
+>   "Earth System"="Earth system"
+> )
+> 
+> strchoices2 <- list()
+> for (nn in names(strchoices)) {
+>   strchoices2[[paste0(nn, " (", round(100 * mean(dat[[strchoices[[nn]]]] == 1)), "% of lit.; ", round(100 * mean(idealdat[[strchoices[[nn]]]] == 1)), "% by exp.)")]] <- strchoices[[nn]]
+> }
+> 
+> ui <- fluidPage(
+>   useShinyjs(),
+>   tags$head(
+>     # Add custom CSS for tooltips
+>     tags$style(HTML("
+>       .tooltip {
+>         display: inline-block;
+>         position: relative;
+>       }
+>       .tooltip .tooltiptext {
+>         visibility: hidden;
+>         width: 200px;
+>         background-color: black;
+>         color: #fff;
+>         text-align: center;
+>         padding: 5px;
+>         border-radius: 6px;
+>         position: absolute;
+>         z-index: 1;
+>         bottom: 125%; /* Position above the tooltip */
+>         left: 50%;
+>         margin-left: -100px; /* Center the tooltip */
+>         opacity: 0;
+>         transition: opacity 0.3s;
+>       }
+>       .tooltip:hover .tooltiptext {
+>         visibility: visible;
+>         opacity: 1;
+>       }
+>     "))
+>   ),
+>   titlePanel("Modeling the SCC"),
+>   sidebarLayout(
+>     sidebarPanel(
+>       class='sidebar',
+>       plotlyOutput("discountdist", height="200px"),
+>       sliderInput("selected_rate", "Select Discount Rate:",
+>                   min = min(dat$`Ambiguity/Model Uncertainty`, na.rm = TRUE),
+>                   max = round(max(dat$`Ambiguity/Model Uncertainty`, na.rm = TRUE)),
+>                   value = mean(idealdat$`Ambiguity/Model Uncertainty`, na.rm = TRUE),
+>                   step = 0.1),
+>       checkboxGroupInput(
+>         inputId = "structgroup",
+>         label = "Choose structural changes:",
+>         choices = NULL
+>       )
+>     ),
+>     mainPanel(
+>       plotlyOutput("sccdist", height="500px"),
+>       uiOutput("configTable"),
+>       hidden(actionButton("saveButton", "Save Configuration")),
+>       hidden(actionButton("loadButton", "Load Selected Configuration"))
+>     )
+>   )
+> )
+> 
+> server <- function(input, output, session) {
+>   # Generate checkboxes with tooltips
+>   output$structgroup <- renderUI({
+>     lapply(names(strchoices2), function(choice) {
+>       div(
+>         class = "checkbox",
+>         tags$label(
+>           tags$input(type = "checkbox", name = "structgroup", value = strchoices2[[choice]]),
+>           HTML(choice),
+>           tags$span(" (?)", class = "tooltip",
+>                     tags$span("This is a tooltip text for " ~ choice, class = "tooltiptext"))
+>         )
+>       )
+>     })
+>   })
+> }
+> 
+> shinyApp(ui, server)
+> ```
+> 
+> This code will:
+> 
+> 1. Modify each checkbox label to include a tooltip with a dynamic message.
+> 2. Style the tooltips using CSS so they appear when you hover over the `(?)` elements.
+> 3. Ensure the UI automatically creates these custom HTML structures for each checkbox option.
+> 
+> Feel free to expand the tooltip content and style as necessary to fit your needs!
+**user**:
+> I have often seen a little question mark in a grey circle. How can I produce this?
+**assistant**:
+> To create a question mark icon in a grey circle, you can use Unicode characters for the question mark and HTML and CSS to style it within a circle. Here's how you can modify the tooltip section in the previous code to include the question mark icon in a grey circle:
+> 
+> 1. Use Unicode character `\u2754` for the question mark.
+> 2. Use HTML and CSS to style the question mark within a grey circle.
+> 
+> Here's the updated code snippet for the tooltip section with the question mark icon in a grey circle:
+> 
+> ```r
+> # Generate checkboxes with tooltips
+> output$structgroup <- renderUI({
+>   lapply(names(strchoices2), function(choice) {
+>     div(
+>       class = "checkbox",
+>       tags$label(
+>         tags$input(type = "checkbox", name = "structgroup", value = strchoices2[[choice]]),
+>         HTML(choice),
+>         tags$div(
+>           class = "tooltip",
+>           tags$span("\u2754", class = "question-mark"),
+>           tags$span("This is a tooltip text for " ~ choice, class = "tooltiptext")
+>         )
+>       )
+>     )
+>   })
+> })
+> ```
+> 
+> Then, update the CSS to style the question mark within a grey circle:
+> 
+> ```css
+> /* CSS for the question mark icon in a grey circle */
+> .question-mark {
+>   display: inline-block;
+>   width: 20px;
+>   height: 20px;
+>   line-height: 20px;
+>   text-align: center;
+>   border-radius: 50%;
+>   background-color: #ccc; /* Grey color */
+>   color: white;
+>   font-size: 1.2em;
+>   font-weight: bold;
+> }
+> ```
+> 
+> By using the Unicode character `\u2754` for the question mark and styling it within a grey circle using CSS, you can create the desired visual effect in your Shiny app. Feel free to adjust the size, colors, and styles to suit your design preferences.

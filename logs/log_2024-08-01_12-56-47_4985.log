@@ -1,0 +1,317 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> Can you write a section for a paper supplementary information giving a
+> precise description of the principles behind the following code? This
+> code implements our method of relating modeled fish flows (performed
+> on a per-spawning region basis) to observed recruitment:
+> ```
+> speciesinfo <- read.csv(paste0(datapath, "saudata/species.csv"))
+> 
+> ## Load all catch MTs
+> catches <- read.delim(paste0(datapath, "saudata/catches.csv"), sep=",", header=F)
+> 
+> spawninginfo <- read.csv("code/spawning/areas.csv")
+> spawninginfo$spawnreg <- paste(spawninginfo$specie, spawninginfo$country, spawninginfo$locality)
+> 
+> load.results <- function(filepath, mean.share=T) {
+>     results <- read.csv(filepath)
+>     if (file.exists(gsub("\\.csv", "-lathalf.csv", filepath)))
+>         results <- rbind(results, read.csv(gsub("\\.csv", "-lathalf.csv", filepath)))
+> 
+>     results <- unique(results) ## XXX: Extra came in from multiple country rows in EEZ shapefile
+>     results <- subset(results, !is.na(target))
+> 
+>     results$spawnreg <- paste(results$specie, results$country, results$locality)
+>     results$genus <- sapply(results$specie, function(spec) strsplit(spec, " ")[[1]][1])
+> 
+>     dups <- results %>% group_by(spawnreg, target) %>% summarize(count=length(share))
+>     dups[dups$count > 1,]
+> 
+>     if (mean.share)
+>         results %>% group_by(specie, country, locality, EEZPID, target, info, spawnreg, genus) %>% summarize(share=mean(share))
+>     else
+>         results
+> }
+> 
+> ## Collect last 10 year average catch for each
+> get.avgcatch <- function(specie) {
+>     key <- speciesinfo$key[speciesinfo$scientific == specie][1]
+>     if (is.na(key))
+>         return(NULL)
+> 
+>     avgcatch <- data.frame()
+>     regkey <- NULL
+>     for (ii in 1:nrow(catches)) {
+>         if (length(grep("\\.aspx", catches$V1[ii])) == 1)
+>             regkey <- catches$V1[ii]
+>         else if (catches$V1[ii] == key)
+>             avgcatch <- rbind(avgcatch, data.frame(regkey, catch=mean(t(catches[ii, 57:66]), na.rm=T)))
+>     }
+> 
+>     avgcatch2 <- avgcatch %>% left_join(countries)
+>     avgcatch2$catch[is.na(avgcatch2$catch)] <- 0
+> 
+>     avgcatch2
+> }
+> 
+> prep.avgcatch <- function(subres, avgcatch2, target2sauregion=NULL) {
+>     ## Combine up all remaining
+>     ## XXX: Do this for all multinational regions? -> I think no, because comes in as distinct spawnreg and there aren't so many to mess up calc.
+>     combores <- rbind(subset(subres, locality != "Remaining"),
+>                       subset(subres, locality == "Remaining") %>% group_by(specie, EEZPID, target) %>% summarize(country="Elsewhere", locality="Remaining", share=sum(share, na.rm=T), info="Combined elsewhere", spawnreg=paste(specie[1], "Elsewhere Remaining"), genus=genus[1]))
+> 
+>     ## col <- "South Africa South Africa"
+>     for (col in unique(combores$spawnreg)) {
+>         shares <- rep(0, nrow(avgcatch2))
+>         if (is.null(target2sauregion)) {
+>             ## eez = "Mozambique"
+>             for (eez in combores$target[combores$spawnreg == col]) {
+>                 sauregions <- eez2sau(eez)
+>                 if (sum(avgcatch2$catch[avgcatch2$sauregion %in% sauregions]) > 0) {
+>                     shares[avgcatch2$sauregion %in% sauregions] <- (avgcatch2$catch[avgcatch2$sauregion %in% sauregions] / sum(avgcatch2$catch[avgcatch2$sauregion %in% sauregions])) * combores$share[combores$target == eez & combores$spawnreg == col]
+>                 }
+>             }
+>         } else {
+>             spawnregres <- combores %>% filter(spawnreg == col)
+>             spawnregres.shares <- spawnregres %>% left_join(target2sauregion, by='target') %>% group_by(sauregion) %>%
+>                 summarize(share=sum(share) / sum(spawnregres$share, na.rm=T))
+>             ## Fix the order
+>             for.shares <- data.frame(sauregion=avgcatch2$sauregion) %>% left_join(spawnregres.shares, by='sauregion')
+>             for.shares$share[is.na(for.shares$share)] <- 0
+>             shares <- for.shares$share
+>         }
+>         avgcatch2[, col] <- shares
+>     }
+> 
+>     list(combores=combores, avgcatch2=avgcatch2)
+> }
+> 
+> predict.catch <- function(avgcatch2, subres, subcoeffsrec, sharecol='share') {
+>     ## Not predict under future shares
+>     constant <- subcoeffsrec$coeffs[subcoeffsrec$entries == 'coeffs' & subcoeffsrec$variable == '1']
+>     avgcatch2$predicted <- constant + subcoeffsrec$coeffs[subcoeffsrec$entries == 'resids']
+> 
+>     spawn2catch <- data.frame(specie, country='1', locality=NA, sauregion=avgcatch2$sauregion, catch=avgcatch2$predicted)
+> 
+>     metrics <- data.frame()
+>     for (cc in which(subcoeffsrec$entries == 'coeffs' & subcoeffsrec$variable != '1')) {
+>         shares <- rep(0, nrow(avgcatch2))
+>         col <- subcoeffsrec$variable[cc]
+>         if (length(grep("Remaining", col, useBytes=T)) == 0) {
+>             source <- subres$country[subres$spawnreg == col][1]
+>             ## eez = "Mozambique"
+>             for (eez in subres$target[subres$spawnreg == col]) {
+>                 if (is.na(eez))
+>                     next
+>                 sauregions <- eez2sau(eez)
+>                 if (any(avgcatch2$sauregion %in% sauregions) && sum(avgcatch2$catch[avgcatch2$sauregion %in% sauregions]) > 0) {
+>                     shares[avgcatch2$sauregion %in% sauregions] <- (avgcatch2$catch[avgcatch2$sauregion %in% sauregions] / sum(avgcatch2$catch[avgcatch2$sauregion %in% sauregions])) * subres[subres$target == eez & subres$spawnreg == col, sharecol, drop=T] # distribute proportionally
+> 
+>                     metrics <- rbind(metrics, data.frame(specie, source, target=eez, metric='flowto', value=shares[avgcatch2$sauregion %in% sauregions] * subcoeffsrec$coeffs[cc]))
+>                 }
+>             }
+> 
+>             spawn2catch <- rbind(spawn2catch, data.frame(specie, country=source, locality=subres$locality[subres$spawnreg == col][1],
+>                                                          sauregion=avgcatch2$sauregion, catch=shares * subcoeffsrec$coeffs[cc]))
+>         } else {
+>             colspecie <- gsub(" Elsewhere Remaining", "", col)
+>             sources <- unique(subres$country[subres$specie == colspecie & subres$locality == "Remaining"])
+>             for (source in sources) {
+>                 if (is.na(source))
+>                     next
+>                 col <- paste(colspecie, source, "Remaining")
+>                 ## Only change after this point is that shares accumulate
+>                 for (eez in subres$target[subres$specie == colspecie & subres$locality == "Remaining" & subres$country == source]) {
+>                     if (is.na(eez))
+>                         next
+>                     sauregions <- eez2sau(eez)
+>                     if (any(avgcatch2$sauregion %in% sauregions) && sum(avgcatch2$catch[avgcatch2$sauregion %in% sauregions]) > 0) {
+>                         shares[avgcatch2$sauregion %in% sauregions] <- shares[avgcatch2$sauregion %in% sauregions] + (avgcatch2$catch[avgcatch2$sauregion %in% sauregions] / sum(avgcatch2$catch[avgcatch2$sauregion %in% sauregions])) * subres[subres$target == eez & subres$spawnreg == col, sharecol, drop=T] # distribute proportionally
+> 
+>                         metrics <- rbind(metrics, data.frame(specie, source, target=eez, metric='flowto', value=shares[avgcatch2$sauregion %in% sauregions] * subcoeffsrec$coeffs[cc]))
+>                     }
+>                 }
+>             }
+> 
+>             spawn2catch <- rbind(spawn2catch, data.frame(specie, country="Elsewhere", locality="Remaining",
+>                                                          sauregion=avgcatch2$sauregion, catch=shares * subcoeffsrec$coeffs[cc]))
+>         }
+> 
+>         avgcatch2$predicted <- avgcatch2$predicted + shares * subcoeffsrec$coeffs[cc]
+>     }
+> 
+>     list(catch=avgcatch2$predicted, metrics=metrics, spawn2catch=spawn2catch)
+> }
+> 
+> calc.outputs <- function(specie, avgcatch2, subres, subcoeffsrec, knowns=T) {
+>     coeffs <- subcoeffsrec$coeffs[subcoeffsrec$entries == 'coeffs']
+>     resids <- subcoeffsrec$coeffs[subcoeffsrec$entries == 'resids']
+> 
+>     metrics <- data.frame(specie, source=NA, target=NA, metric='varexp', value=1 - var(resids) / var(avgcatch2$catch))
+>     metrics <- rbind(metrics, data.frame(specie, source=NA, target=avgcatch2$sauregion, metric='flowto', value=coeffs[1] + resids))
+> 
+>     predicted <- predict.catch(avgcatch2, subres, subcoeffsrec)
+> 
+>     avgcatch2$predicted <- predicted[['catch']]
+>     metrics <- rbind(metrics, predicted[['metrics']])
+> 
+>     modelfrac <- data.frame(specie, sauregion=avgcatch2$sauregion, catch=avgcatch2$catch, known=(avgcatch2$predicted - (coeffs[1] + resids)) / avgcatch2$catch)[knowns,]
+> 
+>     list(metrics=metrics, coeffsrec=subcoeffsrec, modelfrac=modelfrac, spawn2catch=predicted[['spawn2catch']])
+> }
+> 
+> last.status <- NULL
+> 
+> estimate.coeffs <- function(subres, specie, avgcatch2, target2sauregion=NULL) {
+>     last.status <<- NULL
+> 
+>     preped <- prep.avgcatch(subres, avgcatch2, target2sauregion=target2sauregion)
+>     avgcatch2 <- preped$avgcatch2
+>     combores <- preped$combores
+> 
+>     XX <- cbind(Constant=1, avgcatch2[, -1:-3])
+>     valids <- colSums(XX != 0) > 0
+>     knowns <- rowSums(XX != 0) > 1 & avgcatch2$catch > 0 # Drop obs with catch moratoria
+> 
+>     if (sum(knowns) == 0) {
+>         last.status <<- "no data"
+>         return(NULL)
+>     }
+> 
+>     XX.x <- as.matrix(XX[knowns, valids, drop=F])
+>     yy.x <- avgcatch2$catch[knowns]
+>     if (sum(valids) >= sum(knowns)) {
+>         ## Impose minimum length nudges
+>         for (cc in 2:ncol(XX.x)) {
+>             mostly0 <- rep(0, ncol(XX.x))
+>             mostly0[cc] <- 0.01
+>             XX.x <- rbind(XX.x, mostly0)
+>             yy.x <- c(yy.x, 0)
+>         }
+>     }
+> 
+>     fit <- nnls(XX.x, yy.x)
+>     if (length(fit$resid) > 1) {
+>         varres <- var(fit$resid)[1, 1]
+> 
+>         ## Add on area-based prior
+>         XX.prior <- matrix(NA, 0, ncol(XX.x))
+>         if (sum(!grepl("Remaining", colnames(XX.x))) > 2) { # > 2 because ignore Constant
+>             ## Prior is that spawning_A / spawning_B = area_A / area_B
+>             ## Add row saying 0 = area_B * spawning_A - area_A * spawning_B
+>             ## Only add comparisons for non-"remaining" spawning regions
+>             compare.to <- which(!grepl("Remaining", colnames(XX.x)))[2] # First after Constant
+>             compare.area <- spawninginfo$area[spawninginfo$spawnreg == colnames(XX.x)[compare.to]]
+>             if (length(compare.area) > 0) {
+>                 for (jj in which(!grepl("Remaining", colnames(XX.x)))[-1:-2]) {
+>                     this.area <- spawninginfo$area[spawninginfo$spawnreg == colnames(XX.x)[jj]]
+>                     if (length(this.area) == 0)
+>                         next
+>                     priorobs <- c(rep(0, ncol(XX.x)))
+>                     priorobs[compare.to] <- this.area / (compare.area + this.area)
+>                     priorobs[jj] <- -compare.area / (compare.area + this.area)
+>                     priorobs <- priorobs * sqrt(varres) / 10 # prior is 1/100 effect of rows
+>                     XX.prior <- rbind(XX.prior, priorobs)
+>                 }
+>             }
+>         }
+> 
+>         fit <- nnls(rbind(XX.x, XX.prior), c(yy.x, rep(0, nrow(XX.prior))))
+>     }
+>     coeffs <- rep(0, length(unique(combores$spawnreg)) + 1)
+>     coeffs[valids] <- fit$x[1:sum(valids)]
+>     coeffs[is.na(coeffs)] <- 0
+>     resids <- avgcatch2$catch
+>     resids[knowns] <- fit$residuals[1:sum(knowns)]
+> 
+>     subcoeffsrec <- rbind(data.frame(species=specie, entries='coeffs', variable=c('1', unique(combores$spawnreg)), coeffs),
+>                           data.frame(species=specie, entries='resids', variable=avgcatch2$sauregion, coeffs=resids))
+> 
+>     if (sum(coeffs) < 1e-5) {
+>         last.status <<- "negative"
+>         return(NULL)
+>     }
+> 
+>     calc.outputs(specie, avgcatch2, subres, subcoeffsrec, knowns)
+> }
+> ```
+> 
+> species.csv has information about species, catch.csv has information
+> about catch for each EEZ (we also run this code using predicted
+> recruitment levels by Marine Ecoregion), and areas.csv has the area of
+> each spawning region.
+> 
+> The main function is `estimate.coeffs`, and this generates matrices
+> for a non-negative least squares model. Use mathmetical notation
+> whereever possible to describe this.
+> 
+> Please do not include any actual code or excerpts from the files in the text.
+**assistant**:
+> ### Supplementary Information: Principles Behind the Fish Flow Estimation Method
+> 
+> #### Introduction
+> This section provides a precise description of the principles and methodologies behind our approach for linking modeled fish propagation from spawning regions to observed recruitment. Our method integrates various data sources, processes them to obtain statistical models, and applies non-negative least squares (NNLS) regression to estimate the parameters.
+> 
+> #### Data Input
+> The method involves multiple primary datasets:
+> 
+> 1. **Species Information**: Characteristics and identification keys for each fish species.
+> 2. **Catch Records**: Historical catch data for different Exclusive Economic Zones (EEZs).
+> 3. **Spawning Regions**: Data about spawning regions including their areas.
+> 
+> These data sources enable us to map the relationships between spawning activities and recruitment observations.
+> 
+> #### Data Processing
+> Upon loading, the data undergoes several critical processing steps:
+> 
+> 1. **Preprocessing of Results**: Removing duplicates, filtering out invalid data points, and standardizing region and species identifiers.
+> 2. **Average Catch Calculations**: Calculating the average catch over the last ten years for each species within each region, which serves as a foundational metric for subsequent regression.
+> 
+> #### Spawning Region Aggregation
+> The method involves grouping and sometimes reaggregating data from smaller or less distinct spawn regions into a broader category to ensure statistical robustness. This process combines shares across different regions while preserving each region's proportional contribution to observed distributions.
+> 
+> #### Catch Prediction Model
+> The heart of our method is represented by the function that predicts catches:
+> 
+> \[ \hat{C}_{\text{predicted}} = \beta_0 + \sum_{k} (\beta_k \cdot S_k) \]
+> 
+> Where:
+> 
+> - \( \hat{C}_{\text{predicted}} \) is the predicted catch.
+> - \( \beta_0 \) is the constant term from the NNLS regression.
+> - \( \beta_k \) are coefficients representing the contribution of each spawning region \( k \).
+> - \( S_k \) are the shares of catch attributable to spawning region \( k \).
+> 
+> #### Parameter Estimation Using NNLS
+> The usage of non-negative least squares (NNLS) ensures that all estimated coefficients \(\beta_k\) are non-negative, which is ecologically appropriate as it ensures non-negative contributions to recruitment:
+> 
+> \[ \min_{\beta \geq 0} \| C_{\text{observed}} - X\beta \|^2 \]
+> 
+> Where:
+> 
+> - \( C_{\text{observed}} \) is a vector of observed catches.
+> - \( X \) is the design matrix containing indicators for different spawning regions.
+> - \( \beta \) is a vector of parameters to be estimated.
+> 
+> This approach is particularly suited to ecological data where relationships are strictly non-negative.
+> 
+> #### Incorporation of Priors
+> Given potential gaps or inconsistencies in observations, area-based priors are introduced. These priors reflect the relative proportionality of regions' spawning areas:
+> 
+> \[ \text{Prior:} \quad 0 = (A_j / (A_j + A_l)) \beta_j - (A_l / (A_j + A_l)) \beta_l \]
+> 
+> Where:
+> 
+> - \( A_j \) and \( A_l \) are the areas of spawning regions \( j \) and \( l \) respectively.
+> 
+> This prior adds constraints to the NNLS framework, ensuring that larger areas will generally yield higher recruitment estimates, which aligns with ecological intuitions.
+> 
+> #### Metrics Calculation
+> After parameter estimation, metrics are derived to quantify model performance and ecological flows:
+> 
+> 1. **Variance Explained**: The fraction of variance in observed catches explained by the model.
+> 2. **Flow Metrics**: Quantify the proportion of observed recruitment attributable to each spawning region, highlighting key regions and their influence.
+> 
+> ### Conclusion
+> Our method systematically utilizes species, catch, and spawning region data to estimate recruitment contributions through a robust statistical framework. By applying NNLS and area-based priors, we ensure ecologically consistent, non-negative predictions that help unravel the complex dynamics of fish population flows.

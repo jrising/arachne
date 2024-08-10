@@ -1,0 +1,47 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> I get an error in Julia. I have:
+> ```
+>     strat = zeros(C, F)
+>     strat[:, Fi] .= argmin(values, dims=1)
+> ```
+> where Fi is a valid index, and values is a DxC matrix. The result of argmin is then a 1xC matrix, which seems like what I need for plugging into `strat`. The error is:
+> ERROR: DimensionMismatch("cannot broadcast array to have fewer non-singleton dimensions")
+**assistant**:
+> The error you're encountering is due to the fact that the result of `argmin(values, dims=1)` is indeed a 1xC matrix, but Julia's broadcasting system requires the dimensions to match exactly when filling a subarray.
+> 
+> In this case, you can simplify the code by ensuring that the dimensions match perfectly. Since `argmin(values, dims=1)` gives a 1xC matrix, you should strip the dimensions to match the shape of `strat[:, Fi]`, which is a 1D array of length `C`. You can do this by reshaping the result or using the appropriate `vec` function.
+> 
+> Here's a straightforward way to do that:
+> 
+> ```julia
+> strat = zeros(C, F)
+> strat[:, Fi] .= vec(argmin(values, dims=1))
+> ```
+> 
+> The `vec()` function converts the 1xC matrix to a 1D array which matches the layout of `strat[:, Fi]`.
+> 
+> Alternatively, using the `reshape()` function to achieve the same result:
+> 
+> ```julia
+> strat = zeros(C, F)
+> strat[:, Fi] .= reshape(argmin(values, dims=1), C)
+> ```
+> 
+> Both approaches should resolve the `DimensionMismatch` error by ensuring the dimensions align properly for broadcasting.
+**user**:
+> vec(...) doesn't work because argmin gives objects of type `CartesianIndex(1, X)` for some number X. But I actually just want integers. How can I get integers rather than this CartesianIndex thing?
+**assistant**:
+> To extract integers from the `CartesianIndex` objects returned by `argmin`, you can access the `.I` field of each `CartesianIndex` object. This field contains the indices as a tuple. Since you know you're working with a 1xC array, you can directly extract the integer index from the `CartesianIndex` objects.
+> 
+> Here's how you can modify your code to extract integers from the `CartesianIndex` objects:
+> 
+> ```julia
+> strat = zeros(C, F)
+> strat[:, Fi] .= [ind.I[1] for ind in eachcol(argmin(values, dims=1))]
+> ```
+> 
+> In this updated code snippet, `eachcol(argmin(values, dims=1))` returns an iterator over the columns of the result of `argmin`, which are `CartesianIndex(1, X)` objects. We then extract the first element of the tuple using `ind.I[1]` to get the integer index for each column, and populate `strat[:, Fi]` with these integers.
+> 
+> This modification should allow you to store integers in `strat[:, Fi]` derived from the result of `argmin` without encountering the type conversion issue.

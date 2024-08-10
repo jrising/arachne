@@ -1,0 +1,4612 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> Below is a collection of material that I am in the process of
+> archiving. It starts with a short description, and then the content of
+> all files (typically generated with 
+> `find . -print -exec cat {} \; -printf "\n=====\n"`).
+> 
+> I will generally try to provide some context, in addition to the file
+> content. Please include this in your generated summary.
+> 
+> Please generate a summary document, using twiki syntax:
+> 
+> ! [Project title]
+> 
+> [Provide a summary description of the project.
+> 
+> Archived at: [James to Fill in]
+> 
+> !! Status when archived
+> 
+> [Give a summary of what was done and what was left to be done for a
+> working system.]
+> 
+> !! Notable contributions
+> 
+> [Give a summary of data, programming, or personal innovations to keep
+> track of.]
+> 
+> !! Keywords
+> 
+> [Provide a list of keywords for finding this project in the future.]
+> ./models/note.rb
+> class Note < ActiveRecord::Base
+> end
+> ./models/note.rb
+> ./models/project.rb
+> class Project < ActiveRecord::Base
+> end
+> ./models/project.rb
+> ./models/card.rb
+> class Card < ActiveRecord::Base
+>   acts_as_taggable
+>   before_save :timestamp
+> 
+>   @@last_autopoll_id = 2414
+> 
+>   def self.last_autopoll
+>     return Card.find(@@last_autopoll_id)
+>   end
+> 
+>   def schedule_usage
+>     if scheduled.nil?
+>       false
+>     elsif schmethod.nil?
+>       true
+>     else
+>       schmethod
+>     end
+>   end
+> 
+>   def deactivate()
+>     if !schmethod.nil?
+>       attempts = 0
+>       date = scheduled
+>       while date < Date.today && attempts < 2 do
+>         date = Card.send(schmethod, date)
+>         attempts += 1
+>       end
+>       write_attribute(:scheduled, date)
+>     end
+> 
+>     write_attribute(:active, false)
+>     write_attribute(:today, false)
+>   end
+> 
+>   # Return true to keep scheduled, false to unset it
+>   def self.apply_schedule_usage(params)
+>     usage = params[:schedule_usage]
+>     if usage.nil?
+>       params[:schmethod] = nil
+>       return true
+>     end
+> 
+>     if usage == false || usage == 'false'
+>       params[:schmethod] = nil
+>       params.delete :schedule_usage
+>       return false
+>     elsif usage == true || usage == 'true'
+>       params[:schmethod] = nil
+>     else
+>       params[:schmethod] = usage
+>     end
+> 
+>     params.delete :schedule_usage
+>     return true
+>   end
+> 
+>   def self.random_day_weighted
+>     find(:first, :conditions => ["active = 0 and deleted = 0 and weighted is not null"], :order => "(to_days(now()) - to_days(last_touched)) * weighted * rand() desc")
+>   end
+> 
+>   def self.random_day
+>     find(:first, :conditions => ["active = 0 and deleted = 0 and weighted is not null"], :order => "(to_days(now()) - to_days(last_touched)) * rand() desc")
+>   end
+> 
+>   def self.random_weighted
+>     find(:first, :conditions => ["active = 0 and deleted = 0 and weighted is not null"], :order => "weighted * rand() desc")
+>   end
+> 
+>   def self.random
+>     find(:first, :conditions => ["active = 0 and deleted = 0 and weighted is not null"], :order => "rand() desc")
+>   end
+> 
+>   def self.date_count(date)
+>     find(:all, :conditions => ["scheduled >= ? and scheduled < ? and deleted = 0", date, date + 1]).length
+>   end
+> 
+>   def self.get_news(date)
+>     find(:all, :conditions => ["scheduled <= ? and active = 0 and deleted = 0", date + 1])
+>   end
+> 
+>   # Scheduling Functions
+> 
+>   def self.sched_yearly(date)
+>     DateTime.civil date.year + 1, date.month, date.mday, date.hour, date.min
+>   end
+> 
+>   def self.sched_weekly(date)
+>     dt = DateTime.new date.year, date.month, date.mday, date.hour, date.min
+>     DateTime.jd dt.jd + 7, dt.hour, dt.min
+>   end
+> 
+>   def self.sched_daily(date)
+>     dt = DateTime.new date.year, date.month, date.mday, date.hour, date.min
+>     DateTime.jd dt.jd + 1, dt.hour, dt.min
+>   end
+> 
+>   def self.sched_monthly(date)
+>     if date.month != 12
+>       DateTime.civil date.year, date.month + 1, date.mday, date.hour, date.min
+>     else
+>       DateTime.civil date.year + 1, 1, date.mday, date.hour, date.min
+>     end
+>   end    
+> 
+>   # Maintain the same month, and same Nth Mday
+>   def self.sched_numyearly(date)
+>     nth = ((date.mday - 1) / 7) + 1
+>     first = DateTime.civil date.year + 1, date.month, 1
+>     to1th = (date.wday - first.wday) % 7
+>     logger.info nth
+>     DateTime.civil date.year + 1, date.month, 1 + to1th + (nth - 1) * 7, date.hour, date.min
+>   end
+> 
+>   def self.sched_nummonthly(date)
+>     nth = ((date.mday - 1) / 7) + 1
+>     if date.month == 12
+>       first = DateTime.civil date.year + 1, 1, 1
+>       to1th = (date.wday - first.wday) % 7 
+>       DateTime.civil date.year + 1, 1, 1 + to1th + (nth - 1) * 7, date.hour, date.min
+>     else
+>       first = DateTime.civil date.year, date.month + 1, 1
+>       to1th = (date.wday - first.wday) % 7
+>       DateTime.civil date.year, date.month + 1, 1 + to1th + (nth - 1) * 7, date.hour, date.min
+>     end
+>   end
+> 
+>   # Hooks
+>   def timestamp
+>     logger.info "Adding timestamp"
+>     self.last_touched = DateTime.now
+>     true
+>   end
+> end
+> ./models/card.rb
+> ./models/card.rb~
+> class Card < ActiveRecord::Base
+>   acts_as_taggable
+>   before_save :timestamp
+> 
+>   @@last_autopoll_id = 2414
+> 
+>   def self.last_autopoll
+>     return Card.find(@@last_autopoll_id)
+>   end
+> 
+>   def schedule_usage
+>     if scheduled.nil?
+>       false
+>     elsif schmethod.nil?
+>       true
+>     else
+>       schmethod
+>     end
+>   end
+> 
+>   def deactivate()
+>     if !schmethod.nil?
+>       attempts = 0
+>       date = scheduled
+>       while date < Date.today && attempts < 2 do
+>         date = Card.send(schmethod, date)
+>         attempts += 1
+>       end
+>       write_attribute(:scheduled, date)
+>     end
+> 
+>     write_attribute(:active, false)
+>     write_attribute(:today, false)
+>   end
+> 
+>   # Return true to keep scheduled, false to unset it
+>   def self.apply_schedule_usage(params)
+>     usage = params[:schedule_usage]
+>     if usage.nil?
+>       params[:schmethod] = nil
+>       return true
+>     end
+> 
+>     if usage == false || usage == 'false'
+>       params[:schmethod] = nil
+>       params.delete :schedule_usage
+>       return false
+>     elsif usage == true || usage == 'true'
+>       params[:schmethod] = nil
+>     else
+>       params[:schmethod] = usage
+>     end
+> 
+>     params.delete :schedule_usage
+>     return true
+>   end
+> 
+>   def self.random_day_weighted
+>     find(:first, :conditions => ["active = 0 and deleted = 0 and weighted is not null"], :order => "(to_days(now()) - to_days(last_touched)) * weighted * rand() desc")
+>   end
+> 
+>   def self.random_day
+>     find(:first, :conditions => ["active = 0 and deleted = 0 and weighted is not null"], :order => "(to_days(now()) - to_days(last_touched)) * rand() desc")
+>   end
+> 
+>   def self.random_weighted
+>     find(:first, :conditions => ["active = 0 and deleted = 0 and weighted is not null"], :order => "weighted * rand() desc")
+>   end
+> 
+>   def self.random
+>     find(:first, :conditions => ["active = 0 and deleted = 0 and weighted is not null"], :order => "rand() desc")
+>   end
+> 
+>   def self.date_count(date)
+>     find(:all, :conditions => ["scheduled >= ? and scheduled < ? and deleted = 0", date, date + 1]).length
+>   end
+> 
+>   def self.get_news(date)
+>     find(:all, :conditions => ["scheduled <= ? and active = 0 and deleted = 0", date + 1])
+>   end
+> 
+>   # Scheduling Functions
+> 
+>   def self.sched_yearly(date)
+>     DateTime.civil date.year + 1, date.month, date.mday, date.hour, date.min
+>   end
+> 
+>   def self.sched_weekly(date)
+>     dt = DateTime.new date.year, date.month, date.mday, date.hour, date.min
+>     DateTime.jd dt.jd + 7, dt.hour, dt.min
+>   end
+> 
+>   def self.sched_daily(date)
+>     dt = DateTime.new date.year, date.month, date.mday, date.hour, date.min
+>     DateTime.jd dt.jd + 1, dt.hour, dt.min
+>   end
+> 
+>   def self.sched_monthly(date)
+>     if date.month != 12
+>       DateTime.civil date.year, date.month + 1, date.mday, date.hour, date.min
+>     else
+>       DateTime.civil date.year + 1, 1, date.mday, date.hour, date.min
+>     end
+>   end    
+> 
+>   # Maintain the same month, and same Nth Mday
+>   def self.sched_numyearly(date)
+>     nth = ((date.mday - 1) / 7) + 1
+>     first = DateTime.civil date.year + 1, date.month, 1
+>     to1th = (date.wday - first.wday) % 7
+>     logger.info nth
+>     DateTime.civil date.year + 1, date.month, 1 + to1th + (nth - 1) * 7, date.hour, date.min
+>   end
+> 
+>   def self.sched_nummonthly(date)
+>     nth = ((date.mday - 1) / 7) + 1
+>     if date.month == 12
+>       first = DateTime.civil date.year + 1, 1, 1
+>       to1th = (date.wday - first.wday) % 7 
+>       DateTime.civil date.year + 1, 1, 1 + to1th + (nth - 1) * 7, date.hour, date.min
+>     else
+>       first = DateTime.civil date.year, date.month + 1, 1
+>       to1th = (date.wday - first.wday) % 7
+>       DateTime.civil date.year, date.month + 1, 1 + to1th + (nth - 1) * 7, date.hour, date.min
+>     end
+>   end
+> 
+>   # Hooks
+>   def timestamp
+>     logger.info "Adding timestamp"
+>     self.last_touched = DateTime.now
+>   end
+> end
+> ./models/card.rb~
+> ./controllers
+> cat: ./controllers: Is a directory
+> ./controllers/application_controller.rb
+> class ApplicationController < ActionController::Base
+>   helper :all # include all helpers, all the time
+>   layout :detect_browser
+> 
+>   MOBILE_BROWSERS = ["android", "ipod", "opera mini", 
+> "blackberry", "palm","hiptop","avantgo","plucker",
+> "xiino","blazer","elaine", "windows ce; ppc;",
+> "windows ce; smartphone;","windows ce; iemobile", 
+> "up.browser","up.link","mmp","symbian","smartphone",
+> "midp","wap","vodafone","o2","pocket","kindle",
+> "mobile","pda","psp","treo"]
+> 
+>   def detect_browser
+>     agent = request.headers["HTTP_USER_AGENT"].downcase
+>     MOBILE_BROWSERS.each do |m|
+>       return "mobile" if agent.match(m)
+>     end
+>     return "cards"
+>   end
+> 
+>   # See ActionController::RequestForgeryProtection for details
+>   # Uncomment the :secret if you're not using the cookie session store
+>   protect_from_forgery # :secret => 'ab0d30d7777febcb0e5a3522e47c5b6e'
+>   
+>   # See ActionController::Base for details 
+>   # Uncomment this to filter the contents of submitted sensitive data parameters
+>   # from your application log (in this case, all fields with names like "password"). 
+>   # filter_parameter_logging :password
+> end
+> ./controllers/application_controller.rb
+> ./controllers/application_controller.rb~
+> class ApplicationController < ActionController::Base
+>   protect_from_forgery
+> end
+> ./controllers/application_controller.rb~
+> ./controllers/notes_controller.rb
+> class NotesController < ApplicationController
+>   # GET /notes
+>   # GET /notes.xml
+>   def index
+>     @notes = Note.find(:all)
+> 
+>     respond_to do |format|
+>       format.html # index.html.erb
+>       format.xml  { render :xml => @notes }
+>     end
+>   end
+> 
+>   # GET /notes/1
+>   # GET /notes/1.xml
+>   def show
+>     @note = Note.find(params[:id])
+> 
+>     respond_to do |format|
+>       format.html # show.html.erb
+>       format.xml  { render :xml => @note }
+>     end
+>   end
+> 
+>   # GET /notes/new
+>   # GET /notes/new.xml
+>   def new
+>     @note = Note.new
+> 
+>     respond_to do |format|
+>       format.html # new.html.erb
+>       format.xml  { render :xml => @note }
+>     end
+>   end
+> 
+>   # GET /notes/1/edit
+>   def edit
+>     @note = Note.find(params[:id])
+>   end
+> 
+>   # POST /notes
+>   # POST /notes.xml
+>   def create
+>     @note = Note.new(params[:note])
+> 
+>     respond_to do |format|
+>       if @note.save
+>         flash[:notice] = 'Note was successfully created.'
+>         format.html { redirect_to(@note) }
+>         format.xml  { render :xml => @note, :status => :created, :location => @note }
+>       else
+>         format.html { render :action => "new" }
+>         format.xml  { render :xml => @note.errors, :status => :unprocessable_entity }
+>       end
+>     end
+>   end
+> 
+>   # PUT /notes/1
+>   # PUT /notes/1.xml
+>   def update
+>     @note = Note.find(params[:id])
+> 
+>     respond_to do |format|
+>       if @note.update_attributes(params[:note])
+>         flash[:notice] = 'Note was successfully updated.'
+>         format.html { redirect_to(@note) }
+>         format.xml  { head :ok }
+>       else
+>         format.html { render :action => "edit" }
+>         format.xml  { render :xml => @note.errors, :status => :unprocessable_entity }
+>       end
+>     end
+>   end
+> 
+>   # DELETE /notes/1
+>   # DELETE /notes/1.xml
+>   def destroy
+>     @note = Note.find(params[:id])
+>     @note.destroy
+> 
+>     respond_to do |format|
+>       format.html { redirect_to(notes_url) }
+>       format.xml  { head :ok }
+>     end
+>   end
+> end
+> ./controllers/notes_controller.rb
+> ./controllers/home_controller.rb
+> class HomeController < ApplicationController
+>   auto_complete_for :card, :title, :select => "id, concat(title, if(deleted, ' DELETED', '')) as title"
+>   #require 'vpim/icalendar'
+>   require 'ri_cal'
+> 
+>   def index
+>     @cards = Card.find(:all, :conditions => {:active => 1})
+>   end
+> 
+>   def syncs
+>     @note = getnote(Date.yesterday)
+>     @cards = gettodays(params, 3)
+>   end
+> 
+>   def today
+>     @date = (params[:date] && Date.strptime(params[:date])) || Date.today
+>     sqldate = params[:date] || 'now()'
+> 
+>     @note = getnote(@date)
+> 
+>     if @date == Date.today
+>       flash[:notice] = autopoll
+>     end
+> 
+>     @cards = gettodays(params, nil)
+> 
+>     @nexts = Card.find(:all, :conditions => ["deleted = 0 and (weighted is not null or (scheduled is null or (to_days(scheduled) - to_days(" + sqldate + ") > 0)))"], :order => "ifnull(weighted, 1) / ifnull(to_days(scheduled) - to_days(" + sqldate + "), 7) desc", :limit => 28)
+>     @nexts = @nexts.select { |card| !(@cards.include? card) }
+>     @nexts = @nexts[0..6]
+>   end
+> 
+>   def top
+>     today
+> 
+>     # Group cards by path
+>     path = params[:path] || ''
+>     @subpaths = {}
+>     @cards.each do |card|
+>       unless card.path
+>         subpath = ''
+>       else
+>         subpath = card.path[path.length, card.path.length]
+>         if subpath.nil?
+>           subpath = ''
+>         end
+>         if subpath.length > 0 && subpath[0].chr == '/'
+>           subpath = subpath[1..subpath.length]
+>         end
+>         if subpath.include? '/'
+>           subpath = subpath[0..subpath.index('/')-1]
+>         end
+>       end
+> 
+>       unless @subpaths.include? subpath
+>         @subpaths[subpath] = []
+>       end
+> 
+>       @subpaths[subpath].push card
+>     end
+>   end
+> 
+>   def poll
+>     notices = ""
+> 
+>     news = Card.get_news(Date.today)
+>     news << Card.random_day_weighted
+>     news << Card.random_day
+>     news << Card.random_weighted
+>     news << Card.random
+> 
+>     news.each do |new|
+>       new.active = 1
+>       new.save
+>     end
+> 
+>     # Look for active cards that should be deactivated
+>     recurring_events = Card.find(:all, :conditions => ["active = 1 and schmethod is not null and duration > 0"])
+>     recurring_events.each do |event|
+>       if event.scheduled + event.duration*60 < Date.today - 1
+>         event.deactivate
+>         event.save
+>         notices += "Refiled " + event.title + "<br />"
+>       end
+>     end
+> 
+>     # Tell user about these
+>     flash[:notice] = "<ul><li>" + (news.map {|new| new.title}).join("</li><li>") + "</li></ul>" + notices
+> 
+>     redirect_to :action => :index
+>   end
+> 
+>   # call as a function
+>   def autopoll
+>     notices = ""
+> 
+>     last_autopoll = Card.last_autopoll
+> 
+>     if Time.zone.now - last_autopoll.last_touched < 24*60*60
+>       return notices
+>     end
+>     last_autopoll.last_touched = Time.zone.now
+>     last_autopoll.save
+> 
+>     delays = Card.find(:all, :conditions => ["delay > 0 and deleted = 0 and to_days(last_touched) < to_days(now())"])
+>     delays.each do |card|
+>       card.delay -= 1
+>       card.today = true if card.delay <= 0
+>       card.save
+>     end
+> 
+>     news = Card.get_news(Date.today)
+>     
+>     choice = rand(4)
+> 
+>     news << Card.random_day_weighted if choice == 0
+>     news << Card.random_day if choice == 1
+>     news << Card.random_weighted if choice == 2
+>     news << Card.random if choice == 3
+> 
+>     news.each do |new|
+>       new.active = 1
+>       new.save
+>     end
+> 
+>     # Look for active cards that should be deactivated
+>     recurring_events = Card.find(:all, :conditions => ["active = 1 and schmethod is not null and duration > 0"])
+>     recurring_events.each do |event|
+>       if event.scheduled + event.duration*60 < Date.today - 1
+>         event.deactivate
+>         event.save
+>         notices += "Refiled " + event.title + "<br />"
+>       end
+>     end
+> 
+>     # Tell user about these
+>     return "<ul><li>" + (news.map {|new| new.title}).join("</li><li>") + "</li></ul>" + notices
+>   end
+> 
+>   def refile
+>     notices = ""
+> 
+>     # Look for active cards that should be deactivated
+>     recurring_events = Card.find(:all, :conditions => ["active = 1 and schmethod is not null and duration > 0"])
+>     recurring_events.each do |event|
+>       if event.scheduled + event.duration*60 < Date.today - 1
+>         event.deactivate
+>         event.save
+>         notices += "Refiled " + event.title + "<br />"
+>       end
+>     end
+> 
+>     # Tell user about these
+>     flash[:notice] = notices
+> 
+>     redirect_to :action => :index
+>   end
+> 
+>   def ical
+>     cards = Card.find(:all, :conditions => ['scheduled >= ?', Time.now - 365], :order => 'scheduled')
+>     cal = RiCal.Calendar do
+>       default_tzid = 'America/New_York'
+>       cards.each do |card|
+>         event do
+>           summary  card.title
+>           description card.text
+>           dtstart     card.scheduled + 5*60*60
+>           dtend       card.scheduled + 5*60*60 + ((if card.duration then card.duration else 24*60 end) * 60)
+>           if card.schmethod == 'sched_yearly'
+>             rrule     "FREQ=YEARLY;COUNT=10"
+>           elsif card.schmethod == 'sched_weekly'
+>             rrule     "FREQ=WEEKLY;COUNT=10"
+>           elsif card.schmethod == 'sched_daily'
+>             rrule     "FREQ=DAILY;COUNT=10"
+>           elsif card.schmethod == 'sched_monthly'
+>             rrule     "FREQ=MONTHLY;COUNT=10"
+>           end
+> 
+>           created  card.created
+>           last_modified  card.last_touched
+>         end
+>       end
+>     end
+> 
+>     headers['Content-Type'] = "text/calendar; charset=UTF-8"
+>     render :text => cal.to_s
+>   end
+> 
+>   def add_today
+>     path = params[:path] or nil
+> 
+>     if params[:sched].match(/\A[+-]?\d+?(\.\d+)?\Z/) == nil
+>       card = Card.new :title => params[:title], :today => 1, :created => Date.today, :scheduled => params[:sched], :path => path
+>     else
+>       card = Card.new :title => params[:title], :today => 1, :created => Date.today, :weighted => params[:sched], :path => path
+>     end
+> 
+>     if card.save
+>       flash[:notice] = 'Today item was successfully created.'
+>     end
+>     redirect_to :back
+>   end
+> 
+>   def cardtext_update
+>     card = Card.find(params[:id])
+>     card.text = params[:value]
+>     card.save
+>     card.reload
+>     render :text => card.text
+>   end
+> 
+>   def note_update
+>     @note = Note.find(:first, :conditions => {:date => params[:date]})
+>     if @note.nil?
+>       @note = Note.new({:date => params[:date]})
+>     end
+>     if @note.text.nil?
+>       @note.text = params[:text]
+>       @note.save!
+>       render :text => params[:text]
+>       return
+>     end
+>     if @note.text == params[:text]
+>       render :text => params[:text]
+>       return
+>     end
+>     if @note.text == params[:last_clean]
+>       @note.text = params[:text]
+>       @note.save!
+>       render :text => params[:text]
+>       return
+>     end
+>     
+>     # Perform a simple 2-way merge (because can't trust last_clean)
+>     aa = params[:text].split('\n')
+>     bb = @note.text.split('\n')
+> 
+>     result = []
+>     ii = jj = 0
+>     while ii < aa.length && jj < bb.length
+>       if aa[ii] == bb[jj]
+>         result.push << aa[ii]
+>         ii = ii + 1
+>         jj = jj + 1
+>       else
+>         # inch forward on aa for a match
+>         aa_ii = aa_jj = 0
+>         for dii in 0..(aa.length - ii - 1)
+>           for djj in 1..(bb.length - jj - 1)
+>             if aa[ii + dii] == bb[jj + djj]
+>               aa_ii = dii
+>               aa_jj = djj
+>               break
+>             end
+>           end
+>           if aa_jj > 0
+>             break
+>           end
+>         end
+>         if aa_jj == 0
+>           match_ii = aa.length
+>           match_jj = bb.length
+>         else
+>           # inch forward on bb for a match
+>           bb_ii = bb_jj = 0
+>           for djj in 0..(bb.length - jj - 1)
+>             for dii in 1..(aa.length - ii - 1)
+>               if aa[ii + dii] == bb[jj + djj]
+>                 bb_ii = dii
+>                 bb_jj = djj
+>                 break
+>               end
+>             end
+>             if bb_ii > 0
+>               break
+>             end
+>           end
+> 
+>           if aa_ii + aa_jj < bb_ii + bb_jj
+>             match_ii = aa_ii
+>             match_jj = aa_jj
+>           else
+>             match_ii = bb_ii
+>             match_jj = bb_jj
+>           end
+>         end
+> 
+>         result = result.concat(aa[ii..(match_ii-1)]).concat(bb[jj..(match_jj-1)])
+>         ii = match_ii
+>         jj = match_jj
+>       end
+>     end
+> 
+>     if ii < aa.length
+>       result = result.concat(aa[ii..(aa.length)])
+>     end
+>     if jj < bb.length
+>       result = result.concat(bb[jj..(bb.length)])
+>     end
+> 
+>     @note.text = result.join('\n')
+>     @note.save!
+>     render :text => @note.text
+>   end
+> 
+>   private
+> 
+>   def getnote(date)
+>     note = Note.find(:first, :conditions => {:date => date})
+>     if note.nil?
+>       note = Note.new({:date => date})
+>     end
+> 
+>     note
+>   end
+> 
+>   def gettodays(params, count)
+>     @date = (params[:date] && Date.strptime(params[:date])) || Date.today
+>     sqldate = params[:date] || 'now()'
+> 
+>     if params[:path]
+>       path_sql = " and left(path, ?) = ?"
+>       path_args = [params[:path].length, params[:path]]
+>     else
+>       path_sql = ""
+>       path_args = []
+>     end
+>     select = "*, (to_days(" + sqldate + ") - to_days(last_touched) + 1) * weighted as priority"
+> 
+>     @cards = Card.find(:all, :select => select, :conditions => ["(today = 1 or (scheduled >= ? and scheduled <= ? and deleted = 0))" + path_sql, @date, @date + 1] + path_args, :order => "scheduled, id desc")
+> 
+>     if count.nil? || @cards.length < count
+>       extra = Card.find(:all, :select => select, :conditions => ["active = 1 and deleted = 0 and weighted is not null" + path_sql] + path_args, :order => "priority * rand() desc", :limit => count)
+>       while (count.nil? || @cards.length < count) && extra.length > 0
+>         card = extra.pop
+>         unless @cards.include? card
+>           @cards << card
+>         end
+>       end
+>     end
+> 
+>     if count.nil? || @cards.length < count
+>       extra = Card.find(:all, :select => select, :conditions => ["active = 1" + path_sql] + path_args, :order => "rand() desc", :limit => count)
+>       while (count.nil? || @cards.length < count) && extra.length > 0
+>         card = extra.pop
+>         unless @cards.include? card
+>           @cards << card
+>         end
+>       end
+>     end
+> 
+>     @cards
+>   end
+> end
+> ./controllers/home_controller.rb
+> ./controllers/cards_controller.rb
+> class CardsController < ApplicationController
+>   include ApplicationHelper
+> 
+>   # GET /cards
+>   # GET /cards.xml
+>   def index
+>     @cards = Card.find(:all)
+> 
+>     respond_to do |format|
+>       format.html # index.html.erb
+>       format.xml  { render :xml => @cards }
+>     end
+>   end
+> 
+>   def names
+>     @cards = Card.find(:all, :conditions => "deleted = 0 or deleted is null")
+> 
+>     respond_to do |format|
+>       format.html # index.html.erb
+>       format.xml  { render :xml => @cards }
+>     end
+>   end
+> 
+>   # GET /cards/handfull
+>   def handfull
+>     @cards = Card.find(:all, :conditions => {:active => 1}, :order => "rand() asc", :limit => 5)
+>     render :action => :index
+>   end
+> 
+>   def showdate
+>     date = Date.parse params[:id]
+>     if params[:to]
+>       date2 = Date.parse params[:to] + 1
+>     else
+>       date2 = date + 1
+>     end
+>     @cards = Card.find(:all, :conditions => ["scheduled >= ? and scheduled < ?", date, date2])
+>     render :action => :index
+>   end
+> 
+>   # GET /cards/1
+>   # GET /cards/1.xml
+>   def show
+>     @card = Card.find(params[:id])
+> 
+>     respond_to do |format|
+>       format.html # show.html.erb
+>       format.xml  { render :xml => @card }
+>     end
+>   end
+> 
+>   # GET /cards/new
+>   # GET /cards/new.xml
+>   def new
+>     @card = Card.new
+> 
+>     respond_to do |format|
+>       format.html # new.html.erb
+>       format.xml  { render :xml => @card }
+>     end
+>   end
+> 
+>   # GET /cards/1/edit
+>   def edit
+>     @card = Card.find(params[:id])
+>     @post_return = params[:return]
+>   end
+> 
+>   # POST /cards
+>   # POST /cards.xml
+>   def create
+>     keepsched = Card.apply_schedule_usage(params[:card])
+>     @card = Card.new(params[:card])
+>     if !keepsched
+>       @card.scheduled = nil
+>     end
+> 
+>     respond_to do |format|
+>       if @card.save
+>         flash[:notice] = 'Card was successfully created.'
+>         format.html { redirect_to(:controller => :home, :action => :index) }
+>         format.xml  { render :xml => @card, :status => :created, :location => @card }
+>       else
+>         format.html { render :action => "new" }
+>         format.xml  { render :xml => @card.errors, :status => :unprocessable_entity }
+>       end
+>     end
+>   end
+> 
+>   # PUT /cards/1
+>   # PUT /cards/1.xml
+>   def update
+>     keepsched = Card.apply_schedule_usage(params[:card])
+>     @card = Card.find(params[:id])
+> 
+>     respond_to do |format|
+>       if @card.update_attributes(params[:card])
+>         if !keepsched
+>           @card.update_attributes({:scheduled => nil})
+>         end
+> 
+>         flash[:notice] = 'Card was successfully updated.'
+>         if params[:return]
+>           format.html { redirect_to(params[:return]) }
+>         else
+>           format.html { redirect_to(:controller => :home, :action => :index) }
+>         end
+>         format.xml  { head :ok }
+>       else
+>         format.html { render :action => "edit" }
+>         format.xml  { render :xml => @card.errors, :status => :unprocessable_entity }
+>       end
+>     end
+>   end
+> 
+>   # DELETE /cards/1
+>   # DELETE /cards/1.xml
+>   def destroy
+>     if params[:really] == 'yes'
+>       @card = Card.find(params[:id])
+>       @card.destroy
+> 
+>       respond_to do |format|
+>         format.html { redirect_to(:controller => :cards, :action => :index) }
+>         format.xml  { head :ok }
+>       end
+>     end
+>   end
+> 
+>   def file_delay
+>     @card = Card.find(params[:id])
+> 
+>     @card.delay = params[:delay].to_f
+>     @card.today = false
+>     @card.active = false
+>     @card.save
+> 
+>     redirect_to :back
+>   end
+> 
+>   def deactivate
+>     @card = Card.find(params[:id])
+>     @card.deactivate
+>     @card.save
+>     redirect_to :back
+>   end
+> 
+>   def retire
+>     @card = Card.find(params[:id])
+> 
+>     @card.deleted = true
+>     @card.active = false
+>     @card.today = false
+>     @card.save
+> 
+>     redirect_to :back
+>   end
+> 
+>   def today_to_card
+>     @card = Card.find(params[:id])
+> 
+>     @card.active = true
+>     @card.today = false
+> 
+>     if params[:sched]
+>       if params[:sched].match(/\A\d+?(\.\d+)?\Z/) == nil
+>         @card.scheduled = params[:sched]
+>       else
+>         @card.weighted = params[:sched]
+>       end
+>     end
+> 
+>     @card.save
+> 
+>     redirect_to :back
+>   end
+> 
+>   def path_select
+>     @paths = Card.find_by_sql("select distinct path from cards").collect(&:path)
+> 
+>     render :layout => false
+>   end
+> 
+>   
+>   def ajax_make_today
+>     @card = Card.find(params[:id])
+>     if params[:task] == 'today'
+>       @card.today = true
+>     else
+>       @card.today = false
+>       @card.active = true
+>     end
+> 
+>     @card.save
+>     render :text => ajax_today_button(@card)
+>   end
+> end
+> ./controllers/cards_controller.rb
+> ./controllers/cards_controller.rb~
+> class CardsController < ApplicationController
+>   include ApplicationHelper
+> 
+>   # GET /cards
+>   # GET /cards.xml
+>   def index
+>     @cards = Card.find(:all)
+> 
+>     respond_to do |format|
+>       format.html # index.html.erb
+>       format.xml  { render :xml => @cards }
+>     end
+>   end
+> 
+>   def names
+>     @cards = Card.find(:all, :conditions => "deleted = 0 or deleted is null")
+> 
+>     respond_to do |format|
+>       format.html # index.html.erb
+>       format.xml  { render :xml => @cards }
+>     end
+>   end
+> 
+>   # GET /cards/handfull
+>   def handfull
+>     @cards = Card.find(:all, :conditions => {:active => 1}, :order => "rand() asc", :limit => 5)
+>     render :action => :index
+>   end
+> 
+>   def showdate
+>     date = Date.parse params[:id]
+>     if params[:to]
+>       date2 = Date.parse params[:to] + 1
+>     else
+>       date2 = date + 1
+>     end
+>     @cards = Card.find(:all, :conditions => ["scheduled >= ? and scheduled < ?", date, date2])
+>     render :action => :index
+>   end
+> 
+>   # GET /cards/1
+>   # GET /cards/1.xml
+>   def show
+>     @card = Card.find(params[:id])
+> 
+>     respond_to do |format|
+>       format.html # show.html.erb
+>       format.xml  { render :xml => @card }
+>     end
+>   end
+> 
+>   # GET /cards/new
+>   # GET /cards/new.xml
+>   def new
+>     @card = Card.new
+> 
+>     respond_to do |format|
+>       format.html # new.html.erb
+>       format.xml  { render :xml => @card }
+>     end
+>   end
+> 
+>   # GET /cards/1/edit
+>   def edit
+>     @card = Card.find(params[:id])
+>     @post_return = params[:return]
+>   end
+> 
+>   # POST /cards
+>   # POST /cards.xml
+>   def create
+>     keepsched = Card.apply_schedule_usage(params[:card])
+>     @card = Card.new(params[:card])
+>     if !keepsched
+>       @card.scheduled = nil
+>     end
+> 
+>     respond_to do |format|
+>       if @card.save
+>         flash[:notice] = 'Card was successfully created.'
+>         format.html { redirect_to(:controller => :home, :action => :index) }
+>         format.xml  { render :xml => @card, :status => :created, :location => @card }
+>       else
+>         format.html { render :action => "new" }
+>         format.xml  { render :xml => @card.errors, :status => :unprocessable_entity }
+>       end
+>     end
+>   end
+> 
+>   # PUT /cards/1
+>   # PUT /cards/1.xml
+>   def update
+>     keepsched = Card.apply_schedule_usage(params[:card])
+>     @card = Card.find(params[:id])
+> 
+>     respond_to do |format|
+>       if @card.update_attributes(params[:card])
+>         if !keepsched
+>           @card.update_attributes({:scheduled => nil})
+>         end
+> 
+>         flash[:notice] = 'Card was successfully updated.'
+>         if params[:return]
+>           format.html { redirect_to(params[:return]) }
+>         else
+>           format.html { redirect_to(:controller => :home, :action => :index) }
+>         end
+>         format.xml  { head :ok }
+>       else
+>         format.html { render :action => "edit" }
+>         format.xml  { render :xml => @card.errors, :status => :unprocessable_entity }
+>       end
+>     end
+>   end
+> 
+>   # DELETE /cards/1
+>   # DELETE /cards/1.xml
+>   def destroy
+>     if params[:really] == 'yes'
+>       @card = Card.find(params[:id])
+>       @card.destroy
+> 
+>       respond_to do |format|
+>         format.html { redirect_to(:controller => :cards, :action => :index) }
+>         format.xml  { head :ok }
+>       end
+>     end
+>   end
+> 
+>   def file_delay
+>     @card = Card.find(params[:id])
+> 
+>     @card.delay = params[:delay].to_f
+>     @card.today = false
+>     @card.active = false
+>     @card.save
+> 
+>     redirect_to :back
+>   end
+> 
+>   def deactivate
+>     @card = Card.find(params[:id])
+>     @card.deactivate
+>     @card.save
+>     redirect_to :back
+>   end
+> 
+>   def retire
+>     @card = Card.find(params[:id])
+> 
+>     @card.deleted = true
+>     @card.active = false
+>     @card.today = false
+>     @card.save
+> 
+>     redirect_to :back
+>   end
+> 
+>   def today_to_card
+>     @card = Card.find(params[:id])
+> 
+>     @card.active = true
+>     @card.today = false
+> 
+>     if params[:sched]
+>       if params[:sched].match(/\A\d+?(\.\d+)?\Z/) == nil
+>         @card.scheduled = params[:sched]
+>       else
+>         @card.weighted = params[:sched]
+>       end
+>     end
+> 
+>     @card.save
+> 
+>     redirect_to :back
+>   end
+> 
+>   def path_select
+>     @paths = Card.find_by_sql("select distinct path from cards").collect(&:path)
+> 
+>     render :layout => false
+>   end
+> 
+>   
+>   def ajax_make_today
+>     @card = Card.find(params[:id])
+>     if params[:task] == 'today'
+>       @card.today = true
+>     else
+>       @card.today = false
+>       @card.active = true
+>     end
+> 
+>     @card.save
+>     render :text => ajax_today_button(@card)
+>   end
+> end
+> ./controllers/cards_controller.rb~
+> ./controllers/projects_controller.rb
+> class ProjectsController < ApplicationController
+>   # GET /projects
+>   # GET /projects.xml
+>   def index
+>     @projects = Project.find(:all)
+> 
+>     respond_to do |format|
+>       format.html # index.html.erb
+>       format.xml  { render :xml => @projects }
+>     end
+>   end
+> 
+>   # GET /projects/1
+>   # GET /projects/1.xml
+>   def show
+>     @project = Project.find(params[:id])
+> 
+>     respond_to do |format|
+>       format.html # show.html.erb
+>       format.xml  { render :xml => @project }
+>     end
+>   end
+> 
+>   # GET /projects/new
+>   # GET /projects/new.xml
+>   def new
+>     @project = Project.new
+> 
+>     respond_to do |format|
+>       format.html # new.html.erb
+>       format.xml  { render :xml => @project }
+>     end
+>   end
+> 
+>   # GET /projects/1/edit
+>   def edit
+>     @project = Project.find(params[:id])
+>   end
+> 
+>   # POST /projects
+>   # POST /projects.xml
+>   def create
+>     @project = Project.new(params[:project])
+> 
+>     respond_to do |format|
+>       if @project.save
+>         flash[:notice] = 'Project was successfully created.'
+>         format.html { redirect_to(@project) }
+>         format.xml  { render :xml => @project, :status => :created, :location => @project }
+>       else
+>         format.html { render :action => "new" }
+>         format.xml  { render :xml => @project.errors, :status => :unprocessable_entity }
+>       end
+>     end
+>   end
+> 
+>   # PUT /projects/1
+>   # PUT /projects/1.xml
+>   def update
+>     @project = Project.find(params[:id])
+> 
+>     respond_to do |format|
+>       if @project.update_attributes(params[:project])
+>         flash[:notice] = 'Project was successfully updated.'
+>         format.html { redirect_to(@project) }
+>         format.xml  { head :ok }
+>       else
+>         format.html { render :action => "edit" }
+>         format.xml  { render :xml => @project.errors, :status => :unprocessable_entity }
+>       end
+>     end
+>   end
+> 
+>   # DELETE /projects/1
+>   # DELETE /projects/1.xml
+>   def destroy
+>     @project = Project.find(params[:id])
+>     @project.destroy
+> 
+>     respond_to do |format|
+>       format.html { redirect_to(projects_url) }
+>       format.xml  { head :ok }
+>     end
+>   end
+> end
+> ./controllers/projects_controller.rb
+> ./views
+> cat: ./views: Is a directory
+> ./views/home
+> cat: ./views/home: Is a directory
+> ./views/home/index.html.erb
+> <h1>Home</h1>
+> 
+> <% if flash[:notice] %>
+>   <div class="notice"><%= flash[:notice] %></div>
+> <% end %>
+> 
+> <div style="float: right">
+>   <%= text_field_with_auto_complete :card, :title, {}, {:method => :get} %>
+>   <%= submit_tag "Search" %>
+> </div>
+> 
+> <%= link_to "New Card", :controller => :cards, :action => :new %> |
+> <%= link_to "Todays", :action => :today %> |
+> <%= link_to "Poll Cards", :action => :poll %> |
+> <%= link_to "Handfull", :controller => :cards, :action => :handfull %> |
+> <%= link_to "All Cards", :controller => :cards, :action => :index %>
+> 
+> <h2>Weekly View</h2>
+> <table>
+>   <tr>
+>     <th><%= Date.today.strftime("%A, %B") %></th>
+> <% for day in (0..6) %>
+>     <% count = Card.date_count(Date.today + day) %>
+>     <td><%= link_to (Date.today + day).strftime("%d"), :controller => :cards, :action =>:showdate, :id => Date.today + day %><%= if count > 0 then "(#{count})" else "" end %></td>
+> <% end %>
+>   </tr>
+> </table>
+> 
+> <h2>Active Cards</h2>
+> <ul>
+> <% @cards.each do |card| %>
+>   <li><%= link_to card.title, :controller => :cards, :action => :show,:id => card.id %> (<%= if !card.scheduled.nil? then "Appt: " +card.scheduled.strftime("%a %b %d, %H:%M") else "Last: " +card.last_touched.strftime("%b %d, %Y") end %>)
+>     <%= link_to "Edit", :controller => :cards, :action => :edit, :id => card.id %> | <%= file_buttons card %>
+> </li>  
+> <% end %>
+> </ul>
+> ./views/home/index.html.erb
+> ./views/home/_today_controls.html.erb
+> <% if !mobile_agent? %>
+> 
+> <iframe style="float: right" src="https://www.google.com/calendar/embed?showTitle=0&amp;showPrint=0&amp;mode=AGENDA&amp;height=400&amp;wkst=1&amp;bgcolor=%23FFFFFF&amp;src=jarising%40gmail.com&amp;color=%232952A3&amp;src=23093mr6urajf34od62q754tlbbo3llg%40import.calendar.google.com&amp;color=%23A32929&amp;src=m5if85p7sml4lst43t3r259lp0%40group.calendar.google.com&amp;color=%23691426&amp;ctz=America%2FNew_York" style=" border-width:0 " width="450" height="300" frameborder="0" scrolling="no"></iframe>
+> 
+> <%= form_for(@note, url: {action: :note_update, date: params[:date]}) do |f| %>
+>   <%= f.text_area :text, :cols => 80, :onkeypress => "note_dirty();" %>
+> <% end %>
+> 
+> <% end %>
+> 
+> <script language="javascript" type="text/javascript" src="/javascripts/home.js"></script>
+> <script type="text/javascript" defer>
+> notewatch('<%= params[:date] || @date %>', "<%= form_authenticity_token%>");
+> </script>
+> 
+> <% if !mobile_agent? %>
+> <div style="float: right">
+>   <%= text_field_with_auto_complete :card, :title, {}, {:method => :get} %>
+>   <%= submit_tag "Search" %>
+> </div>
+> <% end %>
+> 
+> <% form_tag :action => "add_today" do %>
+>   <%= text_field_tag 'title', nil, :size => 25, :placeholder => "Card title" %>
+>   <%= text_field_tag 'sched', nil, :size => 10, :placeholder => "Weight/Date" %>
+>   <%= text_field_tag 'path', nil, :size => 10, :placeholder => "Tag path" %>
+>   <%= submit_tag "Add" %>
+> <% end %>
+> ./views/home/_today_controls.html.erb
+> ./views/home/.svn
+> cat: ./views/home/.svn: Is a directory
+> ./views/home/.svn/entries
+> 9
+> 
+> dir
+> 32
+> http://svn.travelersnetwork.org/projects/cardsys2/trunk/app/views/home
+> http://svn.travelersnetwork.org/projects
+> 
+> 
+> 
+> 2009-11-12T03:40:58.100930Z
+> 27
+> jrising
+> 
+> 
+> svn:special svn:externals svn:needs-lock
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 0f8f9d27-3b5d-0410-98be-a940f4ea6fd4
+> 
+> 
+> index.html.erb~
+> file
+> 78
+> 
+> 
+> 
+> 2010-10-16T15:24:03.000000Z
+> 9103bf409c752efa8f7292e35065603e
+> 2012-10-09T21:08:50.670646Z
+> 78
+> jrising
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 1337
+> 
+> 
+> index.html.erb
+> file
+> 76
+> 
+> 
+> 
+> 2012-01-06T04:24:52.000000Z
+> f4d46e894d4e594442600b13edbd8bbc
+> 2012-10-09T21:06:54.183373Z
+> 76
+> jrising
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 1341
+> 
+> 
+> today.rhtml~
+> file
+> 78
+> 
+> 
+> 
+> 2011-10-13T11:56:57.000000Z
+> 3fed1b1f5cf5062538181c68222c3a3d
+> 2012-10-09T21:08:50.670646Z
+> 78
+> jrising
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 4925
+> 
+> 
+> today.rhtml
+> file
+> 78
+> 
+> 
+> 
+> 2012-06-19T08:29:44.000000Z
+> 13e94d71951891569618e50888e28515
+> 2012-10-09T21:08:50.670646Z
+> 78
+> jrising
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 4851
+> 
+> 
+> ./views/home/.svn/entries
+> ./views/home/.svn/props
+> cat: ./views/home/.svn/props: Is a directory
+> ./views/home/.svn/text-base
+> cat: ./views/home/.svn/text-base: Is a directory
+> ./views/home/.svn/text-base/index.html.erb~.svn-base
+> <h1>Home</h1>
+> 
+> <% if flash[:notice] %>
+>   <div class="notice"><%= flash[:notice] %></div>
+> <% end %>
+> 
+> <div style="float: right">
+>   <%= text_field_with_auto_complete :card, :title, {}, {:method => :get} %>
+>   <%= submit_tag "Search" %>
+> </div>
+> 
+> <%= link_to "New Card", :controller => :cards, :action => :new %> |
+> <%= link_to "Todays", :action => :today %> |
+> <%= link_to "Poll Cards", :action => :poll %> |
+> <%= link_to "Handfull", :controller => :cards, :action => :handfull %> |
+> <%= link_to "All Cards", :controller => :cards, :action => :index %>
+> 
+> <h2>Weekly View</h2>
+> <table>
+>   <tr>
+>     <th><%= Date.today.strftime("%A, %B") %></th>
+> <% for day in (0..6) %>
+>     <% count = Card.date_count(Date.today + day) %>
+>     <td><%= link_to (Date.today + day).strftime("%d"), :controller => :cards, :action =>:showdate, :id => Date.today + day %><%= if count > 0 then "(#{count})" else "" end %></td>
+> <% end %>
+>   </tr>
+> </table>
+> 
+> <h2>Active Cards</h2>
+> <ul>
+> <% @cards.each do |card| %>
+>   <li><%= link_to card.title, :controller => :cards, :action => :show,:id => card.id %> (<%= if !card.scheduled.nil? then "Appt: " +card.scheduled.strftime("%a %b %d, %H:%M") else "Last: " +card.last_touched.strftime("%b %d, %Y") end %>)
+>     <%= link_to "Edit", :controller => :cards, :action => :edit, :id => card.id %> | <%= file_buttons card %>
+> </li>
+> 
+>   
+> <% end %>
+> ./views/home/.svn/text-base/index.html.erb~.svn-base
+> ./views/home/.svn/text-base/today.rhtml.svn-base
+> <p><b><%= @date %></b>: 
+> 
+> <% if mobile_agent? %>
+> <%= link_to "New", :controller => :cards, :action => :new %> |
+> <%= link_to "Poll", :action => :poll %> |
+> <%= link_to "Hand", :controller => :cards, :action => :handfull %> |
+> <%= link_to "All", :controller => :cards, :action => :index %>
+> <% else %>
+> <% for day in (0..6) %>
+>   <% if day == 0 %>
+>     <% count = Card.date_count(@date - 1) %>
+>     <%= link_to "Yesterday", :controller => :home, :action => :today, :date => @date - 1 %><%= if count > 0 then "(#{count})" else "" end %> |
+>   <% else %>
+>     <% count = Card.date_count(@date + day) %>
+>     <%= link_to (@date + day).strftime("%d"), :controller => :home, :action => :today, :date => @date + day %><%= if count > 0 then "(#{count})" else "" end %> |
+>   <% end %>
+> <% end %>
+> <%= link_to "New Card", :controller => :cards, :action => :new %> |
+> <%= link_to "Card Pile", :action => :index %> |
+> <%= link_to "Poll Cards", :action => :poll %> |
+> <%= link_to "Handfull", :controller => :cards, :action => :handfull %> |
+> <%= link_to "All Cards", :controller => :cards, :action => :index %>
+> <% end %>
+> </p>
+> 
+> <% if flash[:notice] %>
+>   <div class="notice"><%= flash[:notice] %></div>
+> <% end %>
+> 
+> <iframe style="float: right" src="https://www.google.com/calendar/embed?showTitle=0&amp;showPrint=0&amp;mode=AGENDA&amp;height=400&amp;wkst=1&amp;bgcolor=%23FFFFFF&amp;src=jarising%40gmail.com&amp;color=%232952A3&amp;src=23093mr6urajf34od62q754tlbbo3llg%40import.calendar.google.com&amp;color=%23A32929&amp;src=m5if85p7sml4lst43t3r259lp0%40group.calendar.google.com&amp;color=%23691426&amp;ctz=America%2FNew_York" style=" border-width:0 " width="450" height="300" frameborder="0" scrolling="no"></iframe>
+> 
+> <% form_for :note, @note, :url => {:action => :note_update, :date => params[:date]} do |f| %>
+>   <%= f.text_area :text, :cols => 80, :onkeypress => "note_dirty();" %>
+> <% end %>
+> 
+> <script language="javascript" type="text/javascript" defer>
+>   note_clean();
+> 
+>   function note_dirty() {
+>     $('note_text').setStyle({borderColor: '#FF0000'});
+>   }
+> 
+>   function note_clean() {
+>     last_clean = $('note_text').value;
+>     $('note_text').setStyle({borderColor: '#000000'});
+>   }
+> 
+>   new PeriodicalExecuter(function(pe) {
+>     var sent = $('note_text').value;
+>     if (last_clean == sent) {
+>       note_clean();
+>       return;
+>     }
+> 
+>     new Ajax.Request('/home/note_update', {
+>       parameters: { date: '<%= params[:date] || @date %>', text: sent, last_clean: last_clean, authenticity_token: "<%= form_authenticity_token%>" },
+>       method: 'post',
+>       onSuccess: function(trans) {
+>         if ($('note_text').value == sent && trans.responseText) {
+>           var oldTop = $('note_text').scrollTop;
+>           $('note_text').value = trans.responseText;
+>           $('note_text').scrollTop = oldTop;
+>           note_clean();
+>         } else
+>           last_clean = trans.responseText;
+>       }
+>    });      
+>   }, 10);
+> </script>
+> 
+> <% if !mobile_agent? %>
+> <div style="float: right">
+>   <%= text_field_with_auto_complete :card, :title, {}, {:method => :get} %>
+>   <%= submit_tag "Search" %>
+> </div>
+> <% end %>
+> 
+> <% form_tag :action => "add_today" do %>
+>   <%= text_field_tag 'title', nil, :size => 25 %>
+>   <%= submit_tag "Add" %>
+> <% end %>
+> 
+> <table width="100%" cellspacing="0" cellpadding="0">
+> <% @cards.each do |card| %>
+>   <tr>
+>     <td>
+>       <b><%= link_to card.title, :controller => :cards, :action => :edit, :id => card.id %> <%= if !card.scheduled.nil? then "(Appt: " +card.scheduled.strftime("%a %b %d, %H:%M") + ")" else "" end %></b>
+>       <% if card.text %>
+>       <a href="#" onclick="Effect.SlideDown('cardtext_<%= card.id %>'); return false">More &raquo;</a>
+>       <% else %>
+>       <a href="#" onclick="Effect.SlideDown('cardtext_<%= card.id %>'); return false">Add &raquo;</a>
+>       <% end %>      
+>       <div id="cardtext_<%= card.id %>" style="display: none">
+>         <textarea id="cardtext_<%= card.id %>_text" rows="6" cols="80"><%= card.text %></textarea>
+>         <img id="cardtext_<%= card.id %>_wait" src="/images/spinner.gif" alt="Please wait..." style="display: none" />
+>         <input type="button" value="Save" onclick="$('cardtext_<%= card.id %>_wait').show(); new Ajax.Request('cardtext_update', { method: 'get', parameters: { id: '<%= card.id %>', value: $('cardtext_<%= card.id %>_text').value }, onSuccess: function(trans) { $('cardtext_<%= card.id %>_text').update(trans.responseText); $('cardtext_<%= card.id %>_wait').hide(); }, onFailure: function() { alert('Failure.'); $('cardtext_<%= card.id %>_wait').hide(); } });" />
+>       </div>
+>     </td>
+>     <% if mobile_agent? %>
+>     <td width="106"><%= today_buttons card %></td>
+>     <% else %>
+>     <td width="170"><%= today_buttons card %></td>
+>     <% end %>
+>   </tr>
+> <% end %>
+> </table>
+> 
+> <b>Upcoming:</b>
+> <% @nexts.each do |card| %>
+>   <%= link_to card.title, :controller => :cards, :action => :show,:id => card.id %>
+> <% end %>
+> ./views/home/.svn/text-base/today.rhtml.svn-base
+> ./views/home/.svn/text-base/today.rhtml~.svn-base
+> <p><b><%= @date %></b>: 
+> 
+> <% if mobile_agent? %>
+> <%= link_to "New", :controller => :cards, :action => :new %> |
+> <%= link_to "Poll", :action => :poll %> |
+> <%= link_to "Hand", :controller => :cards, :action => :handfull %> |
+> <%= link_to "All", :controller => :cards, :action => :index %>
+> <% else %>
+> <% for day in (0..6) %>
+>   <% if day == 0 %>
+>     <% count = Card.date_count(@date - 1) %>
+>     <%= link_to "Yesterday", :controller => :home, :action => :today, :date => @date - 1 %><%= if count > 0 then "(#{count})" else "" end %> |
+>   <% else %>
+>     <% count = Card.date_count(@date + day) %>
+>     <%= link_to (@date + day).strftime("%d"), :controller => :home, :action => :today, :date => @date + day %><%= if count > 0 then "(#{count})" else "" end %> |
+>   <% end %>
+> <% end %>
+> <%= link_to "New Card", :controller => :cards, :action => :new %> |
+> <%= link_to "Card Pile", :action => :index %> |
+> <%= link_to "Poll Cards", :action => :poll %> |
+> <%= link_to "Handfull", :controller => :cards, :action => :handfull %> |
+> <%= link_to "All Cards", :controller => :cards, :action => :index %>
+> <% end %>
+> </p>
+> 
+> <% if flash[:notice] %>
+>   <div class="notice"><%= flash[:notice] %></div>
+> <% end %>
+> 
+> <iframe src="https://workflowy.com/" width="100%" height="500"></iframe>
+> 
+> <iframe style="float: right" src="https://www.google.com/calendar/embed?showTitle=0&amp;showPrint=0&amp;mode=AGENDA&amp;height=400&amp;wkst=1&amp;bgcolor=%23FFFFFF&amp;src=jarising%40gmail.com&amp;color=%232952A3&amp;src=23093mr6urajf34od62q754tlbbo3llg%40import.calendar.google.com&amp;color=%23A32929&amp;src=m5if85p7sml4lst43t3r259lp0%40group.calendar.google.com&amp;color=%23691426&amp;ctz=America%2FNew_York" style=" border-width:0 " width="450" height="300" frameborder="0" scrolling="no"></iframe>
+> 
+> <% form_for :note, @note, :url => {:action => :note_update, :date => params[:date]} do |f| %>
+>   <%= f.text_area :text, :cols => 80, :onkeypress => "note_dirty();" %>
+> <% end %>
+> 
+> <script language="javascript" type="text/javascript" defer>
+>   note_clean();
+> 
+>   function note_dirty() {
+>     $('note_text').setStyle({borderColor: '#FF0000'});
+>   }
+> 
+>   function note_clean() {
+>     last_clean = $('note_text').value;
+>     $('note_text').setStyle({borderColor: '#000000'});
+>   }
+> 
+>   new PeriodicalExecuter(function(pe) {
+>     var sent = $('note_text').value;
+>     if (last_clean == sent) {
+>       note_clean();
+>       return;
+>     }
+> 
+>     new Ajax.Request('/home/note_update', {
+>       parameters: { date: '<%= params[:date] || @date %>', text: sent, last_clean: last_clean, authenticity_token: "<%= form_authenticity_token%>" },
+>       method: 'post',
+>       onSuccess: function(trans) {
+>         if ($('note_text').value == sent && trans.responseText) {
+>           var oldTop = $('note_text').scrollTop;
+>           $('note_text').value = trans.responseText;
+>           $('note_text').scrollTop = oldTop;
+>           note_clean();
+>         } else
+>           last_clean = trans.responseText;
+>       }
+>    });      
+>   }, 10);
+> </script>
+> 
+> <% if !mobile_agent? %>
+> <div style="float: right">
+>   <%= text_field_with_auto_complete :card, :title, {}, {:method => :get} %>
+>   <%= submit_tag "Search" %>
+> </div>
+> <% end %>
+> 
+> <% form_tag :action => "add_today" do %>
+>   <%= text_field_tag 'title', nil, :size => 25 %>
+>   <%= submit_tag "Add" %>
+> <% end %>
+> 
+> <table width="100%" cellspacing="0" cellpadding="0">
+> <% @cards.each do |card| %>
+>   <tr>
+>     <td>
+>       <b><%= link_to card.title, :controller => :cards, :action => :edit, :id => card.id %> <%= if !card.scheduled.nil? then "(Appt: " +card.scheduled.strftime("%a %b %d, %H:%M") + ")" else "" end %></b>
+>       <% if card.text %>
+>       <a href="#" onclick="Effect.SlideDown('cardtext_<%= card.id %>'); return false">More &raquo;</a>
+>       <% else %>
+>       <a href="#" onclick="Effect.SlideDown('cardtext_<%= card.id %>'); return false">Add &raquo;</a>
+>       <% end %>      
+>       <div id="cardtext_<%= card.id %>" style="display: none">
+>         <textarea id="cardtext_<%= card.id %>_text" rows="6" cols="80"><%= card.text %></textarea>
+>         <img id="cardtext_<%= card.id %>_wait" src="/images/spinner.gif" alt="Please wait..." style="display: none" />
+>         <input type="button" value="Save" onclick="$('cardtext_<%= card.id %>_wait').show(); new Ajax.Request('cardtext_update', { method: 'get', parameters: { id: '<%= card.id %>', value: $('cardtext_<%= card.id %>_text').value }, onSuccess: function(trans) { $('cardtext_<%= card.id %>_text').update(trans.responseText); $('cardtext_<%= card.id %>_wait').hide(); }, onFailure: function() { alert('Failure.'); $('cardtext_<%= card.id %>_wait').hide(); } });" />
+>       </div>
+>     </td>
+>     <% if mobile_agent? %>
+>     <td width="106"><%= today_buttons card %></td>
+>     <% else %>
+>     <td width="170"><%= today_buttons card %></td>
+>     <% end %>
+>   </tr>
+> <% end %>
+> </table>
+> 
+> <b>Upcoming:</b>
+> <% @nexts.each do |card| %>
+>   <%= link_to card.title, :controller => :cards, :action => :show,:id => card.id %>
+> <% end %>
+> ./views/home/.svn/text-base/today.rhtml~.svn-base
+> ./views/home/.svn/text-base/index.html.erb.svn-base
+> <h1>Home</h1>
+> 
+> <% if flash[:notice] %>
+>   <div class="notice"><%= flash[:notice] %></div>
+> <% end %>
+> 
+> <div style="float: right">
+>   <%= text_field_with_auto_complete :card, :title, {}, {:method => :get} %>
+>   <%= submit_tag "Search" %>
+> </div>
+> 
+> <%= link_to "New Card", :controller => :cards, :action => :new %> |
+> <%= link_to "Todays", :action => :today %> |
+> <%= link_to "Poll Cards", :action => :poll %> |
+> <%= link_to "Handfull", :controller => :cards, :action => :handfull %> |
+> <%= link_to "All Cards", :controller => :cards, :action => :index %>
+> 
+> <h2>Weekly View</h2>
+> <table>
+>   <tr>
+>     <th><%= Date.today.strftime("%A, %B") %></th>
+> <% for day in (0..6) %>
+>     <% count = Card.date_count(Date.today + day) %>
+>     <td><%= link_to (Date.today + day).strftime("%d"), :controller => :cards, :action =>:showdate, :id => Date.today + day %><%= if count > 0 then "(#{count})" else "" end %></td>
+> <% end %>
+>   </tr>
+> </table>
+> 
+> <h2>Active Cards</h2>
+> <ul>
+> <% @cards.each do |card| %>
+>   <li><%= link_to card.title, :controller => :cards, :action => :show,:id => card.id %> (<%= if !card.scheduled.nil? then "Appt: " +card.scheduled.strftime("%a %b %d, %H:%M") else "Last: " +card.last_touched.strftime("%b %d, %Y") end %>)
+>     <%= link_to "Edit", :controller => :cards, :action => :edit, :id => card.id %> | <%= file_buttons card %>
+> </li>  
+> <% end %>
+> </ul>
+> ./views/home/.svn/text-base/index.html.erb.svn-base
+> ./views/home/.svn/prop-base
+> cat: ./views/home/.svn/prop-base: Is a directory
+> ./views/home/.svn/format
+> 9
+> ./views/home/.svn/format
+> ./views/home/.svn/all-wcprops
+> K 25
+> svn:wc:ra_dav:version-url
+> V 51
+> /projects/!svn/ver/27/cardsys2/trunk/app/views/home
+> END
+> index.html.erb~
+> K 25
+> svn:wc:ra_dav:version-url
+> V 67
+> /projects/!svn/ver/78/cardsys2/trunk/app/views/home/index.html.erb~
+> END
+> index.html.erb
+> K 25
+> svn:wc:ra_dav:version-url
+> V 66
+> /projects/!svn/ver/76/cardsys2/trunk/app/views/home/index.html.erb
+> END
+> today.rhtml~
+> K 25
+> svn:wc:ra_dav:version-url
+> V 64
+> /projects/!svn/ver/78/cardsys2/trunk/app/views/home/today.rhtml~
+> END
+> today.rhtml
+> K 25
+> svn:wc:ra_dav:version-url
+> V 63
+> /projects/!svn/ver/78/cardsys2/trunk/app/views/home/today.rhtml
+> END
+> ./views/home/.svn/all-wcprops
+> ./views/home/.svn/tmp
+> cat: ./views/home/.svn/tmp: Is a directory
+> ./views/home/.svn/tmp/props
+> cat: ./views/home/.svn/tmp/props: Is a directory
+> ./views/home/.svn/tmp/text-base
+> cat: ./views/home/.svn/tmp/text-base: Is a directory
+> ./views/home/.svn/tmp/prop-base
+> cat: ./views/home/.svn/tmp/prop-base: Is a directory
+> ./views/home/syncs.html~
+> <% if flash[:notice] %>
+>   <div class="notice"><%= flash[:notice] %></div>
+> <% end %>
+> 
+> <iframe style="float: right" src="https://www.google.com/calendar/embed?showTitle=0&amp;showPrint=0&amp;mode=AGENDA&amp;height=400&amp;wkst=1&amp;bgcolor=%23FFFFFF&amp;src=jarising%40gmail.com&amp;color=%232952A3&amp;src=23093mr6urajf34od62q754tlbbo3llg%40import.calendar.google.com&amp;color=%23A32929&amp;src=m5if85p7sml4lst43t3r259lp0%40group.calendar.google.com&amp;color=%23691426&amp;ctz=America%2FNew_York" style=" border-width:0 " width="450" height="300" frameborder="0" scrolling="no"></iframe>
+> 
+> <% form_for :note, @note, :url => {:action => :note_update, :date => params[:date]} do |f| %>
+>   <%= f.text_area :text, :cols => 80, :onkeypress => "note_dirty();" %>
+> <% end %>
+> 
+> <script language="javascript" type="text/javascript" src="/javascripts/home.js"></script>
+> <script type="text/javascript" defer>
+> notewatch('<%= Date.yesterday %>', "<%= form_authenticity_token%>");
+> </script>
+> 
+> <table width="100%" cellspacing="0" cellpadding="0">
+> <% @cards.each do |card| %>
+>   <tr>
+>     <td>
+>       <b><%= link_to card.title, :controller => :cards, :action => :edit, :id => card.id %> <%= if !card.scheduled.nil? then "(Appt: " +card.scheduled.strftime("%a %b %d, %H:%M") + ")" else "" end %></b>
+>       <% if card.text %>
+>       <a href="#" onclick="Effect.SlideDown('cardtext_<%= card.id %>'); return false">More &raquo;</a>
+>       <% else %>
+>       <a href="#" onclick="Effect.SlideDown('cardtext_<%= card.id %>'); return false">Add &raquo;</a>
+>       <% end %>      
+>       <div id="cardtext_<%= card.id %>" style="display: none">
+>         <textarea id="cardtext_<%= card.id %>_text" rows="6" cols="80"><%= card.text %></textarea>
+>         <img id="cardtext_<%= card.id %>_wait" src="/images/spinner.gif" alt="Please wait..." style="display: none" />
+>         <input type="button" value="Save" onclick="$('cardtext_<%= card.id %>_wait').show(); new Ajax.Request('cardtext_update', { method: 'get', parameters: { id: '<%= card.id %>', value: $('cardtext_<%= card.id %>_text').value }, onSuccess: function(trans) { $('cardtext_<%= card.id %>_text').update(trans.responseText); $('cardtext_<%= card.id %>_wait').hide(); }, onFailure: function() { alert('Failure.'); $('cardtext_<%= card.id %>_wait').hide(); } });" />
+>       </div>
+>     </td>
+>     <td width="170"><%= syncs_buttons card %></td>
+>   </tr>
+> <% end %>
+> </table>
+> 
+> <% render "cards/path_select_div" %>
+> ./views/home/syncs.html~
+> ./views/home/_today_controls.html.erb~
+> <% if !mobile_agent? %>
+> 
+> <iframe style="float: right" src="https://www.google.com/calendar/embed?showTitle=0&amp;showPrint=0&amp;mode=AGENDA&amp;height=400&amp;wkst=1&amp;bgcolor=%23FFFFFF&amp;src=jarising%40gmail.com&amp;color=%232952A3&amp;src=23093mr6urajf34od62q754tlbbo3llg%40import.calendar.google.com&amp;color=%23A32929&amp;src=m5if85p7sml4lst43t3r259lp0%40group.calendar.google.com&amp;color=%23691426&amp;ctz=America%2FNew_York" style=" border-width:0 " width="450" height="300" frameborder="0" scrolling="no"></iframe>
+> 
+> <% form_for :note, @note, :url => {:action => :note_update, :date => params[:date]} do |f| %>
+>   <%= f.text_area :text, :cols => 80, :onkeypress => "note_dirty();" %>
+> <% end %>
+> 
+> <% end %>
+> 
+> <script language="javascript" type="text/javascript" src="/javascripts/home.js"></script>
+> <script type="text/javascript" defer>
+> notewatch('<%= params[:date] || @date %>', "<%= form_authenticity_token%>");
+> </script>
+> 
+> <% if !mobile_agent? %>
+> <div style="float: right">
+>   <%= text_field_with_auto_complete :card, :title, {}, {:method => :get} %>
+>   <%= submit_tag "Search" %>
+> </div>
+> <% end %>
+> 
+> <% form_tag :action => "add_today" do %>
+>   <%= text_field_tag 'title', nil, :size => 25, :placeholder => "Card title" %>
+>   <%= text_field_tag 'sched', nil, :size => 10, :placeholder => "Weight/Date" %>
+>   <%= text_field_tag 'path', nil, :size => 10, :placeholder => "Tag path" %>
+>   <%= submit_tag "Add" %>
+> <% end %>
+> ./views/home/_today_controls.html.erb~
+> ./views/home/_today_row.html.erb~
+> <% if card.nil? %>
+>   <td></td>
+> <% else %>
+>     <td>
+>       <b><%= link_to card.title, :controller => :cards, :action => :edit, :id => card.id, :return => request.request_uri %> <%= if !card.scheduled.nil? then "(Appt: " +card.scheduled.strftime("%a %b %d, %H:%M") + ")" else "" end %></b>
+>       <% if card.text %>
+>       <a href="#" onclick="Effect.SlideDown('cardtext_<%= card.id %>'); return false">More &raquo;</a>
+>       <% else %>
+>       <a href="#" onclick="Effect.SlideDown('cardtext_<%= card.id %>'); return false">Add &raquo;</a>
+>       <% end %>      
+>       <div id="cardtext_<%= card.id %>" style="display: none">
+>         <textarea id="cardtext_<%= card.id %>_text" rows="6" cols="80"><%= card.text %></textarea>
+>         <img id="cardtext_<%= card.id %>_wait" src="/images/spinner.gif" alt="Please wait..." style="display: none" />
+>         <input type="button" value="Save" onclick="$('cardtext_<%= card.id %>_wait').show(); new Ajax.Request('cardtext_update', { method: 'get', parameters: { id: '<%= card.id %>', value: $('cardtext_<%= card.id %>_text').value }, onSuccess: function(trans) { $('cardtext_<%= card.id %>_text').update(trans.responseText); $('cardtext_<%= card.id %>_wait').hide(); }, onFailure: function() { alert('Failure.'); $('cardtext_<%= card.id %>_wait').hide(); } });" />
+>       </div>
+>     </td>
+>     <% if mobile_agent? %>
+>     <td width="142"><%= today_buttons card %></td>
+>     <% else %>
+>     <td width="170"><%= today_buttons card %></td>
+>     <% end %>
+> <% end %>./views/home/_today_row.html.erb~
+> ./views/home/top.rhtml~
+> <p><b>Top <%= @date %></b>: 
+> 
+> <%= render :partial => "today_menu" %>
+> 
+> <%= render :partial => "today_controls" %>
+> 
+> <table width="100%" cellspacing="0" cellpadding="0" id="cardtable">
+> <% if @subpaths.count <= 1 %>
+> <% @subpaths.each do |subpath, cards| %>
+> <% cards.each do |card| %>
+>   <tr>
+>     <td>
+>       <%= link_to '[' + get_path(params[:path], subpath) + ']', :controller => :home, :action => :top, :path => get_path(params[:path], subpath) %>
+>       (<%= cards.length %>)
+>     </td>
+> 
+>     <%= render :partial => "today_row", :locals => {:card => card} %>
+>   </tr>
+> <% end %>
+> <% end %>
+> <% else %>
+> <% @subpaths.each do |subpath, cards| %>
+>   <tr>
+>     <td>
+>       <%= link_to '[' + get_path(params[:path], subpath) + ']', :controller => :home, :action => :top, :path => get_path(params[:path], subpath) %>
+>       (<%= cards.length %>)
+>     </td>
+> 
+>     <%= render :partial => "today_row", :locals => {:card => top_card(cards)} %>
+>   </tr>
+> <% end %>
+> <% end %>
+> </table>
+> 
+> <b>Upcoming:</b>
+> <% @nexts.each do |card| %>
+>   <%= link_to card.title, :controller => :cards, :action => :show,:id => card.id %>
+> <% end %>
+> ./views/home/top.rhtml~
+> ./views/home/today.rhtml~
+> <p><b><%= @date %></b>: 
+> 
+> <% if mobile_agent? %>
+> <%= link_to "New", :controller => :cards, :action => :new %> |
+> <%= link_to "Poll", :action => :poll %> |
+> <%= link_to "Hand", :controller => :cards, :action => :handfull %> |
+> <%= link_to "All", :controller => :cards, :action => :index %>
+> <% else %>
+> <% for day in (0..6) %>
+>   <% if day == 0 %>
+>     <% count = Card.date_count(@date - 1) %>
+>     <%= link_to "Yesterday", :controller => :home, :action => :today, :date => @date - 1 %><%= if count > 0 then "(#{count})" else "" end %> |
+>   <% else %>
+>     <% count = Card.date_count(@date + day) %>
+>     <%= link_to (@date + day).strftime("%d"), :controller => :home, :action => :today, :date => @date + day %><%= if count > 0 then "(#{count})" else "" end %> |
+>   <% end %>
+> <% end %>
+> <%= link_to "New Card", :controller => :cards, :action => :new %> |
+> <%= link_to "Card Pile", :action => :index %> |
+> <%= link_to "Poll Cards", :action => :poll %> |
+> <%= link_to "Handfull", :controller => :cards, :action => :handfull %> |
+> <%= link_to "All Cards", :controller => :cards, :action => :index %>
+> <% end %>
+> </p>
+> 
+> <% if flash[:notice] %>
+>   <div class="notice"><%= flash[:notice] %></div>
+> <% end %>
+> 
+> <iframe src="https://workflowy.com/" width="100%" height="500"></iframe>
+> 
+> <iframe style="float: right" src="https://www.google.com/calendar/embed?showTitle=0&amp;showPrint=0&amp;mode=AGENDA&amp;height=400&amp;wkst=1&amp;bgcolor=%23FFFFFF&amp;src=jarising%40gmail.com&amp;color=%232952A3&amp;src=23093mr6urajf34od62q754tlbbo3llg%40import.calendar.google.com&amp;color=%23A32929&amp;src=m5if85p7sml4lst43t3r259lp0%40group.calendar.google.com&amp;color=%23691426&amp;ctz=America%2FNew_York" style=" border-width:0 " width="450" height="300" frameborder="0" scrolling="no"></iframe>
+> 
+> <% form_for :note, @note, :url => {:action => :note_update, :date => params[:date]} do |f| %>
+>   <%= f.text_area :text, :cols => 80, :onkeypress => "note_dirty();" %>
+> <% end %>
+> 
+> <script language="javascript" type="text/javascript" defer>
+>   note_clean();
+> 
+>   function note_dirty() {
+>     $('note_text').setStyle({borderColor: '#FF0000'});
+>   }
+> 
+>   function note_clean() {
+>     last_clean = $('note_text').value;
+>     $('note_text').setStyle({borderColor: '#000000'});
+>   }
+> 
+>   new PeriodicalExecuter(function(pe) {
+>     var sent = $('note_text').value;
+>     if (last_clean == sent) {
+>       note_clean();
+>       return;
+>     }
+> 
+>     new Ajax.Request('/home/note_update', {
+>       parameters: { date: '<%= params[:date] || @date %>', text: sent, last_clean: last_clean, authenticity_token: "<%= form_authenticity_token%>" },
+>       method: 'post',
+>       onSuccess: function(trans) {
+>         if ($('note_text').value == sent && trans.responseText) {
+>           var oldTop = $('note_text').scrollTop;
+>           $('note_text').value = trans.responseText;
+>           $('note_text').scrollTop = oldTop;
+>           note_clean();
+>         } else
+>           last_clean = trans.responseText;
+>       }
+>    });      
+>   }, 10);
+> </script>
+> 
+> <% if !mobile_agent? %>
+> <div style="float: right">
+>   <%= text_field_with_auto_complete :card, :title, {}, {:method => :get} %>
+>   <%= submit_tag "Search" %>
+> </div>
+> <% end %>
+> 
+> <% form_tag :action => "add_today" do %>
+>   <%= text_field_tag 'title', nil, :size => 25 %>
+>   <%= submit_tag "Add" %>
+> <% end %>
+> 
+> <table width="100%" cellspacing="0" cellpadding="0">
+> <% @cards.each do |card| %>
+>   <tr>
+>     <td>
+>       <b><%= link_to card.title, :controller => :cards, :action => :edit, :id => card.id %> <%= if !card.scheduled.nil? then "(Appt: " +card.scheduled.strftime("%a %b %d, %H:%M") + ")" else "" end %></b>
+>       <% if card.text %>
+>       <a href="#" onclick="Effect.SlideDown('cardtext_<%= card.id %>'); return false">More &raquo;</a>
+>       <% else %>
+>       <a href="#" onclick="Effect.SlideDown('cardtext_<%= card.id %>'); return false">Add &raquo;</a>
+>       <% end %>      
+>       <div id="cardtext_<%= card.id %>" style="display: none">
+>         <textarea id="cardtext_<%= card.id %>_text" rows="6" cols="80"><%= card.text %></textarea>
+>         <img id="cardtext_<%= card.id %>_wait" src="/images/spinner.gif" alt="Please wait..." style="display: none" />
+>         <input type="button" value="Save" onclick="$('cardtext_<%= card.id %>_wait').show(); new Ajax.Request('cardtext_update', { method: 'get', parameters: { id: '<%= card.id %>', value: $('cardtext_<%= card.id %>_text').value }, onSuccess: function(trans) { $('cardtext_<%= card.id %>_text').update(trans.responseText); $('cardtext_<%= card.id %>_wait').hide(); }, onFailure: function() { alert('Failure.'); $('cardtext_<%= card.id %>_wait').hide(); } });" />
+>       </div>
+>     </td>
+>     <% if mobile_agent? %>
+>     <td width="106"><%= today_buttons card %></td>
+>     <% else %>
+>     <td width="170"><%= today_buttons card %></td>
+>     <% end %>
+>   </tr>
+> <% end %>
+> </table>
+> 
+> <b>Upcoming:</b>
+> <% @nexts.each do |card| %>
+>   <%= link_to card.title, :controller => :cards, :action => :show,:id => card.id %>
+> <% end %>
+> ./views/home/today.rhtml~
+> ./views/home/_today_menu.rhtml~
+> <% if mobile_agent? %>
+> <% for day in (0..6) %>
+>   <% if day == 0 %>
+>     <% count = Card.date_count(@date - 1) %>
+>     <%= link_to "Yest", :controller => :home, :action => :today, :date => @date - 1 %><%= if count > 0 then "(#{count})" else "" end %> |
+>   <% else %>
+>     <% count = Card.date_count(@date + day) %>
+>     <%= link_to (@date + day).strftime("%d"), :controller => :home, :action => :today, :date => @date + day %><%= if count > 0 then "(#{count})" else "" end %> |
+>   <% end %>
+> <% end %>
+> <%= link_to "New", :controller => :cards, :action => :new %> |
+> <%= link_to "Pile", :action => :index %> |
+> <%= link_to "Poll", :action => :poll %> |
+> <%= link_to "Hand", :controller => :cards, :action => :handfull %> |
+> <%= link_to "All", :controller => :cards, :action => :index %>
+> <% else %>
+> <% for day in (0..6) %>
+>   <% if day == 0 %>
+>     <% count = Card.date_count(@date - 1) %>
+>     <%= link_to "Yesterday", :controller => :home, :action => :today, :date => @date - 1 %><%= if count > 0 then "(#{count})" else "" end %> |
+>   <% else %>
+>     <% count = Card.date_count(@date + day) %>
+>     <%= link_to (@date + day).strftime("%d"), :controller => :home, :action => :today, :date => @date + day %><%= if count > 0 then "(#{count})" else "" end %> |
+>   <% end %>
+> <% end %>
+> <%= link_to "New Card", :controller => :cards, :action => :new %> |
+> <%= link_to "Card Pile", :action => :index %> |
+> <%= link_to "Poll Cards", :action => :poll %> |
+> <%= link_to "Handfull", :controller => :cards, :action => :handfull %> |
+> <%= link_to "All Cards", :controller => :cards, :action => :index %>
+> <% end %>
+> </p>
+> ./views/home/_today_menu.rhtml~
+> ./views/home/_today_row.rhtml~
+> <% if card.nil? %>
+>   <td></td>
+> <% else %>
+>     <td>
+>       <b><%= link_to card.title, :controller => :cards, :action => :edit, :id => card.id %> <%= if !card.scheduled.nil? then "(Appt: " +card.scheduled.strftime("%a %b %d, %H:%M") + ")" else "" end %></b>
+>       <% if card.text %>
+>       <a href="#" onclick="Effect.SlideDown('cardtext_<%= card.id %>'); return false">More &raquo;</a>
+>       <% else %>
+>       <a href="#" onclick="Effect.SlideDown('cardtext_<%= card.id %>'); return false">Add &raquo;</a>
+>       <% end %>      
+>       <div id="cardtext_<%= card.id %>" style="display: none">
+>         <textarea id="cardtext_<%= card.id %>_text" rows="6" cols="80"><%= card.text %></textarea>
+>         <img id="cardtext_<%= card.id %>_wait" src="/images/spinner.gif" alt="Please wait..." style="display: none" />
+>         <input type="button" value="Save" onclick="$('cardtext_<%= card.id %>_wait').show(); new Ajax.Request('cardtext_update', { method: 'get', parameters: { id: '<%= card.id %>', value: $('cardtext_<%= card.id %>_text').value }, onSuccess: function(trans) { $('cardtext_<%= card.id %>_text').update(trans.responseText); $('cardtext_<%= card.id %>_wait').hide(); }, onFailure: function() { alert('Failure.'); $('cardtext_<%= card.id %>_wait').hide(); } });" />
+>       </div>
+>     </td>
+>     <% if mobile_agent? %>
+>     <td width="142"><%= today_buttons card %></td>
+>     <% else %>
+>     <td width="170"><%= today_buttons card %></td>
+>     <% end %>
+> <% end %>./views/home/_today_row.rhtml~
+> ./views/home/top.rhtml
+> <p><b>Top <%= @date %></b>: 
+> 
+> <%= render :partial => "today_menu" %>
+> 
+> <%= render :partial => "today_controls" %>
+> 
+> <%= link_to '[' + get_parent(params[:path]) + ']', :controller => :home, :action => :top, :path => get_parent(params[:path]) %>
+> <table width="100%" cellspacing="0" cellpadding="0" id="cardtable">
+> <% if @subpaths.count <= 1 %>
+> <% @subpaths.each do |subpath, cards| %>
+> <% cards.each do |card| %>
+>   <tr>
+>     <td>
+>       <%= link_to '[' + get_path(params[:path], subpath) + ']', :controller => :home, :action => :top, :path => get_path(params[:path], subpath) %>
+>     </td>
+> 
+>     <%= render :partial => "today_row", :locals => {:card => card} %>
+>   </tr>
+> <% end %>
+> <% end %>
+> <% else %>
+> <% @subpaths.each do |subpath, cards| %>
+>   <tr>
+>     <td>
+>       <%= link_to '[' + get_path(params[:path], subpath) + ']', :controller => :home, :action => :top, :path => get_path(params[:path], subpath) %>
+>       (<%= cards.length %>)
+>     </td>
+> 
+>     <%= render :partial => "today_row", :locals => {:card => top_card(cards)} %>
+>   </tr>
+> <% end %>
+> <% end %>
+> </table>
+> 
+> <b>Upcoming:</b>
+> <% @nexts.each do |card| %>
+>   <%= link_to card.title, :controller => :cards, :action => :show,:id => card.id %>
+> <% end %>
+> ./views/home/top.rhtml
+> ./views/home/index.html.erb~
+> <h1>Home</h1>
+> 
+> <% if flash[:notice] %>
+>   <div class="notice"><%= flash[:notice] %></div>
+> <% end %>
+> 
+> <div style="float: right">
+>   <%= text_field_with_auto_complete :card, :title, {}, {:method => :get} %>
+>   <%= submit_tag "Search" %>
+> </div>
+> 
+> <%= link_to "New Card", :controller => :cards, :action => :new %> |
+> <%= link_to "Todays", :action => :today %> |
+> <%= link_to "Poll Cards", :action => :poll %> |
+> <%= link_to "Handfull", :controller => :cards, :action => :handfull %> |
+> <%= link_to "All Cards", :controller => :cards, :action => :index %>
+> 
+> <h2>Weekly View</h2>
+> <table>
+>   <tr>
+>     <th><%= Date.today.strftime("%A, %B") %></th>
+> <% for day in (0..6) %>
+>     <% count = Card.date_count(Date.today + day) %>
+>     <td><%= link_to (Date.today + day).strftime("%d"), :controller => :cards, :action =>:showdate, :id => Date.today + day %><%= if count > 0 then "(#{count})" else "" end %></td>
+> <% end %>
+>   </tr>
+> </table>
+> 
+> <h2>Active Cards</h2>
+> <ul>
+> <% @cards.each do |card| %>
+>   <li><%= link_to card.title, :controller => :cards, :action => :show,:id => card.id %> (<%= if !card.scheduled.nil? then "Appt: " +card.scheduled.strftime("%a %b %d, %H:%M") else "Last: " +card.last_touched.strftime("%b %d, %Y") end %>)
+>     <%= link_to "Edit", :controller => :cards, :action => :edit, :id => card.id %> | <%= file_buttons card %>
+> </li>
+> 
+>   
+> <% end %>
+> ./views/home/index.html.erb~
+> ./views/home/_today_row.html.erb
+> <% if card.nil? %>
+>   <td></td>
+> <% else %>
+>     <td>
+>       <b><%= link_to card.title, :controller => :cards, :action => :edit, :id => card.id, :return => request.request_uri %> <%= if !card.scheduled.nil? then "(Appt: " +card.scheduled.strftime("%a %b %d, %H:%M") + ")" else "" end %></b>
+>       <% if card.text %>
+>       <a href="#" onclick="Effect.SlideDown('cardtext_<%= card.id %>'); return false">More &raquo;</a>
+>       <% else %>
+>       <a href="#" onclick="Effect.SlideDown('cardtext_<%= card.id %>'); return false">Add &raquo;</a>
+>       <% end %>      
+>       <div id="cardtext_<%= card.id %>" style="display: none">
+>         <textarea id="cardtext_<%= card.id %>_text" rows="6" cols="80"><%= card.text %></textarea>
+>         <img id="cardtext_<%= card.id %>_wait" src="/images/spinner.gif" alt="Please wait..." style="display: none" />
+>         <input type="button" value="Save" onclick="$('cardtext_<%= card.id %>_wait').show(); new Ajax.Request('cardtext_update', { method: 'get', parameters: { id: '<%= card.id %>', value: $('cardtext_<%= card.id %>_text').value }, onSuccess: function(trans) { $('cardtext_<%= card.id %>_text').update(trans.responseText); $('cardtext_<%= card.id %>_wait').hide(); }, onFailure: function() { alert('Failure.'); $('cardtext_<%= card.id %>_wait').hide(); } });" />
+>       </div>
+>     </td>
+>     <% if mobile_agent? %>
+>     <td width="142"><%= today_buttons card %></td>
+>     <% else %>
+>     <td width="170"><%= today_buttons card %></td>
+>     <% end %>
+> <% end %>
+> ./views/home/_today_row.html.erb
+> ./views/home/syncs.html
+> <% if flash[:notice] %>
+>   <div class="notice"><%= flash[:notice] %></div>
+> <% end %>
+> 
+> <iframe style="float: right" src="https://www.google.com/calendar/embed?showTitle=0&amp;showPrint=0&amp;mode=AGENDA&amp;height=400&amp;wkst=1&amp;bgcolor=%23FFFFFF&amp;src=jarising%40gmail.com&amp;color=%232952A3&amp;src=23093mr6urajf34od62q754tlbbo3llg%40import.calendar.google.com&amp;color=%23A32929&amp;src=m5if85p7sml4lst43t3r259lp0%40group.calendar.google.com&amp;color=%23691426&amp;ctz=America%2FNew_York" style=" border-width:0 " width="450" height="300" frameborder="0" scrolling="no"></iframe>
+> 
+> <% form_for :note, @note, :url => {:action => :note_update, :date => params[:date]} do |f| %>
+>   <%= f.text_area :text, :cols => 80, :onkeypress => "note_dirty();" %>
+> <% end %>
+> 
+> <script language="javascript" type="text/javascript" src="/javascripts/home.js"></script>
+> <script type="text/javascript" defer>
+> notewatch('<%= Date.yesterday %>', "<%= form_authenticity_token%>");
+> </script>
+> 
+> <table width="100%" cellspacing="0" cellpadding="0">
+> <% @cards.each do |card| %>
+>   <tr>
+>     <td>
+>       <b><%= link_to card.title, :controller => :cards, :action => :edit, :id => card.id %> <%= if !card.scheduled.nil? then "(Appt: " +card.scheduled.strftime("%a %b %d, %H:%M") + ")" else "" end %></b>
+>       <% if card.text %>
+>       <a href="#" onclick="Effect.SlideDown('cardtext_<%= card.id %>'); return false">More &raquo;</a>
+>       <% else %>
+>       <a href="#" onclick="Effect.SlideDown('cardtext_<%= card.id %>'); return false">Add &raquo;</a>
+>       <% end %>      
+>       <div id="cardtext_<%= card.id %>" style="display: none">
+>         <textarea id="cardtext_<%= card.id %>_text" rows="6" cols="80"><%= card.text %></textarea>
+>         <img id="cardtext_<%= card.id %>_wait" src="/images/spinner.gif" alt="Please wait..." style="display: none" />
+>         <input type="button" value="Save" onclick="$('cardtext_<%= card.id %>_wait').show(); new Ajax.Request('cardtext_update', { method: 'get', parameters: { id: '<%= card.id %>', value: $('cardtext_<%= card.id %>_text').value }, onSuccess: function(trans) { $('cardtext_<%= card.id %>_text').update(trans.responseText); $('cardtext_<%= card.id %>_wait').hide(); }, onFailure: function() { alert('Failure.'); $('cardtext_<%= card.id %>_wait').hide(); } });" />
+>       </div>
+>     </td>
+>     <td width="170"><%= syncs_buttons card %></td>
+>   </tr>
+> <% end %>
+> </table>
+> 
+> Search by path:
+> <div id="pathselect"></div>
+> 
+> <script type="text/javascript">
+>     new Ajax.Request('/cards/path_select', {
+>       method: 'get',
+>       onSuccess: function(transport) {
+>         $('pathselect').replace(transport.responseText);
+>       }
+>     });
+> </script>
+> ./views/home/syncs.html
+> ./views/home/_today_menu.html.erb
+> <% if mobile_agent? %>
+> <% for day in (0..6) %>
+>   <% if day == 0 %>
+>     <% count = Card.date_count(@date - 1) %>
+>     <%= link_to "Yest", :controller => :home, :action => :today, :date => @date - 1 %><%= if count > 0 then "(#{count})" else "" end %> |
+>   <% else %>
+>     <% count = Card.date_count(@date + day) %>
+>     <%= link_to (@date + day).strftime("%d"), :controller => :home, :action => :today, :date => @date + day %><%= if count > 0 then "(#{count})" else "" end %> |
+>   <% end %>
+> <% end %>
+> <%= link_to "New", :controller => :cards, :action => :new %> |
+> <%= link_to "Pile", :action => :index %> |
+> <%= link_to "Poll", :action => :poll %> |
+> <%= link_to "Hand", :controller => :cards, :action => :handfull %> |
+> <%= link_to "All", :controller => :cards, :action => :index %> |
+> 
+> <% if action_name == "today" %>
+> <%= link_to "Top", :action => :top %>
+> <% else %>
+> <%= link_to "Today", :action => :today %>
+> <% end %>
+> 
+> <% else %>
+> 
+> <% for day in (0..6) %>
+>   <% if day == 0 %>
+>     <% count = Card.date_count(@date - 1) %>
+>     <%= link_to "Yesterday", :controller => :home, :action => :today, :date => @date - 1 %><%= if count > 0 then "(#{count})" else "" end %> |
+>   <% else %>
+>     <% count = Card.date_count(@date + day) %>
+>     <%= link_to (@date + day).strftime("%d"), :controller => :home, :action => :today, :date => @date + day %><%= if count > 0 then "(#{count})" else "" end %> |
+>   <% end %>
+> <% end %>
+> <%= link_to "New Card", :controller => :cards, :action => :new %> |
+> <%= link_to "Card Pile", :action => :index %> |
+> <%= link_to "Poll Cards", :action => :poll %> |
+> <%= link_to "Handfull", :controller => :cards, :action => :handfull %> |
+> <%= link_to "All Cards", :controller => :cards, :action => :index %> |
+> 
+> <% if action_name == "today" %>
+> <%= link_to "Top Cards", :action => :top %>
+> <% else %>
+> <%= link_to "Today Cards", :action => :today %>
+> <% end %>
+> 
+> <% end %>
+> </p>
+> ./views/home/_today_menu.html.erb
+> ./views/home/today.html.erb
+> <p><b><%= @date %></b>: 
+> <%= render :partial => "today_menu" %>
+> 
+> <%= render :partial => "today_controls" %>
+> 
+> <table width="100%" cellspacing="0" cellpadding="0" id="cardtable">
+> <% @cards.each do |card| %>
+>   <tr>
+>     <td>
+>       <b><%= link_to card.title, :controller => :cards, :action => :edit, :id => card.id %> <%= if !card.scheduled.nil? then "(Appt: " +card.scheduled.strftime("%a %b %d, %H:%M") + ")" else "" end %></b>
+>       <% if card.text %>
+>       <a href="#" onclick="Effect.SlideDown('cardtext_<%= card.id %>'); return false">More &raquo;</a>
+>       <% else %>
+>       <a href="#" onclick="Effect.SlideDown('cardtext_<%= card.id %>'); return false">Add &raquo;</a>
+>       <% end %>      
+>       <div id="cardtext_<%= card.id %>" style="display: none">
+>         <textarea id="cardtext_<%= card.id %>_text" rows="6" cols="80"><%= card.text %></textarea>
+>         <img id="cardtext_<%= card.id %>_wait" src="/images/spinner.gif" alt="Please wait..." style="display: none" />
+>         <input type="button" value="Save" onclick="$('cardtext_<%= card.id %>_wait').show(); new Ajax.Request('cardtext_update', { method: 'get', parameters: { id: '<%= card.id %>', value: $('cardtext_<%= card.id %>_text').value }, onSuccess: function(trans) { $('cardtext_<%= card.id %>_text').update(trans.responseText); $('cardtext_<%= card.id %>_wait').hide(); }, onFailure: function() { alert('Failure.'); $('cardtext_<%= card.id %>_wait').hide(); } });" />
+>       </div>
+>     </td>
+>     <% if mobile_agent? %>
+>     <td width="142"><%= today_buttons card %></td>
+>     <% else %>
+>     <td width="170"><%= today_buttons card %></td>
+>     <% end %>
+>   </tr>
+> <% end %>
+> </table>
+> 
+> <b>Upcoming:</b>
+> <% @nexts.each do |card| %>
+>   <%= link_to card.title, :controller => :cards, :action => :show,:id => card.id %>
+> <% end %>
+> ./views/home/today.html.erb
+> ./views/projects
+> cat: ./views/projects: Is a directory
+> ./views/projects/index.html.erb
+> <h1>Listing projects</h1>
+> 
+> <table>
+>   <tr>
+>     <th>Title</th>
+>     <th>Description</th>
+>     <th>Image</th>
+>     <th>Milestones</th>
+>     <th>Collaborators</th>
+>     <th>Urls</th>
+>     <th>Last touched</th>
+>   </tr>
+> 
+> <% for project in @projects %>
+>   <tr>
+>     <td><%=h project.title %></td>
+>     <td><%=h project.description %></td>
+>     <td><%=h project.image %></td>
+>     <td><%=h project.milestones %></td>
+>     <td><%=h project.collaborators %></td>
+>     <td><%=h project.urls %></td>
+>     <td><%=h project.last_touched %></td>
+>     <td><%= link_to 'Show', project %></td>
+>     <td><%= link_to 'Edit', edit_project_path(project) %></td>
+>     <td><%= link_to 'Destroy', project, :confirm => 'Are you sure?', :method => :delete %></td>
+>   </tr>
+> <% end %>
+> </table>
+> 
+> <br />
+> 
+> <%= link_to 'New project', new_project_path %>
+> ./views/projects/index.html.erb
+> ./views/projects/.svn
+> cat: ./views/projects/.svn: Is a directory
+> ./views/projects/.svn/entries
+> 9
+> 
+> dir
+> 78
+> http://svn.travelersnetwork.org/projects/cardsys2/trunk/app/views/projects
+> http://svn.travelersnetwork.org/projects
+> 
+> 
+> 
+> 2012-10-09T21:08:50.670646Z
+> 78
+> jrising
+> 
+> 
+> svn:special svn:externals svn:needs-lock
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 0
+> 
+> 
+> edit.html.erb
+> file
+> 
+> 
+> 
+> 
+> 2012-05-05T02:03:44.000000Z
+> b0d74f8e0650e576403560d5acccef50
+> 2012-10-09T21:08:50.670646Z
+> 78
+> jrising
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 792
+> 
+> 
+> index.html.erb
+> file
+> 
+> 
+> 
+> 
+> 2012-05-05T02:03:44.000000Z
+> 373882f1d407e6f29cb35eaad515a0c7
+> 2012-10-09T21:08:50.670646Z
+> 78
+> jrising
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 803
+> 
+> 
+> new.html.erb
+> file
+> 
+> 
+> 
+> 
+> 2012-05-05T02:03:44.000000Z
+> 145977ed57a59765eceae9202b5da773
+> 2012-10-09T21:08:50.670646Z
+> 78
+> jrising
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 754
+> 
+> 
+> show.html.erb
+> file
+> 
+> 
+> 
+> 
+> 2012-05-05T02:03:44.000000Z
+> 4abe5e9bfea00b9b727ecd590ae8658b
+> 2012-10-09T21:08:50.670646Z
+> 78
+> jrising
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 498
+> 
+> 
+> ./views/projects/.svn/entries
+> ./views/projects/.svn/props
+> cat: ./views/projects/.svn/props: Is a directory
+> ./views/projects/.svn/text-base
+> cat: ./views/projects/.svn/text-base: Is a directory
+> ./views/projects/.svn/text-base/edit.html.erb.svn-base
+> <h1>Editing project</h1>
+> 
+> <% form_for(@project) do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :title %><br />
+>     <%= f.text_field :title %>
+>   </p>
+>   <p>
+>     <%= f.label :description %><br />
+>     <%= f.text_area :description %>
+>   </p>
+>   <p>
+>     <%= f.label :image %><br />
+>     <%= f.text_field :image %>
+>   </p>
+>   <p>
+>     <%= f.label :milestones %><br />
+>     <%= f.text_area :milestones %>
+>   </p>
+>   <p>
+>     <%= f.label :collaborators %><br />
+>     <%= f.text_area :collaborators %>
+>   </p>
+>   <p>
+>     <%= f.label :urls %><br />
+>     <%= f.text_area :urls %>
+>   </p>
+>   <p>
+>     <%= f.label :last_touched %><br />
+>     <%= f.datetime_select :last_touched %>
+>   </p>
+>   <p>
+>     <%= f.submit "Update" %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to 'Show', @project %> |
+> <%= link_to 'Back', projects_path %>
+> ./views/projects/.svn/text-base/edit.html.erb.svn-base
+> ./views/projects/.svn/text-base/show.html.erb.svn-base
+> <p>
+>   <b>Title:</b>
+>   <%=h @project.title %>
+> </p>
+> 
+> <p>
+>   <b>Description:</b>
+>   <%=h @project.description %>
+> </p>
+> 
+> <p>
+>   <b>Image:</b>
+>   <%=h @project.image %>
+> </p>
+> 
+> <p>
+>   <b>Milestones:</b>
+>   <%=h @project.milestones %>
+> </p>
+> 
+> <p>
+>   <b>Collaborators:</b>
+>   <%=h @project.collaborators %>
+> </p>
+> 
+> <p>
+>   <b>Urls:</b>
+>   <%=h @project.urls %>
+> </p>
+> 
+> <p>
+>   <b>Last touched:</b>
+>   <%=h @project.last_touched %>
+> </p>
+> 
+> 
+> <%= link_to 'Edit', edit_project_path(@project) %> |
+> <%= link_to 'Back', projects_path %>
+> ./views/projects/.svn/text-base/show.html.erb.svn-base
+> ./views/projects/.svn/text-base/new.html.erb.svn-base
+> <h1>New project</h1>
+> 
+> <% form_for(@project) do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :title %><br />
+>     <%= f.text_field :title %>
+>   </p>
+>   <p>
+>     <%= f.label :description %><br />
+>     <%= f.text_area :description %>
+>   </p>
+>   <p>
+>     <%= f.label :image %><br />
+>     <%= f.text_field :image %>
+>   </p>
+>   <p>
+>     <%= f.label :milestones %><br />
+>     <%= f.text_area :milestones %>
+>   </p>
+>   <p>
+>     <%= f.label :collaborators %><br />
+>     <%= f.text_area :collaborators %>
+>   </p>
+>   <p>
+>     <%= f.label :urls %><br />
+>     <%= f.text_area :urls %>
+>   </p>
+>   <p>
+>     <%= f.label :last_touched %><br />
+>     <%= f.datetime_select :last_touched %>
+>   </p>
+>   <p>
+>     <%= f.submit "Create" %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to 'Back', projects_path %>
+> ./views/projects/.svn/text-base/new.html.erb.svn-base
+> ./views/projects/.svn/text-base/index.html.erb.svn-base
+> <h1>Listing projects</h1>
+> 
+> <table>
+>   <tr>
+>     <th>Title</th>
+>     <th>Description</th>
+>     <th>Image</th>
+>     <th>Milestones</th>
+>     <th>Collaborators</th>
+>     <th>Urls</th>
+>     <th>Last touched</th>
+>   </tr>
+> 
+> <% for project in @projects %>
+>   <tr>
+>     <td><%=h project.title %></td>
+>     <td><%=h project.description %></td>
+>     <td><%=h project.image %></td>
+>     <td><%=h project.milestones %></td>
+>     <td><%=h project.collaborators %></td>
+>     <td><%=h project.urls %></td>
+>     <td><%=h project.last_touched %></td>
+>     <td><%= link_to 'Show', project %></td>
+>     <td><%= link_to 'Edit', edit_project_path(project) %></td>
+>     <td><%= link_to 'Destroy', project, :confirm => 'Are you sure?', :method => :delete %></td>
+>   </tr>
+> <% end %>
+> </table>
+> 
+> <br />
+> 
+> <%= link_to 'New project', new_project_path %>
+> ./views/projects/.svn/text-base/index.html.erb.svn-base
+> ./views/projects/.svn/prop-base
+> cat: ./views/projects/.svn/prop-base: Is a directory
+> ./views/projects/.svn/format
+> 9
+> ./views/projects/.svn/format
+> ./views/projects/.svn/all-wcprops
+> K 25
+> svn:wc:ra_dav:version-url
+> V 55
+> /projects/!svn/ver/78/cardsys2/trunk/app/views/projects
+> END
+> edit.html.erb
+> K 25
+> svn:wc:ra_dav:version-url
+> V 69
+> /projects/!svn/ver/78/cardsys2/trunk/app/views/projects/edit.html.erb
+> END
+> index.html.erb
+> K 25
+> svn:wc:ra_dav:version-url
+> V 70
+> /projects/!svn/ver/78/cardsys2/trunk/app/views/projects/index.html.erb
+> END
+> new.html.erb
+> K 25
+> svn:wc:ra_dav:version-url
+> V 68
+> /projects/!svn/ver/78/cardsys2/trunk/app/views/projects/new.html.erb
+> END
+> show.html.erb
+> K 25
+> svn:wc:ra_dav:version-url
+> V 69
+> /projects/!svn/ver/78/cardsys2/trunk/app/views/projects/show.html.erb
+> END
+> ./views/projects/.svn/all-wcprops
+> ./views/projects/.svn/tmp
+> cat: ./views/projects/.svn/tmp: Is a directory
+> ./views/projects/.svn/tmp/props
+> cat: ./views/projects/.svn/tmp/props: Is a directory
+> ./views/projects/.svn/tmp/text-base
+> cat: ./views/projects/.svn/tmp/text-base: Is a directory
+> ./views/projects/.svn/tmp/prop-base
+> cat: ./views/projects/.svn/tmp/prop-base: Is a directory
+> ./views/projects/edit.html.erb
+> <h1>Editing project</h1>
+> 
+> <% form_for(@project) do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :title %><br />
+>     <%= f.text_field :title %>
+>   </p>
+>   <p>
+>     <%= f.label :description %><br />
+>     <%= f.text_area :description %>
+>   </p>
+>   <p>
+>     <%= f.label :image %><br />
+>     <%= f.text_field :image %>
+>   </p>
+>   <p>
+>     <%= f.label :milestones %><br />
+>     <%= f.text_area :milestones %>
+>   </p>
+>   <p>
+>     <%= f.label :collaborators %><br />
+>     <%= f.text_area :collaborators %>
+>   </p>
+>   <p>
+>     <%= f.label :urls %><br />
+>     <%= f.text_area :urls %>
+>   </p>
+>   <p>
+>     <%= f.label :last_touched %><br />
+>     <%= f.datetime_select :last_touched %>
+>   </p>
+>   <p>
+>     <%= f.submit "Update" %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to 'Show', @project %> |
+> <%= link_to 'Back', projects_path %>
+> ./views/projects/edit.html.erb
+> ./views/projects/show.html.erb
+> <p>
+>   <b>Title:</b>
+>   <%=h @project.title %>
+> </p>
+> 
+> <p>
+>   <b>Description:</b>
+>   <%=h @project.description %>
+> </p>
+> 
+> <p>
+>   <b>Image:</b>
+>   <%=h @project.image %>
+> </p>
+> 
+> <p>
+>   <b>Milestones:</b>
+>   <%=h @project.milestones %>
+> </p>
+> 
+> <p>
+>   <b>Collaborators:</b>
+>   <%=h @project.collaborators %>
+> </p>
+> 
+> <p>
+>   <b>Urls:</b>
+>   <%=h @project.urls %>
+> </p>
+> 
+> <p>
+>   <b>Last touched:</b>
+>   <%=h @project.last_touched %>
+> </p>
+> 
+> 
+> <%= link_to 'Edit', edit_project_path(@project) %> |
+> <%= link_to 'Back', projects_path %>
+> ./views/projects/show.html.erb
+> ./views/projects/new.html.erb
+> <h1>New project</h1>
+> 
+> <% form_for(@project) do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :title %><br />
+>     <%= f.text_field :title %>
+>   </p>
+>   <p>
+>     <%= f.label :description %><br />
+>     <%= f.text_area :description %>
+>   </p>
+>   <p>
+>     <%= f.label :image %><br />
+>     <%= f.text_field :image %>
+>   </p>
+>   <p>
+>     <%= f.label :milestones %><br />
+>     <%= f.text_area :milestones %>
+>   </p>
+>   <p>
+>     <%= f.label :collaborators %><br />
+>     <%= f.text_area :collaborators %>
+>   </p>
+>   <p>
+>     <%= f.label :urls %><br />
+>     <%= f.text_area :urls %>
+>   </p>
+>   <p>
+>     <%= f.label :last_touched %><br />
+>     <%= f.datetime_select :last_touched %>
+>   </p>
+>   <p>
+>     <%= f.submit "Create" %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to 'Back', projects_path %>
+> ./views/projects/new.html.erb
+> ./views/cards
+> cat: ./views/cards: Is a directory
+> ./views/cards/index.html.erb
+> <h1>Listing cards</h1>
+> 
+> <table>
+>   <tr>
+>     <th>Title</th>
+>     <th>Tags</th>
+>     <th>Scheduled</th>
+>     <th>Weight</th>
+>     <th>Flags</th>
+>     <th>Created</th>
+>     <th>Last touched</th>
+>   </tr>
+> 
+> <% for card in @cards %>
+>   <tr>
+>     <td><%=h card.title %></td>
+>    <td><%=h card.tag_list %></td>
+>     <td><%=h card.schmethod %> <%=h (if card.scheduled.nil? then "" else card.scheduled.strftime "%a %b %d, %H:%M" end) %></td>
+>     <td><%=h card.weighted %></td>
+>     <td><%=h (if card.active then "Active" else '' end) %><%=h (if card.deleted then "Deleted" else '' end) %></td>
+>     <td><%=h (if card.created.nil? then "unknown" else card.created.strftime "%a %b %d" end) %></td>
+>     <td><%=h card.last_touched.strftime "%a %b %d" %></td>
+>     <td><%= link_to 'Show', :action => :show, :id => card %></td>
+>     <td><%= link_to 'Edit', :action => :edit, :id => card %></td>
+>     <td><%= link_to 'Destroy', :action => :destroy, :id => card, :confirm => 'Are you sure?' %></td>
+>   </tr>
+> <% end %>
+> </table>
+> 
+> <br />
+> 
+> <%= link_to 'New card', :action => :new %>
+> ./views/cards/index.html.erb
+> ./views/cards/edit.html.erb~
+> <h1>Editing card</h1>
+> 
+> <% form_for :card, @card, :url => {:action => :update, :id => @card.id} do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :title %><br />
+>     <%= f.text_field :title %>
+>   </p>
+>   <p>
+>     <%= f.label :text %><br />
+>     <%= f.text_area :text %>
+>   </p>
+>   <p>
+>     <%= f.label :tag_list %><br />
+>     <%= f.text_field :tag_list %>
+>   </p>
+>   <p>
+>     <%= f.label :weighted %><br />
+>     <%= f.text_field :weighted %>
+>   </p>
+>   <p>
+>     <%= f.label :scheduled %><br />
+>    <%= f.select :schedule_usage, [["Unscheduled", false], ["Once Ever", true], ["Yearly", 'sched_yearly'], ["Monthly", 'sched_monthly'], ["Weekly", 'sched_weekly'], ["Daily", 'sched_daily'], ["By Num Yearly", 'sched_numyearly'], ["By Num Monthly", 'sched_nummonthly']] %>
+>     <%= f.datetime_select :scheduled, :default => 1.days.from_now %>
+>     <%= f.label :duration %>
+>     <%= f.text_field :duration, :size => 4 %>
+>   </p>
+>   <p>
+>     <%= f.label :active %><br />
+>     <%= f.check_box :active %>
+>   </p>
+>   <p>
+>     <%= f.label :deleted %><br />
+>     <%= f.check_box :deleted %>
+>   </p>
+>   <p>
+>     <%= f.label :created %><br />
+>     <%= f.datetime_select :created, :start_year => 1950 %>
+>   </p>
+>   <p>
+>     <%= f.label :path %><br />
+>     <%= f.text_field :path %>
+>   </p>
+>   <p>
+>     <input type="hidden" name="return" value="<%= @post_return %>" />
+>     <%= f.submit "Update" %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to 'Show', :action => :show %> |
+> <%= link_to 'Home', :controller => :home, :action => :index %>
+> ./views/cards/edit.html.erb~
+> ./views/cards/_path_select_div.html.erb~
+> <script type="text/javascript">
+>   $('#pathselect').load('/cards/pathselect');
+> </script>
+> 
+> <div id="pathselect"></div>
+> ./views/cards/_path_select_div.html.erb~
+> ./views/cards/.svn
+> cat: ./views/cards/.svn: Is a directory
+> ./views/cards/.svn/entries
+> 9
+> 
+> dir
+> 32
+> http://svn.travelersnetwork.org/projects/cardsys2/trunk/app/views/cards
+> http://svn.travelersnetwork.org/projects
+> 
+> 
+> 
+> 2009-11-12T03:40:58.100930Z
+> 27
+> jrising
+> 
+> 
+> svn:special svn:externals svn:needs-lock
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 0f8f9d27-3b5d-0410-98be-a940f4ea6fd4
+> 
+> 
+> edit.html.erb
+> file
+> 76
+> 
+> 
+> 
+> 2011-01-19T03:52:50.000000Z
+> 2969f7e371ef2a6b48da42976f575f18
+> 2012-10-09T21:06:54.183373Z
+> 76
+> jrising
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 1329
+> 
+> 
+> index.html.erb
+> file
+> 76
+> 
+> 
+> 
+> 2010-09-06T22:46:22.000000Z
+> 2758dad9844510252f5036a0943f0e23
+> 2012-10-09T21:06:54.183373Z
+> 76
+> jrising
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 996
+> 
+> 
+> new.html.erb
+> file
+> 76
+> 
+> 
+> 
+> 2010-04-28T04:19:32.000000Z
+> 04b37509c2002652b633cf08f54b14db
+> 2012-10-09T21:06:54.183373Z
+> 76
+> jrising
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 1208
+> 
+> 
+> show.html.erb
+> file
+> 
+> 
+> 
+> 
+> 2009-11-12T03:49:40.000000Z
+> f35edee1c9cad112298128ac81c7b490
+> 2009-11-12T03:40:58.100930Z
+> 27
+> jrising
+> 
+> 
+> names.html.erb
+> file
+> 78
+> 
+> 
+> 
+> 2011-06-22T20:58:29.000000Z
+> 2b43a066a55ee48580fa357c41ebb657
+> 2012-10-09T21:08:50.670646Z
+> 78
+> jrising
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 92
+> 
+> 
+> ./views/cards/.svn/entries
+> ./views/cards/.svn/props
+> cat: ./views/cards/.svn/props: Is a directory
+> ./views/cards/.svn/text-base
+> cat: ./views/cards/.svn/text-base: Is a directory
+> ./views/cards/.svn/text-base/edit.html.erb.svn-base
+> <h1>Editing card</h1>
+> 
+> <% form_for :card, @card, :url => {:action => :update, :id => @card.id} do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :title %><br />
+>     <%= f.text_field :title %>
+>   </p>
+>   <p>
+>     <%= f.label :text %><br />
+>     <%= f.text_area :text %>
+>   </p>
+>   <p>
+>     <%= f.label :tag_list %><br />
+>     <%= f.text_field :tag_list %>
+>   </p>
+>   <p>
+>     <%= f.label :weighted %><br />
+>     <%= f.text_field :weighted %>
+>   </p>
+>   <p>
+>     <%= f.label :scheduled %><br />
+>    <%= f.select :schedule_usage, [["Unscheduled", false], ["Once Ever", true], ["Yearly", 'sched_yearly'], ["Monthly", 'sched_monthly'], ["Weekly", 'sched_weekly'], ["Daily", 'sched_daily'], ["By Num Yearly", 'sched_numyearly'], ["By Num Monthly", 'sched_nummonthly']] %>
+>     <%= f.datetime_select :scheduled, :default => 1.days.from_now %>
+>     <%= f.label :duration %>
+>     <%= f.text_field :duration, :size => 4 %>
+>   </p>
+>   <p>
+>     <%= f.label :active %><br />
+>     <%= f.check_box :active %>
+>   </p>
+>   <p>
+>     <%= f.label :deleted %><br />
+>     <%= f.check_box :deleted %>
+>   </p>
+>   <p>
+>     <%= f.label :created %><br />
+>     <%= f.datetime_select :created, :start_year => 1950 %>
+>   </p>
+>  <p>
+>     <%= f.submit "Update" %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to 'Show', :action => :show %> |
+> <%= link_to 'Home', :controller => :home, :action => :index %>
+> ./views/cards/.svn/text-base/edit.html.erb.svn-base
+> ./views/cards/.svn/text-base/show.html.erb.svn-base
+> <p>
+>   <b>Title:</b>
+>   <%=h @card.title %>
+> </p>
+> 
+> <p>
+>   <b>Text:</b>
+>   <%=h @card.text %>
+> </p>
+> 
+> <p>
+>   <b>Tags:</b>
+>   <%=h @card.tag_list %>
+> </b>
+> 
+> <p>
+>   <b>Scheduled:</b>
+>   <%=h @card.schmethod %> <%=h @card.scheduled %>
+> </p>
+> 
+> <p>
+>   <b>Weighted:</b>
+>   <%=h @card.weighted %>
+> </p>
+> 
+> <p>
+>   <b>Active:</b>
+>   <%=h @card.active %>
+> </p>
+> 
+> <p>
+>   <b>Created:</b>
+>   <%=h @card.created %>
+> </p>
+> 
+> <p>
+>   <b>Last touched:</b>
+>   <%=h @card.last_touched %>
+> </p>
+> 
+> 
+> <%= link_to 'Edit', :action => :edit, :id => @card %> |
+> <%= link_to 'New', :action => :new %> |
+> <%= link_to 'Home', :controller => :home, :action => :index %>
+> ./views/cards/.svn/text-base/show.html.erb.svn-base
+> ./views/cards/.svn/text-base/new.html.erb.svn-base
+> <h1>New card</h1>
+> 
+> <% form_for :card, @card, :url => {:action => :create} do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :title %><br />
+>     <%= f.text_field :title %>
+>   </p>
+>   <p>
+>     <%= f.label :text %><br />
+>     <%= f.text_area :text %>
+>   </p>
+>   <p>
+>     <%= f.label :tag_list %><br />
+>     <%= f.text_field :tag_list %>
+>   </p>
+>   <p>
+>     <%= f.label :weighted %><br />
+>     <%= f.text_field :weighted %>
+>   </p>
+>   <p>
+>     <%= f.label :scheduled %><br />
+>    <%= f.select :schedule_usage, [["Unscheduled", false], ["Once Ever", true], ["Yearly", 'sched_yearly'], ["Monthly", 'sched_monthly'], ["Weekly", 'sched_weekly'], ["Daily", 'sched_daily'], ["By Num Yearly", 'sched_numyearly'], ["By Num Monthly", 'sched_nummonthly']] %>
+>      <%= f.datetime_select :scheduled, :default => 1.days.from_now, :minute_step => 5 %>
+>     <%= f.label :duration %>
+>     <%= f.text_field :duration, :size => 4 %>
+>   </p>
+>    <p>
+>     <%= f.label :active %><br />
+>     <%= f.check_box :active %>
+>   </p>
+>   <p>
+>     <%= f.label :created %><br />
+>     <%= f.datetime_select :created, :start_year => 1950 %>
+>   </p>
+>  <p>
+>     <%= f.submit "Create" %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to 'Back', :controller => :home, :action => :index %>
+> ./views/cards/.svn/text-base/new.html.erb.svn-base
+> ./views/cards/.svn/text-base/names.html.erb.svn-base
+> <% for card in @cards %>
+> <%= link_to card.title, :action => :edit, :id => card %>
+> <% end %>
+> ./views/cards/.svn/text-base/names.html.erb.svn-base
+> ./views/cards/.svn/text-base/index.html.erb.svn-base
+> <h1>Listing cards</h1>
+> 
+> <table>
+>   <tr>
+>     <th>Title</th>
+>     <th>Tags</th>
+>     <th>Scheduled</th>
+>     <th>Weight</th>
+>     <th>Flags</th>
+>     <th>Created</th>
+>     <th>Last touched</th>
+>   </tr>
+> 
+> <% for card in @cards %>
+>   <tr>
+>     <td><%=h card.title %></td>
+>    <td><%=h card.tag_list %></td>
+>     <td><%=h card.schmethod %> <%=h (if card.scheduled.nil? then "" else card.scheduled.strftime "%a %b %d, %H:%M" end) %></td>
+>     <td><%=h card.weighted %></td>
+>     <td><%=h (if card.active then "Active" else '' end) %><%=h (if card.deleted then "Deleted" else '' end) %></td>
+>     <td><%=h card.created.strftime "%a %b %d" %></td>
+>     <td><%=h card.last_touched.strftime "%a %b %d" %></td>
+>     <td><%= link_to 'Show', :action => :show, :id => card %></td>
+>     <td><%= link_to 'Edit', :action => :edit, :id => card %></td>
+>     <td><%= link_to 'Destroy', :action => :destroy, :id => card, :confirm => 'Are you sure?' %></td>
+>   </tr>
+> <% end %>
+> </table>
+> 
+> <br />
+> 
+> <%= link_to 'New card', :action => :new %>
+> ./views/cards/.svn/text-base/index.html.erb.svn-base
+> ./views/cards/.svn/prop-base
+> cat: ./views/cards/.svn/prop-base: Is a directory
+> ./views/cards/.svn/format
+> 9
+> ./views/cards/.svn/format
+> ./views/cards/.svn/all-wcprops
+> K 25
+> svn:wc:ra_dav:version-url
+> V 52
+> /projects/!svn/ver/27/cardsys2/trunk/app/views/cards
+> END
+> edit.html.erb
+> K 25
+> svn:wc:ra_dav:version-url
+> V 66
+> /projects/!svn/ver/76/cardsys2/trunk/app/views/cards/edit.html.erb
+> END
+> index.html.erb
+> K 25
+> svn:wc:ra_dav:version-url
+> V 67
+> /projects/!svn/ver/76/cardsys2/trunk/app/views/cards/index.html.erb
+> END
+> new.html.erb
+> K 25
+> svn:wc:ra_dav:version-url
+> V 65
+> /projects/!svn/ver/76/cardsys2/trunk/app/views/cards/new.html.erb
+> END
+> show.html.erb
+> K 25
+> svn:wc:ra_dav:version-url
+> V 66
+> /projects/!svn/ver/27/cardsys2/trunk/app/views/cards/show.html.erb
+> END
+> names.html.erb
+> K 25
+> svn:wc:ra_dav:version-url
+> V 67
+> /projects/!svn/ver/78/cardsys2/trunk/app/views/cards/names.html.erb
+> END
+> ./views/cards/.svn/all-wcprops
+> ./views/cards/.svn/tmp
+> cat: ./views/cards/.svn/tmp: Is a directory
+> ./views/cards/.svn/tmp/props
+> cat: ./views/cards/.svn/tmp/props: Is a directory
+> ./views/cards/.svn/tmp/text-base
+> cat: ./views/cards/.svn/tmp/text-base: Is a directory
+> ./views/cards/.svn/tmp/prop-base
+> cat: ./views/cards/.svn/tmp/prop-base: Is a directory
+> ./views/cards/new.html.erb~
+> <h1>New card</h1>
+> 
+> <% form_for :card, @card, :url => {:action => :create} do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :title %><br />
+>     <%= f.text_field :title %>
+>   </p>
+>   <p>
+>     <%= f.label :text %><br />
+>     <%= f.text_area :text %>
+>   </p>
+>   <p>
+>     <%= f.label :tag_list %><br />
+>     <%= f.text_field :tag_list %>
+>   </p>
+>   <p>
+>     <%= f.label :weighted %><br />
+>     <%= f.text_field :weighted %>
+>   </p>
+>   <p>
+>     <%= f.label :scheduled %><br />
+>    <%= f.select :schedule_usage, [["Unscheduled", false], ["Once Ever", true], ["Yearly", 'sched_yearly'], ["Monthly", 'sched_monthly'], ["Weekly", 'sched_weekly'], ["Daily", 'sched_daily'], ["By Num Yearly", 'sched_numyearly'], ["By Num Monthly", 'sched_nummonthly']] %>
+>      <%= f.datetime_select :scheduled, :default => 1.days.from_now, :minute_step => 5 %>
+>   </p>
+>  <p>
+>     <%= f.label :active %><br />
+>     <%= f.check_box :active %>
+>   </p>
+>   <p>
+>     <%= f.label :created %><br />
+>     <%= f.datetime_select :created, :start_year => 1950 %>
+>   </p>
+>  <p>
+>     <%= f.submit "Create" %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to 'Back', :controller => :home, :action => :index %>
+> ./views/cards/new.html.erb~
+> ./views/cards/index.html.erb~
+> <h1>Listing cards</h1>
+> 
+> <table>
+>   <tr>
+>     <th>Title</th>
+>     <th>Tags</th>
+>     <th>Scheduled</th>
+>     <th>Weight</th>
+>     <th>Flags</th>
+>     <th>Created</th>
+>     <th>Last touched</th>
+>   </tr>
+> 
+> <% for card in @cards %>
+>   <tr>
+>     <td><%=h card.title %></td>
+>    <td><%=h card.tag_list %></td>
+>     <td><%=h card.schmethod %> <%=h (if card.scheduled.nil? then "" else card.scheduled.strftime "%a %b %d, %H:%M" end) %></td>
+>     <td><%=h card.weighted %></td>
+>     <td><%=h if card.active then "Active" end %><%=h if card.deleted then "Deleted" end %></td>
+>     <td><%=h card.created.strftime "%a %b %d" %></td>
+>     <td><%=h card.last_touched.strftime "%a %b %d" %></td>
+>     <td><%= link_to 'Show', :action => :show, :id => card %></td>
+>     <td><%= link_to 'Edit', :action => :edit, :id => card %></td>
+>     <td><%= link_to 'Destroy', :action => :destroy, :id => card, :confirm => 'Are you sure?' %></td>
+>   </tr>
+> <% end %>
+> </table>
+> 
+> <br />
+> 
+> <%= link_to 'New card', :action => :new %>
+> ./views/cards/index.html.erb~
+> ./views/cards/edit.html.erb
+> <h1>Editing card</h1>
+> 
+> <%= form_for(@card, url: {action: :update, id: @card.id}) do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :title %><br />
+>     <%= f.text_field :title %>
+>   </p>
+>   <p>
+>     <%= f.label :text %><br />
+>     <%= f.text_area :text %>
+>   </p>
+>   <p>
+>     <%= f.label :tag_list %><br />
+>     <%= f.text_field :tag_list %>
+>   </p>
+>   <p>
+>     <%= f.label :weighted %><br />
+>     <%= f.text_field :weighted %>
+>   </p>
+>   <p>
+>     <%= f.label :scheduled %><br />
+>    <%= f.select :schedule_usage, [["Unscheduled", false], ["Once Ever", true], ["Yearly", 'sched_yearly'], ["Monthly", 'sched_monthly'], ["Weekly", 'sched_weekly'], ["Daily", 'sched_daily'], ["By Num Yearly", 'sched_numyearly'], ["By Num Monthly", 'sched_nummonthly']] %>
+>     <% if false %>
+>     <%= f.datetime_select :scheduled, :default => 1.days.from_now %>
+>     <% end %>
+>     <%= f.label :duration %>
+>     <%= f.text_field :duration, :size => 4 %>
+>   </p>
+>   <p>
+>     <%= f.label :active %><br />
+>     <%= f.check_box :active %>
+>   </p>
+>   <p>
+>     <%= f.label :deleted %><br />
+>     <%= f.check_box :deleted %>
+>   </p>
+>   <p>
+>     <%= f.label :created %><br />
+>     <% if false %>
+>     <%= f.datetime_select :created, :start_year => 1950 %>
+>     <% end %>
+>   </p>
+>   <p>
+>     <%= f.label :path %><br />
+>     <%= f.text_field :path %>
+>   </p>
+>   <p>
+>     <input type="hidden" name="return" value="<%= @post_return %>" />
+>     <%= f.submit "Update" %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to 'Show', :action => :show %> |
+> <%= link_to 'Home', :controller => :home, :action => :index %>
+> ./views/cards/edit.html.erb
+> ./views/cards/path_select.html.erb~
+> <script type="text/javascript">
+>   $('#pathselect').load('/cards/pathselect');
+> </script>
+> 
+> <div id="pathselect"></div>
+> ./views/cards/path_select.html.erb~
+> ./views/cards/show.html.erb
+> <p>
+>   <b>Title:</b>
+>   <%=h @card.title %>
+> </p>
+> 
+> <p>
+>   <b>Text:</b>
+>   <%=h @card.text %>
+> </p>
+> 
+> <p>
+>   <b>Tags:</b>
+>   <%=h @card.tag_list %>
+> </b>
+> 
+> <p>
+>   <b>Scheduled:</b>
+>   <%=h @card.schmethod %> <%=h @card.scheduled %>
+> </p>
+> 
+> <p>
+>   <b>Weighted:</b>
+>   <%=h @card.weighted %>
+> </p>
+> 
+> <p>
+>   <b>Active:</b>
+>   <%=h @card.active %>
+> </p>
+> 
+> <p>
+>   <b>Created:</b>
+>   <%=h @card.created %>
+> </p>
+> 
+> <p>
+>   <b>Last touched:</b>
+>   <%=h @card.last_touched %>
+> </p>
+> 
+> 
+> <%= link_to 'Edit', :action => :edit, :id => @card %> |
+> <%= link_to 'New', :action => :new %> |
+> <%= link_to 'Home', :controller => :home, :action => :index %>
+> ./views/cards/show.html.erb
+> ./views/cards/path_select.html.erb
+> <select name="path">
+>   <% for path in @paths %>
+>   <option value="<%= path %>"><%= path %></option>
+>   <% end %>
+> </select>
+> ./views/cards/path_select.html.erb
+> ./views/cards/names.html.erb
+> <% for card in @cards %>
+> <%= link_to card.title, :action => :edit, :id => card %>
+> <% end %>
+> ./views/cards/names.html.erb
+> ./views/cards/new.html.erb
+> <h1>New card</h1>
+> 
+> <%= form_for @card, :url => {:action => :create} do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :title %><br />
+>     <%= f.text_field :title %>
+>   </p>
+>   <p>
+>     <%= f.label :text %><br />
+>     <%= f.text_area :text %>
+>   </p>
+>   <p>
+>     <%= f.label :tag_list %><br />
+>     <%= f.text_field :tag_list %>
+>   </p>
+>   <p>
+>     <%= f.label :weighted %><br />
+>     <%= f.text_field :weighted %>
+>   </p>
+> <%
+> =begin
+> %>
+>   <p>
+>     <%= f.label :scheduled %><br />
+>    <%= f.select :schedule_usage, [["Unscheduled", false], ["Once Ever", true], ["Yearly", 'sched_yearly'], ["Monthly", 'sched_monthly'], ["Weekly", 'sched_weekly'], ["Daily", 'sched_daily'], ["By Num Yearly", 'sched_numyearly'], ["By Num Monthly", 'sched_nummonthly']] %>
+>      <%= f.datetime_select :scheduled, :default => 1.days.from_now, :minute_step => 5 %>
+>     <%= f.label :duration %>
+>     <%= f.text_field :duration, :size => 4 %>
+>   </p>
+> <%
+> =end
+> %>
+>    <p>
+>     <%= f.label :active %><br />
+>     <%= f.check_box :active %>
+>   </p>
+> <%
+> =begin
+> %>
+>   <p>
+>     <%= f.label :created %><br />
+>     <%= f.datetime_select :created, :start_year => 1950 %>
+>   </p>
+> <%
+> =end
+> %>
+>   <p>
+>     <%= f.label :path %><br />
+>     <%= f.text_field :path %>
+>   </p>
+>   <p>
+>     <%= f.submit "Create" %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to 'Back', :controller => :home, :action => :index %>
+> ./views/cards/new.html.erb
+> ./views/cards/pathselect.html.erb~
+> <% for card in @cards %>
+> <%= link_to card.title, :action => :edit, :id => card %>
+> <% end %>
+> ./views/cards/pathselect.html.erb~
+> ./views/cards/names.html.erb~
+> <h1>Listing cards</h1>
+> 
+> <table>
+>   <tr>
+>     <th>Title</th>
+>     <th>Tags</th>
+>     <th>Scheduled</th>
+>     <th>Weight</th>
+>     <th>Flags</th>
+>     <th>Created</th>
+>     <th>Last touched</th>
+>   </tr>
+> 
+> <% for card in @cards %>
+>   <tr>
+>     <td><%=h card.title %></td>
+>    <td><%=h card.tag_list %></td>
+>     <td><%=h card.schmethod %> <%=h (if card.scheduled.nil? then "" else card.scheduled.strftime "%a %b %d, %H:%M" end) %></td>
+>     <td><%=h card.weighted %></td>
+>     <td><%=h (if card.active then "Active" else '' end) %><%=h (if card.deleted then "Deleted" else '' end) %></td>
+>     <td><%=h card.created.strftime "%a %b %d" %></td>
+>     <td><%=h card.last_touched.strftime "%a %b %d" %></td>
+>     <td><%= link_to 'Show', :action => :show, :id => card %></td>
+>     <td><%= link_to 'Edit', :action => :edit, :id => card %></td>
+>     <td><%= link_to 'Destroy', :action => :destroy, :id => card, :confirm => 'Are you sure?' %></td>
+>   </tr>
+> <% end %>
+> </table>
+> 
+> <br />
+> 
+> <%= link_to 'New card', :action => :new %>
+> ./views/cards/names.html.erb~
+> ./views/notes
+> cat: ./views/notes: Is a directory
+> ./views/notes/index.html.erb
+> <h1>Listing notes</h1>
+> 
+> <table>
+>   <tr>
+>     <th>Date</th>
+>     <th>Text</th>
+>   </tr>
+> 
+> <% for note in @notes %>
+>   <tr>
+>     <td><%=h note.date %></td>
+>     <td><%=h note.text %></td>
+>     <td><%= link_to 'Show', note %></td>
+>     <td><%= link_to 'Edit', edit_note_path(note) %></td>
+>     <td><%= link_to 'Destroy', note, :confirm => 'Are you sure?', :method => :delete %></td>
+>   </tr>
+> <% end %>
+> </table>
+> 
+> <br />
+> 
+> <%= link_to 'New note', new_note_path %>
+> ./views/notes/index.html.erb
+> ./views/notes/.svn
+> cat: ./views/notes/.svn: Is a directory
+> ./views/notes/.svn/entries
+> 9
+> 
+> dir
+> 78
+> http://svn.travelersnetwork.org/projects/cardsys2/trunk/app/views/notes
+> http://svn.travelersnetwork.org/projects
+> 
+> 
+> 
+> 2012-10-09T21:08:50.670646Z
+> 78
+> jrising
+> 
+> 
+> svn:special svn:externals svn:needs-lock
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 0
+> 
+> 
+> edit.html.erb
+> file
+> 
+> 
+> 
+> 
+> 2011-02-02T16:46:33.000000Z
+> f0a1859eb1abaecb8687efbf8b02deea
+> 2012-10-09T21:08:50.670646Z
+> 78
+> jrising
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 346
+> 
+> 
+> index.html.erb
+> file
+> 
+> 
+> 
+> 
+> 2011-02-02T16:46:33.000000Z
+> f56140eaa712c1cb383c626c1efb139d
+> 2012-10-09T21:08:50.670646Z
+> 78
+> jrising
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 446
+> 
+> 
+> new.html.erb
+> file
+> 
+> 
+> 
+> 
+> 2011-02-02T16:46:33.000000Z
+> 6698aa66ee10e3ab14e2b29342a5124a
+> 2012-10-09T21:08:50.670646Z
+> 78
+> jrising
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 311
+> 
+> 
+> show.html.erb
+> file
+> 
+> 
+> 
+> 
+> 2011-02-02T16:46:33.000000Z
+> 46e9f338a3b35102d25db3f8066130a1
+> 2012-10-09T21:08:50.670646Z
+> 78
+> jrising
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 174
+> 
+> 
+> ./views/notes/.svn/entries
+> ./views/notes/.svn/props
+> cat: ./views/notes/.svn/props: Is a directory
+> ./views/notes/.svn/text-base
+> cat: ./views/notes/.svn/text-base: Is a directory
+> ./views/notes/.svn/text-base/edit.html.erb.svn-base
+> <h1>Editing note</h1>
+> 
+> <% form_for(@note) do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :date %><br />
+>     <%= f.date_select :date %>
+>   </p>
+>   <p>
+>     <%= f.label :text %><br />
+>     <%= f.text_field :text %>
+>   </p>
+>   <p>
+>     <%= f.submit "Update" %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to 'Show', @note %> |
+> <%= link_to 'Back', notes_path %>
+> ./views/notes/.svn/text-base/edit.html.erb.svn-base
+> ./views/notes/.svn/text-base/show.html.erb.svn-base
+> <p>
+>   <b>Date:</b>
+>   <%=h @note.date %>
+> </p>
+> 
+> <p>
+>   <b>Text:</b>
+>   <%=h @note.text %>
+> </p>
+> 
+> 
+> <%= link_to 'Edit', edit_note_path(@note) %> |
+> <%= link_to 'Back', notes_path %>
+> ./views/notes/.svn/text-base/show.html.erb.svn-base
+> ./views/notes/.svn/text-base/new.html.erb.svn-base
+> <h1>New note</h1>
+> 
+> <% form_for(@note) do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :date %><br />
+>     <%= f.date_select :date %>
+>   </p>
+>   <p>
+>     <%= f.label :text %><br />
+>     <%= f.text_field :text %>
+>   </p>
+>   <p>
+>     <%= f.submit "Create" %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to 'Back', notes_path %>
+> ./views/notes/.svn/text-base/new.html.erb.svn-base
+> ./views/notes/.svn/text-base/index.html.erb.svn-base
+> <h1>Listing notes</h1>
+> 
+> <table>
+>   <tr>
+>     <th>Date</th>
+>     <th>Text</th>
+>   </tr>
+> 
+> <% for note in @notes %>
+>   <tr>
+>     <td><%=h note.date %></td>
+>     <td><%=h note.text %></td>
+>     <td><%= link_to 'Show', note %></td>
+>     <td><%= link_to 'Edit', edit_note_path(note) %></td>
+>     <td><%= link_to 'Destroy', note, :confirm => 'Are you sure?', :method => :delete %></td>
+>   </tr>
+> <% end %>
+> </table>
+> 
+> <br />
+> 
+> <%= link_to 'New note', new_note_path %>
+> ./views/notes/.svn/text-base/index.html.erb.svn-base
+> ./views/notes/.svn/prop-base
+> cat: ./views/notes/.svn/prop-base: Is a directory
+> ./views/notes/.svn/format
+> 9
+> ./views/notes/.svn/format
+> ./views/notes/.svn/all-wcprops
+> K 25
+> svn:wc:ra_dav:version-url
+> V 52
+> /projects/!svn/ver/78/cardsys2/trunk/app/views/notes
+> END
+> edit.html.erb
+> K 25
+> svn:wc:ra_dav:version-url
+> V 66
+> /projects/!svn/ver/78/cardsys2/trunk/app/views/notes/edit.html.erb
+> END
+> index.html.erb
+> K 25
+> svn:wc:ra_dav:version-url
+> V 67
+> /projects/!svn/ver/78/cardsys2/trunk/app/views/notes/index.html.erb
+> END
+> new.html.erb
+> K 25
+> svn:wc:ra_dav:version-url
+> V 65
+> /projects/!svn/ver/78/cardsys2/trunk/app/views/notes/new.html.erb
+> END
+> show.html.erb
+> K 25
+> svn:wc:ra_dav:version-url
+> V 66
+> /projects/!svn/ver/78/cardsys2/trunk/app/views/notes/show.html.erb
+> END
+> ./views/notes/.svn/all-wcprops
+> ./views/notes/.svn/tmp
+> cat: ./views/notes/.svn/tmp: Is a directory
+> ./views/notes/.svn/tmp/props
+> cat: ./views/notes/.svn/tmp/props: Is a directory
+> ./views/notes/.svn/tmp/text-base
+> cat: ./views/notes/.svn/tmp/text-base: Is a directory
+> ./views/notes/.svn/tmp/prop-base
+> cat: ./views/notes/.svn/tmp/prop-base: Is a directory
+> ./views/notes/edit.html.erb
+> <h1>Editing note</h1>
+> 
+> <% form_for(@note) do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :date %><br />
+>     <%= f.date_select :date %>
+>   </p>
+>   <p>
+>     <%= f.label :text %><br />
+>     <%= f.text_field :text %>
+>   </p>
+>   <p>
+>     <%= f.submit "Update" %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to 'Show', @note %> |
+> <%= link_to 'Back', notes_path %>
+> ./views/notes/edit.html.erb
+> ./views/notes/show.html.erb
+> <p>
+>   <b>Date:</b>
+>   <%=h @note.date %>
+> </p>
+> 
+> <p>
+>   <b>Text:</b>
+>   <%=h @note.text %>
+> </p>
+> 
+> 
+> <%= link_to 'Edit', edit_note_path(@note) %> |
+> <%= link_to 'Back', notes_path %>
+> ./views/notes/show.html.erb
+> ./views/notes/new.html.erb
+> <h1>New note</h1>
+> 
+> <% form_for(@note) do |f| %>
+>   <%= f.error_messages %>
+> 
+>   <p>
+>     <%= f.label :date %><br />
+>     <%= f.date_select :date %>
+>   </p>
+>   <p>
+>     <%= f.label :text %><br />
+>     <%= f.text_field :text %>
+>   </p>
+>   <p>
+>     <%= f.submit "Create" %>
+>   </p>
+> <% end %>
+> 
+> <%= link_to 'Back', notes_path %>
+> ./views/notes/new.html.erb
+> ./views/layouts
+> cat: ./views/layouts: Is a directory
+> ./views/layouts/cards.html.erb~
+> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+>        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+> 
+> <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+> <head>
+>   <meta http-equiv="content-type" content="text/html;charset=UTF-8" />
+>   <title>Cards: <%= controller.action_name %></title>
+>   <%= stylesheet_link_tag 'scaffold' %>
+> </head>
+> <body>
+> 
+> <p style="color: green"><%= flash[:notice] %></p>
+> 
+> <%= yield  %>
+> 
+> </body>
+> </html>
+> ./views/layouts/cards.html.erb~
+> ./views/layouts/mobile.html.erb~
+> <!DOCTYPE html PUBLIC "-//WAPFORUM//DTD XHTML Mobile 1.0//EN" "http://www.wapforum.org/DTD/xhtml-mobile10.dtd">
+> 
+> <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+> <head>
+>   <meta http-equiv="content-type" content="text/html;charset=UTF-8" />
+>   <title>Cards: <%= controller.action_name %></title>
+>   <%= stylesheet_link_tag 'scaffold' %>
+> </head>
+> <body>
+> 
+> <p style="color: green"><%= flash[:notice] %></p>
+> 
+> <%= yield  %>
+> 
+> </body>
+> </html>
+> ./views/layouts/mobile.html.erb~
+> ./views/layouts/cards.html.erb
+> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+>        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+> 
+> <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+> <head>
+>   <meta http-equiv="content-type" content="text/html;charset=UTF-8" />
+>   <title>Cards: <%= controller.action_name %></title>
+>   <%= stylesheet_link_tag 'scaffold' %>
+>   <%= javascript_include_tag :defaults %>
+> </head>
+> <body>
+> 
+> <p style="color: green"><%= flash[:notice] %></p>
+> 
+> <%= yield  %>
+> 
+> </body>
+> </html>
+> ./views/layouts/cards.html.erb
+> ./views/layouts/notes.html.erb
+> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+>        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+> 
+> <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+> <head>
+>   <meta http-equiv="content-type" content="text/html;charset=UTF-8" />
+>   <title>Notes: <%= controller.action_name %></title>
+>   <%= stylesheet_link_tag 'scaffold' %>
+> </head>
+> <body>
+> 
+> <p style="color: green"><%= flash[:notice] %></p>
+> 
+> <%= yield  %>
+> 
+> </body>
+> </html>
+> ./views/layouts/notes.html.erb
+> ./views/layouts/application.html.erb
+> <!DOCTYPE html>
+> <html>
+> <head>
+>   <title>Cardsdev</title>
+>   <%= stylesheet_link_tag :all %>
+>   <%= javascript_include_tag :defaults %>
+>   <%= csrf_meta_tag %>
+> </head>
+> <body>
+> 
+> <%= yield %>
+> 
+> </body>
+> </html>
+> ./views/layouts/application.html.erb
+> ./views/layouts/projects.html.erb
+> <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+>        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+> 
+> <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+> <head>
+>   <meta http-equiv="content-type" content="text/html;charset=UTF-8" />
+>   <title>Projects: <%= controller.action_name %></title>
+>   <%= stylesheet_link_tag 'scaffold' %>
+> </head>
+> <body>
+> 
+> <p style="color: green"><%= flash[:notice] %></p>
+> 
+> <%= yield  %>
+> 
+> </body>
+> </html>
+> ./views/layouts/projects.html.erb
+> ./views/layouts/mobile.html.erb
+> <!DOCTYPE html PUBLIC "-//WAPFORUM//DTD XHTML Mobile 1.0//EN" "http://www.wapforum.org/DTD/xhtml-mobile10.dtd">
+> 
+> <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+> <head>
+>   <meta http-equiv="content-type" content="text/html;charset=UTF-8" />
+>   <title>Cards: <%= controller.action_name %></title>
+>   <style type="text/css">
+>     ul { padding: 0px; margin: 0px; }
+>   </style>
+> </head>
+> <body>
+> 
+> <p style="color: green"><%= flash[:notice] %></p>
+> 
+> <%= yield  %>
+> 
+> </body>
+> </html>
+> ./views/layouts/mobile.html.erb
+> ./helpers
+> cat: ./helpers: Is a directory
+> ./helpers/projects_helper.rb
+> module ProjectsHelper
+> end
+> ./helpers/projects_helper.rb
+> ./helpers/notes_helper.rb
+> module NotesHelper
+> end
+> ./helpers/notes_helper.rb
+> ./helpers/cards_helper.rb
+> module CardsHelper
+> end
+> ./helpers/cards_helper.rb
+> ./helpers/application_helper.rb~
+> ActionView::Base.default_form_builder = StandardBuilder
+> 
+> # Methods added to this helper will be available to all templates in the application.
+> module ApplicationHelper
+>   #include TagsHelper
+> 
+>   def file_buttons(card)
+>     buttons = link_to_function "Delay", 'window.location = "/cards/file_delay?id=' + card.id.to_s + '&delay=" + prompt("How many days?", "1");'
+>     buttons += " | "
+> 
+>     buttons += link_to "Retire", :controller => :cards, :action => :retire, :id => card.id, :confirm => "Are you sure you want to retire this?"
+>     # Can we just deactivate?
+>     deactivate = []
+>     if !card.weighted.nil?
+>       deactivate << card.weighted
+>       if !card.scheduled.nil?
+>         buttons += " | "
+>         buttons += link_to "Dateless", :controller => :cards, :action => :refile_dateless, :id => card.id
+>       end
+>     end
+>     if !card.scheduled.nil? &&
+>       if card.scheduled > Date.today
+>         deactivate << card.scheduled.strftime("%F")
+>       elsif !card.schmethod.nil?
+>         begin
+>           deactivate << Card.send(card.schmethod.to_sym, card.scheduled).strftime("%F")
+>         rescue
+>           deactivate << "Invalid Date"
+>         end
+>       end
+>     end
+> 
+>     buttons += " | "
+>     if !deactivate.empty?
+>       buttons += link_to "Deactivate: " + deactivate.join(", "), :controller => :cards, :action => :deactivate, :id => card.id
+>     else
+>       buttons += link_to "Deactivate: None", :controller => :cards, :action => :deactivate, :id => card.id
+>     end
+> 
+>     buttons
+>   end
+> 
+>   def deactivation(card)
+>     deactivate = []
+>     if !card.weighted.nil?
+>       deactivate << card.weighted
+>     end
+>     if !card.scheduled.nil? &&
+>       if card.scheduled > Date.today
+>         deactivate << card.scheduled.strftime("%F")
+>       elsif !card.schmethod.nil?
+>         begin
+>           deactivate << Card.send(card.schmethod.to_sym, card.scheduled).strftime("%F")
+>         rescue
+>           deactivate << "Invalid Date"
+>         end
+>       end
+>     end
+> 
+>     deactivate
+>   end
+> 
+>   def today_buttons(card)
+>     buttons = ajax_today_button(card)
+> 
+>     # Is this not a card?
+>     if card.weighted.nil? && card.scheduled.nil?
+>       buttons += link_to_function image_tag("addbtn.png"), 'window.location = "/cards/today_to_card?id=' + card.id.to_s + '&sched=" + prompt("Give a weight or a schedule", 2);'
+>       buttons += " "
+>     end
+> 
+>     buttons += link_to_function image_tag("waitbtn.png"), 'window.location = "/cards/file_delay?id=' + card.id.to_s + '&delay=" + prompt("How many days?", "1");'
+>     buttons += " "
+> 
+>     deactivate = deactivation(card)
+>     if !deactivate.empty?
+>       buttons += link_to image_tag("repeatbtn.png", :alt => deactivate.join(', ')), :controller => :cards, :action => :deactivate, :id => card.id
+>       buttons += " "
+>     end
+> 
+>     buttons += link_to image_tag("removebtn.png"), :controller => :cards, :action => :retire, :id => card.id, :confirm => "Are you sure you want to retire this?"
+> 
+>     buttons
+>   end
+> 
+>   def syncs_buttons(card)
+>     buttons = ""
+>     buttons += link_to image_tag("removebtn.png"), :controller => :cards, :action => :retire, :id => card.id, :confirm => "Are you sure you want to retire this?"
+>     buttons += " "
+>     buttons += link_to image_tag("repeatbtn.png"), :controller => :cards, :action => :deactivate, :id => card.id
+> 
+>     buttons
+>   end
+> 
+>   # Request from an iPhone or iPod touch? (Mobile Safari user agent)
+>   def mobile_agent?
+>     request.env["HTTP_USER_AGENT"] && request.env["HTTP_USER_AGENT"][/(Mobile.+Safari)|(Mobile)/]
+>   end
+> 
+>   # Today or not
+>   def ajax_today_button(card)
+>     id = 'make_today_' + card.id.to_s
+>     if card.today
+>       return '<span id="' + id + '"><img src="/images/today_selected.png" onclick="new Ajax.Updater(\'' + id + '\', \'/cards/ajax_make_today?id=' + card.id.to_s + '&task=active\', {method: \'get\'}); $(\'' + id + '\').update(\'<img src=&quot;/images/spinner.gif&quot; />\');" /></span>'
+>     else
+>       return '<span id="' + id + '"><img src="/images/today_unselected.png" onclick="new Ajax.Updater(\'' + id + '\', \'/cards/ajax_make_today?id=' + card.id.to_s + '&task=today\', {method: \'get\'}); $(\'' + id + '\').update(\'<img src=&quot;/images/spinner.gif&quot; />\');" /></span>'
+>     end    
+>   end
+> end
+> ./helpers/application_helper.rb~
+> ./helpers/standard_builder.rb
+> class StandardBuilder < ActionView::Helpers::FormBuilder
+>   def error_messages
+>     return unless object.respond_to?(:errors) && object.errors.any?
+> 
+>     errors_list = ""
+>     errors_list << @template.content_tag(:span, "There are errors!", :class => "title-error")
+>     errors_list << object.errors.full_messages.map { |message| @template.content_tag(:li, message) }.join("\n")
+> 
+>     @template.content_tag(:ul, errors_list.html_safe, :class => "error-recap round-border")
+>   end
+> end
+> ./helpers/standard_builder.rb
+> ./helpers/home_helper.rb
+> module HomeHelper
+>   def top_card(cards)
+>     priorities = cards.map {|card| card.priority.to_f || 0}
+>     max_priority = priorities.max
+>     (cards.select {|card| card.priority.to_f == max_priority})[0]
+>   end
+> 
+>   def get_path(path, subpath)
+>     if path
+>       path + '/' + subpath
+>     else
+>       subpath
+>     end
+>   end
+> 
+>   def get_parent(path)
+>     if path.nil? || !(path.include? '/')
+>       ''
+>     else
+>       path[0..path.rindex('/')-1]
+>     end
+>   end
+> end
+> ./helpers/home_helper.rb
+> ./helpers/application_helper.rb
+> ActionView::Base.default_form_builder = StandardBuilder
+> 
+> # Methods added to this helper will be available to all templates in the application.
+> module ApplicationHelper
+>   #include TagsHelper
+> 
+>   def file_buttons(card)
+>     buttons = link_to_function "Delay", 'window.location = "/cards/file_delay?id=' + card.id.to_s + '&delay=" + prompt("How many days?", "1");'
+>     buttons += " | "
+> 
+>     buttons += link_to "Retire", :controller => :cards, :action => :retire, :id => card.id, :confirm => "Are you sure you want to retire this?"
+>     # Can we just deactivate?
+>     deactivate = []
+>     if !card.weighted.nil?
+>       deactivate << card.weighted
+>       if !card.scheduled.nil?
+>         buttons += " | "
+>         buttons += link_to "Dateless", :controller => :cards, :action => :refile_dateless, :id => card.id
+>       end
+>     end
+>     if !card.scheduled.nil? &&
+>       if card.scheduled > Date.today
+>         deactivate << card.scheduled.strftime("%F")
+>       elsif !card.schmethod.nil?
+>         begin
+>           deactivate << Card.send(card.schmethod.to_sym, card.scheduled).strftime("%F")
+>         rescue
+>           deactivate << "Invalid Date"
+>         end
+>       end
+>     end
+> 
+>     buttons += " | "
+>     if !deactivate.empty?
+>       buttons += link_to "Deactivate: " + deactivate.join(", "), :controller => :cards, :action => :deactivate, :id => card.id
+>     else
+>       buttons += link_to "Deactivate: None", :controller => :cards, :action => :deactivate, :id => card.id
+>     end
+> 
+>     buttons
+>   end
+> 
+>   def deactivation(card)
+>     deactivate = []
+>     if !card.weighted.nil?
+>       deactivate << card.weighted
+>     end
+>     if !card.scheduled.nil? &&
+>       if card.scheduled > Date.today
+>         deactivate << card.scheduled.strftime("%F")
+>       elsif !card.schmethod.nil?
+>         begin
+>           deactivate << Card.send(card.schmethod.to_sym, card.scheduled).strftime("%F")
+>         rescue
+>           deactivate << "Invalid Date"
+>         end
+>       end
+>     end
+> 
+>     deactivate
+>   end
+> 
+>   def today_buttons(card)
+>     buttons = ajax_today_button(card)
+> 
+>     # Is this not a card?
+>     if card.weighted.nil? && card.scheduled.nil?
+>       buttons += link_to_function image_tag("addbtn.png"), 'window.location = "/cards/today_to_card?id=' + card.id.to_s + '&sched=" + prompt("Give a weight or a schedule", 2);'
+>       buttons += " "
+>     end
+> 
+>     buttons += link_to_function image_tag("waitbtn.png"), 'window.location = "/cards/file_delay?id=' + card.id.to_s + '&delay=" + prompt("How many days?", "1");'
+>     buttons += " "
+> 
+>     deactivate = deactivation(card)
+>     if !deactivate.empty?
+>       buttons += link_to image_tag("repeatbtn.png", :alt => deactivate.join(', ')), :controller => :cards, :action => :deactivate, :id => card.id
+>       buttons += " "
+>     end
+> 
+>     buttons += link_to image_tag("removebtn.png"), :controller => :cards, :action => :retire, :id => card.id, :confirm => "Are you sure you want to retire this?"
+> 
+>     buttons.html_safe
+>   end
+> 
+>   def syncs_buttons(card)
+>     buttons = ""
+>     buttons += link_to image_tag("removebtn.png"), :controller => :cards, :action => :retire, :id => card.id, :confirm => "Are you sure you want to retire this?"
+>     buttons += " "
+>     buttons += link_to image_tag("repeatbtn.png"), :controller => :cards, :action => :deactivate, :id => card.id
+> 
+>     buttons
+>   end
+> 
+>   # Request from an iPhone or iPod touch? (Mobile Safari user agent)
+>   def mobile_agent?
+>     request.env["HTTP_USER_AGENT"] && request.env["HTTP_USER_AGENT"][/(Mobile.+Safari)|(Mobile)/]
+>   end
+> 
+>   # Today or not
+>   def ajax_today_button(card)
+>     id = 'make_today_' + card.id.to_s
+>     if card.today
+>       return '<span id="' + id + '"><img src="/images/today_selected.png" onclick="new Ajax.Updater(\'' + id + '\', \'/cards/ajax_make_today?id=' + card.id.to_s + '&task=active\', {method: \'get\'}); $(\'' + id + '\').update(\'<img src=&quot;/images/spinner.gif&quot; />\');" /></span>'
+>     else
+>       return '<span id="' + id + '"><img src="/images/today_unselected.png" onclick="new Ajax.Updater(\'' + id + '\', \'/cards/ajax_make_today?id=' + card.id.to_s + '&task=today\', {method: \'get\'}); $(\'' + id + '\').update(\'<img src=&quot;/images/spinner.gif&quot; />\');" /></span>'
+>     end    
+>   end
+> end
+> ./helpers/application_helper.rb
+**assistant**:
+> ```twiki
+> ! Cards Management System
+> 
+> This project is a web-based system for managing cards, notes, projects, and their schedules. It keeps track of various tasks and categorizes them for easy accessibility and manipulation. The primary functionalities include scheduling tasks, marking them as active or inactive, assigning tags, and archiving completed or obsolete tasks.
+> 
+> Archived at: [James to Fill in]
+> 
+> !! Status when archived
+> 
+> The project had been largely implemented with models for `Note`, `Project`, and `Card`, and had functionality for scheduling tasks, marking them as active or inactive, and additional scheduling methods like daily, weekly, monthly, and yearly. There were also comprehensive controllers and views for managing these models. There was an auto-polling mechanism to activate or deactivate cards based on their schedules. However, it appears some UI elements were still being refined and there might have been some leftover debugging or placeholder code.
+> 
+> !! Notable contributions
+> 
+> * **Model Enhancements**:
+>   - Added functions for various scheduling methods within the `Card` model, such as `sched_yearly`, `sched_monthly`, and more.
+>   - Implemented methods to fetch random cards based on weighted criteria or dates.
+>   - Added timestamping and deactivation functionality to handle card lifecycle.
+> 
+> * **Controller Features**:
+>   - Comprehensive controllers for `Home`, `Notes`, `Projects`, and `Cards`, handling CRUD operations and additional functionalities like polling and synchronizing.
+>   - Implemented automated card polling to manage task activation based on schedule.
+> 
+> * **Views and UI**:
+>   - Developed views with interactive elements for handling tasks, including AJAX functionality for real-time updates.
+>   - Mobile browser detection to serve specialized layouts for different devices.
+>   - Utilized external libraries like `RiCal` to generate calendar events.
+> 
+> * **Helper Functions**:
+>   - Created helper functions to manage UI buttons and elements dynamically, including AJAX buttons for marking tasks.
+>   - Introduced custom helper methods to streamline card management, such as `file_buttons`, `deactivation`, and `today_buttons`.
+> 
+> * **Layout and Usability**:
+>   - Implemented different layouts for standard and mobile views, enhancing the user experience across devices.
+> 
+> !! Keywords
+> 
+> Cards Management, Task Scheduling, Notes, Projects, Ruby on Rails, Automated Polling, AJAX Updates, Mobile Friendly, Event Schedulers.
+> ```

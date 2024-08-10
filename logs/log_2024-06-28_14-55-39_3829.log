@@ -1,0 +1,70 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> In google sheets, can I calculate spatial distances? I have latitude and longitude columns, and I want to find which row has the shortest distance to a given point.
+**assistant**:
+> Yes, you can calculate spatial distances in Google Sheets using the Haversine formula applied via custom formulas. Here's a step-by-step guide to find which row has the shortest distance to a given point:
+> 
+> ### Step 1: Define the Custom Haversine Function
+> 1. Go to **Extensions** > **Apps Script**.
+> 2. Delete any code in the editor and replace it with the following:
+> 
+> ```javascript
+> function HAVERSINE(lat1, lon1, lat2, lon2) {
+>   const R = 6371; // Earth radius in kilometers
+>   const toRad = function(value) {
+>     return (value * Math.PI) / 180;
+>   };
+> 
+>   const dLat = toRad(lat2 - lat1);
+>   const dLon = toRad(lon2 - lon1);
+>   const a =
+>     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+>     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+>     Math.sin(dLon / 2) * Math.sin(dLon / 2);
+>   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+>   const distance = R * c;
+>   return distance;
+> }
+> ```
+> 3. Save the script by clicking on the floppy disk icon or pressing **Ctrl+S**.
+> 4. Close the Apps Script tab.
+> 
+> ### Step 2: Calculate Distances
+> 1. Suppose you have your data in columns `A` (Latitude) and `B` (Longitude). In column `C`, you can compute the distance using the custom Haversine function. For example, if you want to find the distance from a point with latitude `lat0` and longitude `lon0`, enter the following in cell `C2` and drag it down:
+> 
+> ```excel
+> =HAVERSINE(A2, B2, lat0, lon0)
+> ```
+> 
+> Replace `lat0` and `lon0` with your specific latitude and longitude values.
+> 
+> ### Step 3: Find the Shortest Distance
+> 1. To find the row with the shortest distance, you can use the `MIN` function to determine the smallest value and `MATCH` function to find its position. In a new cell (e.g., `D1`), enter:
+> 
+> ```excel
+> =MIN(C2:C)
+> ```
+> 
+> 2. To find the row number, use:
+> 
+> ```excel
+> =MATCH(MIN(C2:C), C2:C, 0)
+> ```
+> 
+> ### Step 4: Retrieve Information from the Closest Row
+> If you need to retrieve other information from the closest row, you can use the `INDEX` function along with `MATCH`. For example, to get the latitude from the closest row, use:
+> 
+> ```excel
+> =INDEX(A2:A, MATCH(MIN(C2:C), C2:C, 0))
+> ```
+> 
+> And similarly, use:
+> 
+> ```excel
+> =INDEX(B2:B, MATCH(MIN(C2:C), C2:C, 0))
+> ```
+> 
+> This will give you the latitude and longitude of the point with the shortest distance.
+> 
+> Let me know if you need further assistance!

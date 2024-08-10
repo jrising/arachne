@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, Response
 
-import os, pickle, subprocess, time, random
+import os, pickle, subprocess, time, random, glob
 import regex as re
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
@@ -11,7 +11,8 @@ from whoosh import qparser
 import numpy as np
 
 from wrappers import gemini
-from utils import get_log_filename, create_chat, fillin_training_end, chat_tokens, chat_tokens_each, chat_tokens_one
+import utils
+from utils import create_chat, fillin_training_end, chat_tokens, chat_tokens_each, chat_tokens_one
 
 do_tts = False
 
@@ -41,13 +42,20 @@ def index():
     if request.headers['Host'] == 'coupling.existencia.org':
         return render_template('custom.html', title="Coupling Human to Natural Systems",
                                welcome="Welcome to your virtual teaching assistant. What can I help you with?",
-                               log_filename=get_log_filename('coupling'), system="coupling", logofile="coupling.png")
+                               log_filename=utils.get_log_filename('coupling'), system="coupling", logofile="coupling.png")
     elif request.headers['Host'] == 'ccecon.existencia.org':
         return render_template('custom-menued.html', title="Climate Change Economics",
                                welcome="Welcome to your virtual teaching assistant. What can I help you with?",
-                               log_filename=get_log_filename('ccecon'), system="ccecon", logofile="ccecon.png", menu_html=get_menu())
+                               log_filename=utils.get_log_filename('ccecon'), system="ccecon", logofile="ccecon.png", menu_html=get_menu())
     else:
-        return render_template('index.html', log_filename=get_log_filename(), menu_html=get_menu())
+        load_filename = request.args.get('load')
+        if load_filename:
+            pastmessages = utils.load_log(glob.glob('logs/log_' + load_filename.replace(' ', '_').replace(':', '-') + "*.log")[0])
+            print(pastmessages)
+            return render_template('index.html', log_filename=utils.get_log_filename(), menu_html=get_menu(),
+                                   pastmessages=pastmessages)
+        else:
+            return render_template('index.html', log_filename=utils.get_log_filename(), menu_html=get_menu())
  
 def stream(input_text, past_messages, log_filename, history_text="",
            custom_system=None, custom_model=None):
@@ -64,9 +72,9 @@ def stream(input_text, past_messages, log_filename, history_text="",
         else:
             chatlen = chat_tokens(messages)
             if chatlen <= 3000:
-                model = 'gpt-4o'
+                model = 'gpt-4o-2024-08-06'
             else:
-                model = 'gpt-4o'
+                model = 'gpt-4o-2024-08-06'
 
         fillin_training_end(messages, model)
         print(model)
@@ -76,7 +84,7 @@ def stream(input_text, past_messages, log_filename, history_text="",
         if not custom_model or custom_model == 'cheap':
             chatlen = chat_tokens(messages)
             if chatlen >= 15000:
-                model = 'gpt-4o'
+                model = 'gpt-4o-2024-08-06'
             elif chatlen <= 3000:
                 model = 'gpt-4o-mini'
             else:
@@ -239,6 +247,7 @@ def get_logs():
     else:
         results = get_logs_raw()
         lines = [result['line'] for result in results]
+    print(results)
         
     ## Replace lines with titles, where available
     if os.path.exists("database/logs/titles.pkl"):
@@ -253,7 +262,7 @@ def get_logs():
         message = chunks[1]
         if chunks[0] in titles:
             message = titles[chunks[0]]
-        items.append({'date': chunks[0].split(' ')[0], 'message': message})
+        items.append({'date': chunks[0].split(' ')[0], 'message': message, 'filename': chunks[0]})
         
     return render_template('history.html', items=items)
 
@@ -267,7 +276,7 @@ def window_closed():
 
 @app.route('/notes', methods=['GET'])
 def notes():
-    return render_template('notes.html', log_filename=get_log_filename())
+    return render_template('notes.html', log_filename=utils.get_log_filename())
 
 @app.route('/save_notes', methods=['POST'])
 def save_notes():
@@ -279,7 +288,7 @@ def save_notes():
 
 @app.route('/audio', methods=['GET'])
 def audio():
-    return render_template('audio.html', log_filename=get_log_filename())
+    return render_template('audio.html', log_filename=utils.get_log_filename())
 
 @app.route('/completion_audio', methods=['GET', 'POST'])
 def completion_audio():
@@ -424,7 +433,7 @@ def news():
     with open(filepath.replace('.pkl', '-texts.pkl'), 'rb') as fp:
         texts = pickle.load(fp)
         
-    messages = load_log(filepath.replace('.pkl', '.log'))
+    messages = utils.load_log(filepath.replace('.pkl', '.log'))
     
     welcome = now.strftime('# Daily Bulletin: %Y-%m-%d') + prev.strftime(' (<a href="/news?date=%Y-%m-%d">Previous</a>)\n\n') + process_bulletin(messages[0]['content'], texts, lambda ids: bulletin.incremenet_uses(engine, items, ids, 1))
 
@@ -453,7 +462,7 @@ def news_now():
     prompt = open('prompts/news.md', 'r').read()
     prompt = prompt.replace("[CONTEXT]", "\n\n".join([f"ID: {ii}\n{text}" for ii, text in texts.items()]))
 
-    log_filename = get_log_filename('news')
+    log_filename = utils.get_log_filename('news')
     welcome = ""
     for content in stream(prompt, [], log_filename):
         welcome += content
@@ -479,25 +488,8 @@ def news_nonet():
 
     bulletin.incremenet_uses(engine, items, texts.keys(), 1 / 3. - 0.1)
         
-    log_filename = get_log_filename('news')
+    log_filename = utils.get_log_filename('news')
     return render_template('index.html', welcome=welcome, log_filename=log_filename)
-
-def load_log(filepath):
-    messages = []
-    current_role = None
-    current_message = None
-    with open(filepath, 'r') as fp:
-        for line in fp:
-            if line[:2] == '**':
-                if current_role is not None:
-                    messages.append({'role': current_role, 'content': current_message})
-                current_role = line[2:-3]
-                current_message = ""
-            elif line[:2] == '> ':
-                current_message += line[2:]
-
-    messages.append({'role': current_role, 'content': current_message})
-    return messages
 
 def process_bulletin(welcome, texts, handle_ids):
     # Look for numbers in brackets

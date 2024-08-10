@@ -1,0 +1,175 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> Can you write a section for a paper supplementary information giving a
+> precise description of the principles behind the following code? This
+> code implements our method of determining the "pelagic propagule
+> duration" for any given species:
+> ```
+> larvdyn1 <- read.csv(paste0(datapath, "floating/larvdyn/summary2.csv"))
+> larvdyn2 <- read.csv(paste0(datapath, "floating/larvdyncustom.csv"))
+> larvdyn3 <- read.csv(paste0(datapath, "floating/larvdyn-sealifebase/summary2.csv"))
+> larvdyn4 <- read.csv(paste0(datapath, "floating/sources/tabula-Shanks 2009.csv"))
+> larvdyn5 <- read.csv(paste0(datapath, "floating/sources/tabula-Shanks et al. 2003.csv"))
+> 
+> shanks.interpret <- function(str) {
+>     if (str == "")
+>         return(NA)
+>     if (str %in% c("minutes", "5 min pelagic, crawling 1 day", ",10 min - 2 h"))
+>         return(0)
+>     if (str == "5 min - 36 h")
+>         return(1)
+>     parts <- strsplit(str, " |-|,|–")[[1]]
+>     units <- parts[length(parts)]
+>     avg <- mean(as.numeric(parts), na.rm=T)
+>     if (units == "months")
+>         return(avg * 365.25 / 12)
+>     if (units == "weeks")
+>         return(avg * 7)
+>     if (units %in% c("days", "d"))
+>         return(avg)
+>     if (units %in% c("h", "h2", "hr"))
+>         return(avg / 24)
+>     if (units == "min")
+>         return(avg / (24 * 60))
+>     if (units == "s")
+>         return(0)
+>     print(str)
+> }
+> 
+> larvdyn4$duration <- sapply(larvdyn4$Propagule.duration, shanks.interpret)
+> larvdyn4$Species <- gsub(" \\(.+?\\)", "", larvdyn4$Organism..data.source.)
+> larvdyn5$duration <- sapply(larvdyn5$Duration, shanks.interpret)
+> larvdyn5$Species <- gsub(" \\(.+?\\)", "", larvdyn5$Organism..data.source.)
+> 
+> larvdyn345 <- larvdyn3 %>% full_join(larvdyn4) %>% full_join(larvdyn5, by='Species', suffix=c('.2009', '.2003'))
+> larvdyn345$PropaguleDuration <- ifelse(!is.na(larvdyn345$duration.2009), larvdyn345$duration.2009, larvdyn345$duration.2003)
+> 
+> larvdyn1[larvdyn1$Species %in% larvdyn345$Species,]
+> larvdyn345[larvdyn345$Species %in% larvdyn1$Species,]
+> 
+> ## Drop entries in larvdyn1 in preference to total duration numbers in larvdyn345
+> larvdyn1 <- larvdyn1[!(larvdyn1$Species %in% larvdyn345$Species),]
+> 
+> larvdyn <- data.frame(scientific=c(as.character(larvdyn1$Species), paste(larvdyn2$genus, larvdyn2$species), as.character(larvdyn345$Species)),
+>                       LarvaeDuration=c(larvdyn1$LarvaeDuration, larvdyn2$duration, larvdyn345$LarvaeDuration),
+>                       EggDuration=c(larvdyn1$EggDuration, rep(0, nrow(larvdyn2)), larvdyn345$EggDuration),
+>                       EggFloating=c(as.character(larvdyn1$EggFloating), rep("", nrow(larvdyn2)), as.character(larvdyn345$EggFloating)),
+>                       PropaguleDuration=c(rep(NA, nrow(larvdyn1) + nrow(larvdyn2)), larvdyn345$PropaguleDuration))
+> 
+> ## write.csv(larvdyn, paste0(datapath, "generated/dataCSV/larvdyn.csv"), row.names=F)
+> 
+> ## Returns list(values=c(...), level=...)
+> get.species.durations <- function(scientific) {
+>     propdur <- lowest.hierarchy(scientific, function(specwithin) {
+>         ldrows <- which(larvdyn$scientific %in% specwithin)
+> 
+>         durations <- larvdyn$PropaguleDuration[ldrows]
+>         return(durations[!is.na(durations)])
+>     })
+> 
+>     larvdur <- lowest.hierarchy(scientific, function(specwithin) {
+>         ldrows <- which(larvdyn$scientific %in% specwithin)
+> 
+>         durations <- larvdyn$LarvaeDuration[ldrows]
+>         return(durations[!is.na(durations)])
+>     })
+>     eggdur <- lowest.hierarchy(scientific, function(specwithin) {
+>         ldrows <- which(larvdyn$scientific %in% specwithin)
+> 
+>         durations <- ifelse(larvdyn$EggFloating[ldrows] == "", NA, ifelse(larvdyn$EggFloating[ldrows] == "buoyant (pelagic)", ifelse(is.na(larvdyn$EggDuration[ldrows]), 4, larvdyn$EggDuration[ldrows]), 0))
+>         return(durations[!is.na(durations)])
+>     })
+> 
+>     levelorder <- c('scientific', 'genus', 'family', 'order', 'class', 'phylum', 'kingdom')
+>     if (which(propdur$level[1] == levelorder) <= max(which(larvdur$level[1] == levelorder), which(eggdur$level[1] == levelorder)))
+>         return(propdur)
+>     else {
+>         if (length(larvdur$values) == length(eggdur$values)) {
+>             larvdur$values <- larvdur$values + eggdur$values
+>             return(larvdur)
+>         } else if (length(larvdur) > length(eggdur)) {
+>             larvdur$values <- larvdur$values + sample(eggdur$values, length(larvdur$values), replace=T)
+>             return(larvdur)
+>         } else {
+>             eggdur$values <- eggdur$values + sample(larvdur$values, length(eggdur$values), replace=T)
+>             return(eggdur)
+>         }
+>     }
+> }
+> ```
+> 
+> The summary2.csv files looks like this:
+> ```
+> Species,LarvaeDuration,EggDuration,EggFloating
+> Raja abyssicola,,,in sand or gravel
+> Pseudochaenichthys georgianus,,,on the bottom (demersal)
+> Auxis rochei,16.0,,buoyant (pelagic)
+> Terapon idoneus,,0.96,on the bottom (demersal)
+> ...
+> ```
+> 
+> larvdyncustom.csv is like this:
+> ```
+> phylum,class,genus,species,duration,source
+> Arthropoda,Malacostraca,Callichirus,islagrande,14,http://www.int-res.com/articles/suppl/m393p001_app.xls
+> Arthropoda,Malacostraca,Hemigrapsus,oregonensis,24.5,http://www.int-res.com/articles/suppl/m393p001_app.xls
+> Arthropoda,Malacostraca,Lepidophthalmus,louisianensis,3,http://www.int-res.com/articles/suppl/m393p001_app.xls
+> ...
+> ```
+> 
+> tabula-Shanks 2009.csv looks like this:
+> ```
+> Organism (data source),Dispersing stage,Propagule duration,Dispersal distance,References
+> Sargassum spp. (E),spores,25 days,1 m,Deysher and Norton (1982); Kendrick and Walker (1995)
+> Grateloupia doryphora (I),spores,,10 km,Villalard-Bohnsack and Harlin (2001)
+> Sarcothalia crispate (E),spores,,900 m,Opazo and Otaiza (2007)
+> Crustose corallines (E),spores,,900 m,Opazo and Otaiza (2007)
+> ...
+> ```
+> 
+> and tabula-Shanks et al. 2003.csv looks like this:
+> ```
+> Organism (data source),Dispersing stage,Duration,Realized dispersal distance (mean),References
+> Postelsia palmaeformis (E),spores,,3 m,"11, 36"
+> Enteromorpha (E),spores,8 d,35 km,"1, 22, 50"
+> Macrocystis pyrifera (E),spores,32 h,10 - 40 m,"2, 41"
+> Pterygophora californica (E),spores,32 h,500 m,41
+> Ectocarpus siliculosus (E),spores,,$4 km,41
+> ...
+> ```
+> 
+> A key function here is `lowest.hierarchy` which returns data from
+> taxonomically related species, or from the species itself if its
+> available. If the species isn't available, we often get many rows,
+> since at the genus or higher level, we might have several species.
+> 
+> Please do not include any actual code or excerpts from the files in the text.
+**assistant**:
+> ### Supplementary Information: Methodology for Determining Pelagic Propagule Duration
+> 
+> The method for determining the Pelagic Propagule Duration (PPD) of any given species involves an integration of data from various sources and a systematic process for interpreting and merging this information to derive the most accurate estimates. Here we provide a detailed description of the principles underpinning the code used in this process.
+> 
+> #### Data Integration and Preparation
+> The process begins with the import and preparation of multiple datasets that contain information about larval dynamics and propagule durations across different species. Sources include datasets specifically formatted with detailed, species-level information about larval durations, egg durations, and floating characteristics. Another set of sources includes custom data and data extracted from literature, reporting propogule durations in diverse units like days, weeks, or months.
+> 
+> #### Data Interpretation and Normalization
+> A critical function within the methodology is tasked with interpreting the various formats and units in which propagule durations are reported. The function normalizes these durations by converting them into a consistent unit of days. Special handling rules are applied to various textual representations to ensure accurate conversions (e.g., "weeks" to days, "minutes" to fractions of a day, etc.). For instance, in cases where durations are reported in mixed units or ranges, the function calculates the average duration.
+> 
+> #### Merging Datasets
+> Once normalized, data from multiple sources are systematically merged. This consolidation is conducted carefully to avoid duplication and to integrate different aspects of the data (e.g., larvae and egg durations). The process involves:
+> 1. Joining datasets on species names, ensuring the most complete and non-redundant information is retained.
+> 2. Harmonizing species names across datasets to handle inconsistencies and variations in naming conventions.
+> 
+> #### Prioritization and Resolution of Conflicts
+> In instances where multiple data entries exist for the same species, an algorithm prioritizes the sources based on their relative reliability and recency. If a dataset contains more specific or recent information, it is preferred over others. The final output compiles the consolidated data, ensuring that species with duplicated entries in lower-priority sources are not overrepresented.
+> 
+> #### Generating Propagule Duration Estimates
+> To estimate the PPD for a given species, the methodology incorporates a hierarchical lookup function that traverses taxonomic levels. When specific information for a species is unavailable, the method explores related species or taxonomic levels (genus, family, order, etc.) to derive the duration. This hierarchical approach ensures that some form of duration estimate is provided based on the closest available relatives if direct data is absent.
+> 
+> The integration also extends to combining related duration values, like adding larvae and floating egg durations when applicable, to present a comprehensive PPD estimate. Aggregation methods address cases where multiple values at a higher taxonomy level need to be integrated, ensuring robust and representative duration estimates.
+> 
+> #### Output and Application
+> The final dataset generated provides a unified and comprehensive source of propagule durations for a wide range of species, which is essential for modeling and understanding species dispersal and connectivity in marine environments. This curated dataset facilitates accurate ecological modeling and supports broader environmental and sustainability research initiatives.
+> 
+> This methodology's principal strength lies in its robust handling of heterogeneous data sources, rigorous data normalization, and sophisticated hierarchical data integration. It serves as a reliable tool for researchers seeking detailed, harmonized information on pelagic propagule durations across diverse marine species.

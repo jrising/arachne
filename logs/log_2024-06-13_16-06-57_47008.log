@@ -1,0 +1,912 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> I have a Bellman Equation optimizer written in Matlab and I would like to translate it to Julia. The approach uses linear combinations of states and Monte Carlo draws to model an stochastic process in prices.
+> 
+> I will give the functions one at a time, starting with the underlying worker functions. Can you translate each into Julia? Also add comments are needed.
+> 
+> This first function translates from a continuous value to a discrete state:
+> ```
+> function ii = discrete(xx, xmin, xmax, num)
+> 
+> ii = max(1, min(round(num * (xx - xmin) / (xmax - xmin) + 1), num));
+> ```
+**assistant**:
+> Of course! Here's the translation of your MATLAB function to Julia, with additional comments for clarity:
+> 
+> ```julia
+> """
+> Translate a continuous value to a discrete state.
+> 
+> Arguments:
+> - xx: Continuous value to be discretized.
+> - xmin: Minimum value of the continuous space.
+> - xmax: Maximum value of the continuous space.
+> - num: Number of discrete states.
+> 
+> Returns:
+> - ii: Discrete state corresponding to the continuous value.
+> """
+> function discrete(xx::Float64, xmin::Float64, xmax::Float64, num::Int)
+>     # Scale and shift the continuous value to the range [1, num]
+>     index = round(Int, num * (xx - xmin) / (xmax - xmin) + 1)
+> 
+>     # Clamp the value between 1 and num
+>     ii = max(1, min(index, num))
+>     
+>     return ii
+> end
+> ```
+> 
+> ### Explanation:
+> 1. **Scaling and Shifting**: The expression `num * (xx - xmin) / (xmax - xmin) + 1` scales and shifts the continuous value `xx` to the range `[1, num]`.
+> 2. **Rounding**: `round(Int, ...)` is used to get the nearest integer value.
+> 3. **Clamping**: `max(1, min(index, num))` ensures that the resulting discrete state is within the valid range `[1, num]`.
+> 4. **Type Annotations**: The function's arguments and return type are annotated for clarity and type safety. 
+> 
+> Feel free to provide the next function whenever you're ready!
+**user**:
+> This next function constructs a mapping between before-states and after-states.
+> ```
+> function [state1, state2a, state2b, xprob2, q_c, q_f] = make_actions(C, D_C_min, ...
+>                                                   D_C_max, D, Q_const)
+> % All returned matrices have a row for each action (1-...)
+> %   and a column for each current state of the world (C)
+> % state1 is the state before actions take effect
+> % state2a and state2b are two possible states that could result
+> %   from the given action, with state b with proabability xprob2
+> 
+> D_C = linspace(D_C_min, D_C_max, D);
+> 
+> state1 = repmat(1:C, 1+D, 1); % as indices
+> 
+> state2a = [1:C]; % as indices
+> state2b = [1:C]; % as indices
+> prob2 = [1]; % prob of going to state2b
+> for ii = 1:sum(D_C < 0)
+>   state2a = [state2a; (1:C) + ceil(D_C(ii))];
+>   state2b = [state2b; (1:C) + floor(D_C(ii))];
+>   prob2 = [prob2 1 - (-floor(D_C(ii)) + D_C(ii))]; % The probability increases linearly with the magnitude of the action 
+> end
+> for ii = 1:sum(D_C >= 0)
+>   state2a = [state2a; (1:C) + floor(D_C(ii + sum(D_C < 0)))];
+>   state2b = [state2b; (1:C) + ceil(D_C(ii + sum(D_C < 0)))];
+>   prob2 = [prob2 1 - (ceil(D_C(ii + sum(D_C < 0))) - D_C(ii + sum(D_C < 0)))];
+> end
+> state2a(state2a < 1) = 1;
+> state2a(state2a > C) = C;
+> state2b(state2b < 1) = 1;
+> state2b(state2b > C) = C;
+> xprob2 = repmat(prob2', 1, C);
+> 
+> q_c = Q_const * repmat([0 D_C/C]', 1, C);
+> q_f = -q_c;
+> ```
+> C is the number of discretized states of the clean energy share
+> D* relate to the change in possible changes in renewable energy. Here is from the parameters file:
+> D_C_min = -.5; % Highest clean energy decrease
+> D_C_max = 1; % Highest clean energy increase
+> D = 100;
+> Q_const is the total amount of power that needs to be provided using clean or dirty plants.
+> Q, q_c, and q_f are in MW
+**assistant**:
+> Here is the translation of your MATLAB function to Julia:
+> 
+> ```julia
+> function make_actions(C, D_C_min, D_C_max, D, Q_const)
+>     # Construct the D_C array
+>     D_C = range(D_C_min, D_C_max, length=D)
+> 
+>     # Initialize matrices to store states and probabilities
+>     state1 = repeat(1:C, 1, 1+D) # as indices
+> 
+>     state2a = 1:C # as indices
+>     state2b = 1:C # as indices
+>     prob2 = [1.0] # probability of going to state2b
+> 
+>     # Loop over negative D_C values
+>     for ii in 1:sum(D_C .< 0)
+>         push!(state2a, (1:C) .+ ceil(Int, D_C[ii]))
+>         push!(state2b, (1:C) .+ floor(Int, D_C[ii]))
+>         push!(prob2, 1.0 - (-floor(D_C[ii]) + D_C[ii]))
+>     end
+> 
+>     # Loop over non-negative D_C values
+>     for ii in 1:sum(D_C .>= 0)
+>         push!(state2a, (1:C) .+ floor(Int, D_C[ii + sum(D_C .< 0)]))
+>         push!(state2b, (1:C) .+ ceil(Int, D_C[ii + sum(D_C .< 0)])
+>         push!(prob2, 1.0 - (ceil(D_C[ii + sum(D_C .< 0)]) - D_C[ii + sum(D_C .< 0)]))
+>     end
+> 
+>     # Ensure states are within bounds
+>     state2a[state2a .< 1] .= 1
+>     state2a[state2a .> C] .= C
+>     state2b[state2b .< 1] .= 1
+>     state2b[state2b .> C] .= C
+> 
+>     xprob2 = repeat(prob2', 1, C)
+> 
+>     q_c = Q_const * repeat([0; D_C/C], 1, C)
+>     q_f = -q_c
+> 
+>     return state1, state2a, state2b, xprob2, q_c, q_f
+> end
+> ```
+> ### Explanation:
+> 1. **Arrays Initialization**: Julia uses `push!` to append elements to arrays.
+> 2. **Array Indexing**: Julia uses 1-based indexing, similar to MATLAB.
+> 3. **Element-wise Operations**: The syntax is `.`, for example, `D_C .< 0` for element-wise comparison.
+> 4. **Type Conversion**: The `ceil` and `floor` functions require type conversion to `Int`.
+> 5. **Array Broadcasting**: Broadcasting is done with `.` operator, for example, `(1:C) .+ ceil(Int, D_C[ii])`.
+> 6. **In-place Assignment**: `.=`, as in `state2a[state2a .< 1] .= 1`, is used for in-place assignment.
+> 
+> Please let me know if you need help with any other function translations or any further assistance!
+**user**:
+> Can you add a docstring and types to this?
+**assistant**:
+> Certainly! Here is the updated Julia function with added docstring and type annotations:
+> 
+> ```julia
+> """
+> Constructs a mapping between before-states and after-states based on given parameters.
+> 
+> Arguments:
+> - C: Number of discretized states of the clean energy share.
+> - D_C_min: Highest clean energy decrease.
+> - D_C_max: Highest clean energy increase.
+> - D: Number of possible changes in renewable energy.
+> - Q_const: Total amount of power that needs to be provided using clean or dirty plants.
+> 
+> Returns:
+> - state1: State before actions take effect.
+> - state2a: Possible resulting states (first option).
+> - state2b: Possible resulting states (second option).
+> - xprob2: Probability matrix of transitions to state2b.
+> - q_c: Power distribution for clean plants.
+> - q_f: Power distribution for dirty plants.
+> """
+> function make_actions(C::Int, D_C_min::Float64, D_C_max::Float64, D::Int, Q_const::Float64)
+>     # Construct the D_C array
+>     D_C = range(D_C_min, D_C_max, length=D)
+> 
+>     # Initialize matrices to store states and probabilities
+>     state1 = repeat(1:C, 1, 1+D) # as indices
+> 
+>     state2a = 1:C # as indices
+>     state2b = 1:C # as indices
+>     prob2 = [1.0] # probability of going to state2b
+> 
+>     # Loop over negative D_C values
+>     for ii in 1:sum(D_C .< 0)
+>         push!(state2a, (1:C) .+ ceil(Int, D_C[ii]))
+>         push!(state2b, (1:C) .+ floor(Int, D_C[ii]))
+>         push!(prob2, 1.0 - (-floor(D_C[ii]) + D_C[ii]))
+>     end
+> 
+>     # Loop over non-negative D_C values
+>     for ii in 1:sum(D_C .>= 0)
+>         push!(state2a, (1:C) .+ floor(Int, D_C[ii + sum(D_C .< 0)]))
+>         push!(state2b, (1:C) .+ ceil(Int, D_C[ii + sum(D_C .< 0)]))
+>         push!(prob2, 1.0 - (ceil(D_C[ii + sum(D_C .< 0)]) - D_C[ii + sum(D_C .< 0)]))
+>     end
+> 
+>     # Ensure states are within bounds
+>     state2a[state2a .< 1] .= 1
+>     state2a[state2a .> C] .= C
+>     state2b[state2b .< 1] .= 1
+>     state2b[state2b .> C] .= C
+> 
+>     xprob2 = repeat(prob2', 1, C)
+> 
+>     q_c = Q_const * repeat([0; D_C/C], 1, C)
+>     q_f = -q_c
+> 
+>     return state1, state2a, state2b, xprob2, q_c, q_f
+> end
+> ```
+> 
+> ### Explanation:
+> 1. **Type Annotations**: Added type annotations for function arguments to enforce type safety.
+> 2. **Document String**: Included a docstring to describe the function's purpose and arguments.
+> 3. **Float64 Type**: Used `Float64` for floating-point numbers and `Int` for integer values.
+> 4. **Explicit Returns**: The function returns multiple variables together as a tuple.
+> 
+> Feel free to let me know if you need further modifications or assistance!
+**user**:
+> Next, this calculates the total economic costs for all power generation:
+> ```
+> function yy = ecost(s_c, Q, q_c, q_f, P_f, alpha_wind, alpha_solar, declining, e_of_scale)
+> % Q, q_c, and q_f are in MW
+> %   s_c may be vector, q_c and q_f as scalars OR
+> %   s_c, q_c, and q_f may be all matrices of the same dimensions
+> % P_f is in $/TJ = $/(TW s) * 1 TW / 1e6 MW * 1e6 s / Ms = ($/Ms)/MW
+> Msecs = 365.25*24*60*60/1e6;
+> % Msecs is the number of seconds to calculate over / 1e6
+> %   (31.558 for a year)
+> 
+> % Fossil Fuel Technologies
+> 
+> FC_f = P_f * Msecs * (1 - s_c) * Q;
+> 
+> % Constant prices
+> OC_f_q = 36e3; % O&M fixed cost ($/year/MW)
+> OC_f = ((1 - s_c) * Q) * OC_f_q;
+> 
+> % Construction costs at $2000 / kW
+> CC_f = 2000 * 1000 * q_f;
+> CC_f(q_f < 0) = 0;
+> 
+> % Clean Technologies
+> OC_wind = 22e3;
+> OC_solar = 28e3;
+> 
+> %alpha_wind = .35;
+> %alpha_solar = .2;
+> 
+> if e_of_scale
+>   cost_scale = s_c * Q;
+> else
+>   cost_scale = .1 * Q;
+> end
+> 
+> OC_c = ((OC_wind + OC_solar) / 2) * s_c * Q;
+> if declining == 0
+>   [rows, cols] = size(s_c);
+>   CC_wind_q = zeros(rows, cols);
+>   CC_solar_q = zeros(rows, cols);
+>   
+>   CC_wind_q(s_c > 0) = (4750 / (6400^-alpha_wind)) * (s_c(s_c > 0) * Q).^-alpha_wind;
+>   CC_solar_q(s_c > 0) = (2400 / (52e3^-alpha_solar)) * (s_c(s_c > 0) * Q).^-alpha_solar;
+>   CC_c = ((CC_wind_q + CC_solar_q) / 2) .* 1000 .* q_c .* ...
+>          exp(34*q_c ./ cost_scale);
+> else 
+>   [rows, cols] = size(s_c);
+>   CC_wind_q = zeros(rows, cols);
+>   alpha_wind_adj = zeros(rows,cols);
+>   alpha_solar_adj = zeros(rows,cols);
+>   CC_wind0 = zeros(rows, cols);
+>   CC_solar0 = zeros(rows, cols);
+>   alpha_wind_adj(s_c>0) = alpha_wind*(s_c(s_c > 0) * Q < 600e3)+ alpha_wind/2*(s_c(s_c > 0) * Q >= 600e3); 
+>   alpha_solar_adj(s_c>0) = alpha_solar*(s_c(s_c > 0) * Q < 600e3)+ alpha_solar/2*(s_c(s_c > 0) * Q >= 600e3); 
+>   CC_wind0(s_c>0) = (2400/(60e3^-alpha_wind)) * (s_c(s_c > 0) * Q < 600e3) + (2400/(60e3^-alpha_wind) * (600e3^-(alpha_wind/2))*(s_c(s_c > 0) * Q >= 600e3));
+>   CC_wind_q(s_c > 0) = CC_wind0(s_c>0) .* (s_c(s_c > 0) * Q).^-alpha_wind_adj(s_c>0);
+>   CC_c = CC_wind_q .* 1000 .* q_c .* exp(34*q_c ./ cost_scale);
+> end    
+>     
+> % For s_c == 0, treat like s_c * Q == 1
+> % CC_wind_q(s_c == 0) = 1.0206e+05;
+> % CC_solar_q(s_c == 0) = 2.1058e+04;
+> CC_c(s_c == 0) = ((1.0206e+05 + 2.1058e+04) / 2) .* 1000 .* ...
+>           q_c(s_c == 0) .* exp(q_c(s_c == 0)./(.1*Q));
+> CC_c(q_c < 0) = 0;
+> 
+> % Combined cost
+> 
+> yy = FC_f + OC_f + OC_c + CC_f + CC_c;
+> ```
+**assistant**:
+> Below is the translation of your MATLAB function `ecost` to Julia, with added docstring and type annotations:
+> 
+> ```julia
+> """
+> Calculate the total economic costs for all power generation.
+> 
+> Arguments:
+> - s_c: Clean energy share.
+> - Q: Total amount of power provided in MW.
+> - q_c: Power distribution for clean plants.
+> - q_f: Power distribution for dirty plants.
+> - P_f: Cost per energy unit for fossil fuels ($/MWs).
+> - alpha_wind: Exponent for wind technology cost calculation.
+> - alpha_solar: Exponent for solar technology cost calculation.
+> - declining: Flag indicating declining construction costs.
+> - e_of_scale: Flag indicating the use of cost scaling.
+> 
+> Returns:
+> - yy: Total economic costs for power generation.
+> """
+> function ecost(s_c::Array{Float64,2}, Q::Float64, q_c::Float64, q_f::Float64, P_f::Float64, 
+>                 alpha_wind::Float64, alpha_solar::Float64, declining::Int, e_of_scale::Bool)
+>     Msecs = 365.25*24*60*60/1e6
+> 
+>     FC_f = P_f * Msecs * (1 .- s_c) * Q
+> 
+>     OC_f_q = 36e3
+>     OC_f = ((1 .- s_c) .* Q) * OC_f_q
+> 
+>     CC_f = 2000 * 1000 * q_f
+>     CC_f[q_f .< 0] .= 0
+> 
+>     OC_wind = 22e3
+>     OC_solar = 28e3
+> 
+>     if e_of_scale
+>         cost_scale = s_c * Q
+>     else
+>         cost_scale = 0.1 * Q
+>     end
+> 
+>     OC_c = ((OC_wind + OC_solar) / 2) * s_c * Q
+> 
+>     if declining == 0
+>         CC_wind_q = ((4750 / 6400^-alpha_wind) .* (s_c .* Q) .^-alpha_wind) .* (s_c .> 0)
+>         CC_solar_q = ((2400 / 52e3^-alpha_solar) .* (s_c .* Q) .^-alpha_solar) .* (s_c .> 0)
+>         CC_c = ((CC_wind_q + CC_solar_q) / 2) .* 1000 .* q_c .* exp(34 .* q_c ./ cost_scale)
+>     else
+>         alpha_wind_adj = alpha_wind .* (s_c .* Q .< 600e3) .+ alpha_wind/2 .* (s_c .* Q .>= 600e3)
+>         alpha_solar_adj = alpha_solar .* (s_c .* Q .< 600e3) .+ alpha_solar/2 .* (s_c .* Q .>= 600e3)
+>         
+>         CC_wind0 = ((2400 / (60e3^-alpha_wind)) .* (s_c .* Q .< 600e3) .+ (2400 / (60e3^-alpha_wind) .* (600e3^-(alpha_wind/2)) .* (s_c .* Q .>= 600e3)))
+>         CC_wind_q = CC_wind0 .* (s_c .* Q) .^-alpha_wind_adj
+>         CC_c = CC_wind_q .* 1000 .* q_c .* exp(34 .* q_c ./ cost_scale)
+>     end
+> 
+>     CC_c[s_c .== 0] = ((1.0206e5 + 2.1058e4) / 2) .* 1000 .* q_c[s_c .== 0] .* exp(q_c[s_c .== 0] ./ (0.1 * Q))
+>     CC_c[q_c .< 0] .= 0
+> 
+>     yy = FC_f + OC_f + OC_c + CC_f + CC_c
+> 
+>     return yy
+> end
+> ```
+> 
+> ### Explanation:
+> 1. The function is now defined with type annotations for the arguments and return value for better typing and performance in Julia.
+> 2. Array operations are performed element-wise in Julia using the `.` operator.
+> 3. Array indexing and assignment have been adjusted to Julia syntax.
+> 4. The `.*` and `./` operators are used for element-wise multiplication and division, respectively.
+> 5. The function now uses Julia specific syntax for conditions and broadcasting to improve performance.
+> 
+> This code should now be ready to be used in Julia for calculating the total economic costs for power generation. Let me know if you need further assistance or have any more functions to translate!
+**user**:
+> This simulates the stochastic fossil fuel price:
+> ```
+> function [P_f2] = simustep(P_f1, process, sigma)
+> dt = 1; % Time step
+> 
+> if process == 1
+>   %%% Fuss 2008 Process
+>   
+>   % Market uncertainty
+>   sigma_f = 0.0092376; % Electricity volatility parameter
+> 
+>   % Price drives
+>   mu_f = log(3860); % Price of electricity reverts to mean exp(mu_f)
+>   alpha = 0.045564;
+> 
+>   dW_f = randn(1) * dt;
+>   dP_f = alpha * (mu_f - log(P_f1)) * P_f1 * dt + sigma_f * P_f1 * dW_f;
+>   
+>   P_f2 = max(0, P_f1 + dP_f);
+> elseif process == 2
+>   %%% AR(1) Process
+>   
+>   % Market uncertainty
+>   %sigma = 0.08; % Coal price volatility parameter
+> 
+>   % Price drives
+>   mu = .03; % Price of electricity reverts to mean exp(mu_f) - parameter in Trancik paper is 0.144 - not the same as fit found in coaldata.m
+>   %gamma = 0.956;  % within statistical error, gamma = 1, which gives a random walk
+> 
+>   dW_f = normrnd(0,sigma);
+>   %log_P_f = log(P_f1) + dW_f; % pure random walk
+>   log_P_f= log(P_f1) + mu + dW_f ; % AR(1) process
+> 
+>   P_f2 = exp(log_P_f);
+> else
+>   error('Unknown process number');
+> end
+> 
+> % 1 MW = 31.5576 TJ/year
+> % 1e6 J/s * 60*60*24 s/day * 365.25 day/year * 1/1e12 TJ/J
+> ```
+**assistant**:
+> Here is the translation of your MATLAB function `simustep` to Julia:
+> 
+> ```julia
+> function simustep(P_f1, process, sigma)
+>     dt = 1  # Time step
+> 
+>     if process == 1
+>         # Fuss 2008 Process
+> 
+>         # Market uncertainty
+>         sigma_f = 0.0092376  # Electricity volatility parameter
+> 
+>         # Price drives
+>         mu_f = log(3860)  # Price of electricity reverts to mean exp(mu_f)
+>         alpha = 0.045564
+> 
+>         dW_f = randn() * dt
+>         dP_f = alpha * (mu_f - log(P_f1)) * P_f1 * dt + sigma_f * P_f1 * dW_f
+> 
+>         P_f2 = max(0, P_f1 + dP_f)
+>         
+>     elseif process == 2
+>         # AR(1) Process
+> 
+>         mu = 0.03  # Price of electricity reverts to mean exp(mu_f)
+>         dW_f = randn() * sigma
+>         log_P_f = log(P_f1) + mu + dW_f
+>         
+>         P_f2 = exp(log_P_f)
+>     else
+>         error("Unknown process number")
+>     end
+> 
+>     return P_f2
+> end
+> ```
+> 
+> ### Explanation:
+> 1. The function is now defined without explicitly returning the value as a variable since Julia automatically returns the last expression evaluated.
+> 2. `randn()` is used to generate a random number from a standard normal distribution in Julia.
+> 3. `normrnd(0, sigma)` is translated to `randn() * sigma` in Julia for generating random numbers with a specific standard deviation.
+> 4. `error()` function is used to raise an error in Julia.
+> 
+> This translation should allow you to simulate the stochastic fossil fuel price in Julia. If you have any more functions to translate or need further assistance, feel free to ask!
+**user**:
+> Can you add a docstring and argument types?
+**assistant**:
+> Certainly! Here is the updated Julia function with added docstring and argument types:
+> 
+> ```julia
+> """
+> Simulate the stochastic fossil fuel price based on the specified process.
+> 
+> Arguments:
+> - P_f1: Previous price of fossil fuels.
+> - process: Integer indicating the stochastic process to use (1 for Fuss 2008 Process, 2 for AR(1) Process).
+> - sigma: Standard deviation for price drive (only used for process 2).
+> 
+> Returns:
+> - P_f2: Simulated price of fossil fuels after one time step.
+> """
+> function simustep(P_f1::Float64, process::Int, sigma::Float64)
+>     dt = 1  # Time step
+> 
+>     if process == 1
+>         # Fuss 2008 Process
+> 
+>         # Market uncertainty
+>         sigma_f = 0.0092376  # Electricity volatility parameter
+> 
+>         # Price drives
+>         mu_f = log(3860)  # Price of electricity reverts to mean exp(mu_f)
+>         alpha = 0.045564
+> 
+>         dW_f = randn() * dt
+>         dP_f = alpha * (mu_f - log(P_f1)) * P_f1 * dt + sigma_f * P_f1 * dW_f
+> 
+>         P_f2 = max(0, P_f1 + dP_f)
+>         
+>     elseif process == 2
+>         # AR(1) Process
+> 
+>         mu = 0.03  # Price of electricity reverts to mean exp(mu_f)
+>         dW_f = randn() * sigma
+>         log_P_f = log(P_f1) + mu + dW_f
+>         
+>         P_f2 = exp(log_P_f)
+>     else
+>         error("Unknown process number")
+>     end
+> 
+>     return P_f2
+> end
+> ```
+> 
+> ### Explanation:
+> 1. The function now includes a docstring describing its purpose and arguments for better understanding.
+> 2. Argument types have been specified for `P_f1`, `process`, and `sigma` to ensure type stability and catch type errors.
+> 3. The function is structured with type annotations and documentation for clarity and future reference.
+> 
+> This version of the function should help you simulate the stochastic fossil fuel price in Julia with proper type checking and documentation. Feel free to reach out if you have more functions to translate or need further assistance!
+**user**:
+> And this now combines all of those to perform the Bellman optimization:
+> ```
+> function [strat] = optimize_cost(N, S, C, D_C_min, D_C_max, D, ...
+>                                  P_f_min, P_f_max, F, Q_const, alpha_wind, alpha_solar, process, declining, fuel_sigma, e_of_scale)
+> % N = number of monte carlo projections
+> % strat is a SxCxF matrix
+> %   S = planning horizon (timesteps)
+> %   C is discretized version of the clean energy share
+> %   F is discretized versions of P_f
+> % values are 1 (no change), 2-D+1 (change in share on next period)
+> 
+> strat = zeros(S-1, C, F);
+> 
+> % VV is a CxF matrix
+> 
+> discount = .05; % discount rate
+> 
+> P_f = linspace(P_f_min, P_f_max, F);
+> S_C = linspace(0, 1, C);
+> 
+> % STEP 1: Calculate V[S] under every scenario
+> VV2 = zeros(C, F);
+> for Fi = 1:F
+>   % Need to divide by 1 - e^-discount for asymptotic (for delayed cost)
+>   VV2(:, Fi) = ecost(S_C, Q_const, 0, 0, P_f(Fi), alpha_wind, alpha_solar, declining, e_of_scale) * (1/(discount));% (1/discount-1/discount*exp(-discount*10)) ;  % cost from maintenance and fuel only
+>   %since in the last period, one can no longer invest.
+> end
+> 
+> % STEP 2: Determine optimal action in t = S-1 and back
+> [state1, state2a, state2b, xprob2, q_c, q_f] = make_actions(C, D_C_min, ...
+>                                                   D_C_max, D, Q_const);
+> 
+> for t = (S-1):-1:1
+>   disp(t);
+>   VV1 = zeros(C, F);
+>   
+>   for Fi = 1:F
+>     sums1 = zeros(size(state2a));
+>     sums2 = zeros(size(state2b));
+> 
+>     for ii = 1:N
+>       [P_f2] = simustep(P_f(Fi), process, fuel_sigma);
+>       Fi2 = discrete(P_f2, P_f_min, P_f_max, F);
+> 
+>       sums1 = sums1(:) + VV2((Fi2-1)*C + state2a(:));
+>       sums2 = sums2(:) + VV2((Fi2-1)*C + state2b(:));
+>     end
+> 
+>     ecost_later1 = reshape(sums1, size(state2a)) / N;
+>     ecost_later2 = reshape(sums2, size(state2b)) / N;
+>     later = (xprob2 .* ecost_later2 + (1 - xprob2) .* ecost_later1);
+>     ecost_now = ecost(S_C(state1), Q_const, q_c, q_f, P_f(Fi), alpha_wind, alpha_solar, declining, e_of_scale); % M added alpha_wind,alpha_solar as arguments
+>     values = ecost_now + exp(-discount) * later;
+> 
+>     [VV1(:, Fi), strat(t, :, Fi)] = min(values);
+>   end
+>   
+>   VV2 = VV1;
+> end
+> ```
+**assistant**:
+> Here is the translation of your MATLAB function `optimize_cost` to Julia, including docstring and argument types:
+> 
+> ```julia
+> """
+> Optimize the cost using Bellman optimization for a stochastic process.
+> 
+> Arguments:
+> - N: Number of Monte Carlo projections.
+> - S: Planning horizon (timesteps).
+> - C: Discretized version of the clean energy share.
+> - D_C_min: Highest clean energy decrease.
+> - D_C_max: Highest clean energy increase.
+> - D: Number of possible changes in renewable energy.
+> - P_f_min: Minimum fossil fuel price.
+> - P_f_max: Maximum fossil fuel price.
+> - F: Discretized versions of P_f.
+> - Q_const: Total amount of power that needs to be provided using clean or dirty plants.
+> - alpha_wind: Exponent for wind technology cost calculation.
+> - alpha_solar: Exponent for solar technology cost calculation.
+> - process: Stochastic process selection.
+> - declining: Flag indicating declining construction costs.
+> - fuel_sigma: Standard deviation for fuel price stochastic process.
+> - e_of_scale: Flag indicating the use of cost scaling.
+> 
+> Returns:
+> - strat: SxCxF matrix representing the optimal strategy.
+> 
+> """
+> function optimize_cost(N::Int, S::Int, C::Int, D_C_min::Float64, D_C_max::Float64, D::Int,
+>                       P_f_min::Float64, P_f_max::Float64, F::Int, Q_const::Float64,
+>                       alpha_wind::Float64, alpha_solar::Float64, process::Int, declining::Int,
+>                       fuel_sigma::Float64, e_of_scale::Bool)
+>     strat = zeros(S-1, C, F)
+> 
+>     discount = 0.05  # Discount rate
+> 
+>     P_f = range(P_f_min, P_f_max, length=F)
+>     S_C = range(0, 1, length=C)
+> 
+>     # STEP 1: Calculate V[S] under every scenario
+>     VV2 = zeros(C, F)
+>     for Fi in 1:F
+>         VV2[:, Fi] = ecost(S_C, Q_const, 0, 0, P_f[Fi], alpha_wind, alpha_solar, declining, e_of_scale) * (1/(discount))
+>     end
+> 
+>     # STEP 2: Determine optimal action for t = S-1 and back
+>     for t in (S-1):-1:1
+>         println(t)
+>         VV1 = zeros(C, F)
+> 
+>         for Fi in 1:F
+>             sums1 = zeros(size(state2a))
+>             sums2 = zeros(size(state2b))
+> 
+>             for ii in 1:N
+>                 P_f2 = simustep(P_f[Fi], process, fuel_sigma)
+>                 Fi2 = discrete(P_f2, P_f_min, P_f_max, F)
+> 
+>                 sums1 += VV2[(Fi2-1)*C + state2a]
+>                 sums2 += VV2[(Fi2-1)*C + state2b]
+>             end
+> 
+>             ecost_later1 = reshape(sums1, size(state2a)) / N
+>             ecost_later2 = reshape(sums2, size(state2b)) / N
+>             later = (xprob2 .* ecost_later2 + (1 - xprob2) .* ecost_later1)
+>             ecost_now = ecost(S_C[state1], Q_const, q_c, q_f, P_f[Fi], alpha_wind, alpha_solar, declining, e_of_scale)
+>             values = ecost_now + exp(-discount) * later
+> 
+>             VV1[:, Fi], strat[t, :, Fi] = argmin(values, dims=1)
+>         end
+> 
+>         VV2 = copy(VV1)
+>     end
+> 
+>     return strat
+> end
+> ```
+> 
+> ### Explanation:
+> 1. Introduced a docstring and type annotations for all input arguments to the function.
+> 2. Converted loops (for) from using matlab/julia indexing conventions, zero-based in MATLAB to one-based.
+> 3. The `argmin()` Julia function is used to find the indices of the minimum values along the specified dimension `dims=1`.
+> 4. Properly incorporated the array operations according to Julia syntax.
+> 
+> Try running this optimized cost function in Julia, and let me know if you need further assistance or modifications!
+**user**:
+> Finally, this runs the whole process and plots the results:
+> ```
+> addpath('../lib');
+> 
+> % Determine the optimal cost path
+> Q_const = 2281591; % MW: 1e6 * (20000 TWh / year) / (8766 hr / year)
+> C = 20; % Number of clean energy shares for planning
+> D_C_min = -.5; % Highest clean energy decrease
+> D_C_max = 1; % Highest clean energy increase
+> D = 100;
+> P_f_min = 1000;
+> P_f_max = 6000;
+> F = 10;
+> alpha_wind = .35;
+> alpha_solar = .2;
+> fuel_sigma = 0.08;
+> estrat = optimize_cost(50, 50, C, D_C_min, D_C_max, D, P_f_min, P_f_max, ...
+>                        F, Q_const, alpha_wind, alpha_solar, 2, 0, ...
+>                        fuel_sigma, 1);
+> 
+> D_C = [0 linspace(D_C_min, D_C_max, D)/C];
+> colors = bwcolor(F);
+> P_f = linspace(P_f_min, P_f_max, F);
+> 
+> % BASELINE 0: Cost of economically optimal actions
+> 
+> do_plot = 2;
+> 
+> clf
+> for Fi = 1:F
+>   cc = .143;
+>   costs_estrat = [];
+>   costs_zeroact = [];
+>   costs_const = [];
+>   for ii = 2:50
+>     before = discrete(cc, 0, 1, C);
+>     costs_estrat(ii-1) = ecost(cc, Q_const, estrat(ii-1, before, Fi), -estrat(ii-1, before, Fi), P_f(Fi), alpha_wind, alpha_solar, 0, 1);
+>     costs_zeroact(ii-1) = ecost(cc, Q_const, 0, 0, P_f(Fi), alpha_wind, alpha_solar, 0, 1);
+>     costs_const(ii-1) = ecost(.143, Q_const, 0, 0, P_f(Fi), alpha_wind, alpha_solar, 0, 1);
+>     
+>     ac = estrat(ii-1, before, Fi);
+>     cc = cc + D_C(ac);
+>   end
+>   
+>   switch do_plot
+>    case 0
+>     plot(2013:2061, costs_estrat, '-', 'Color', colors(Fi, :));
+>     plot(2013:2061, costs_zeroact, ':', 'Color', colors(Fi, :));
+>    case 1
+>     plot(2013:2061, costs_zeroact ./ costs_estrat, '-', 'Color', colors(Fi, :));
+>    case 2
+>     plot(2013:2061, costs_const ./ costs_estrat, '-', 'Color', colors(Fi, :));
+>   end
+>   
+>   hold on
+> end
+> switch do_plot
+>  case 0
+>   title('Cost of Economically-Optimal Actions', ...
+>         'fontsize', 20);
+>   ylabel('Action Cost ($)')
+>  case 1
+>   title('Cost of not investing in each year', ...
+>         'fontsize', 20);
+>   ylabel('Ratio of action costs')
+>  case 2
+>   title('Cost of never investing compared to optimal', ...
+>         'fontsize', 20);
+>   ylabel('Ratio of yearly costs')
+> end
+> 
+> xlabel('Year');
+> 
+> switch do_plot
+>  case 0
+>   axis([2013 2061 0 5e11])
+>  case 1
+>   axis([2013 2061 .9996 1])
+>  case 2
+>   axis([2013 2061 .9 1.6])
+> end
+> ```
+**assistant**:
+> Here is the translation of your MATLAB script to Julia for running the whole process and plotting the results:
+> 
+> ```julia
+> using Plots
+> 
+> # Determine the optimal cost path
+> Q_const = 2281591  # MW: 1e6 * (20000 TWh / year) / (8766 hr / year)
+> C = 20  # Number of clean energy shares for planning
+> D_C_min = -0.5  # Highest clean energy decrease
+> D_C_max = 1  # Highest clean energy increase
+> D = 100
+> P_f_min = 1000
+> P_f_max = 6000
+> F = 10
+> alpha_wind = 0.35
+> alpha_solar = 0.2
+> fuel_sigma = 0.08
+> 
+> # Optimize cost
+> estrat = optimize_cost(50, 50, C, D_C_min, D_C_max, D, P_f_min, P_f_max, F, Q_const, alpha_wind, alpha_solar, 2, 0, fuel_sigma, true)
+> 
+> D_C = vcat(0, range(D_C_min, D_C_max, length=D) / C)
+> colors = distinguishable_colors(F)
+> P_f = range(P_f_min, P_f_max, length=F)
+> 
+> do_plot = 2
+> 
+> plot()
+> for Fi in 1:F
+>     cc = 0.143
+>     costs_estrat = Float64[]
+>     costs_zeroact = Float64[]
+>     costs_const = Float64[]
+>     for ii in 2:50
+>         before = discrete(cc, 0, 1, C)
+>         costs_estrat = [costs_estrat; ecost(cc, Q_const, estrat[ii-1, before, Fi], -estrat[ii-1, before, Fi], P_f[Fi], alpha_wind, alpha_solar, 0, true)]
+>         costs_zeroact = [costs_zeroact; ecost(cc, Q_const, 0, 0, P_f[Fi], alpha_wind, alpha_solar, 0, true)]
+>         costs_const = [costs_const; ecost(0.143, Q_const, 0, 0, P_f[Fi], alpha_wind, alpha_solar, 0, true)]
+> 
+>         ac = estrat[ii-1, before, Fi]
+>         cc += D_C[ac]
+>     end
+> 
+>     if do_plot == 0
+>         plot!(2013:2061, costs_estrat, label="", color=colors[Fi])
+>         plot!(2013:2061, costs_zeroact, label="", color=colors[Fi], linestyle=:dot)
+>     elseif do_plot == 1
+>         plot!(2013:2061, costs_zeroact ./ costs_estrat, label="", color=colors[Fi])
+>     elseif do_plot == 2
+>         plot!(2013:2061, costs_const ./ costs_estrat, label="", color=colors[Fi])
+>     end
+> end
+> 
+> plot!(
+>     xlabel = "Year",
+>     title = (
+>         do_plot == 0 ? "Cost of Economically-Optimal Actions" :
+>         do_plot == 1 ? "Cost of not investing in each year" :
+>         "Cost of never investing compared to optimal"
+>     ),
+>     ylabel = (
+>         do_plot == 0 ? "Action Cost ($)" :
+>         "Ratio of action costs"
+>     ),
+>     legend = false
+> )
+> 
+> limits = (
+>     do_plot == 0 ? (2013, 2061, 0, 5e11) :
+>     do_plot == 1 ? (2013, 2061, 0.9996, 1) :
+>     (2013, 2061, 0.9, 1.6)
+> )
+> 
+> plot!(limits...)
+> ```
+> 
+> ### Explanation:
+> 1. The script includes Plots.jl for plotting the results.
+> 2. Removed the `addpath('../lib')` line as it's not needed in Julia.
+> 3. Replaced loop indexing from MATLAB's 1-based to Julia's 1-based indexing.
+> 4. Utilized the `plot!()` function from Plots.jl to create the plots.
+> 5. Adjusted the syntax for setting plot labels, titles, and limits according to Julia conventions.
+> 
+> You can run this script in Julia to perform the Bellman optimization and plot the results. Feel free to adjust the plotting parameters or let me know if you need further modifications!
+**user**:
+> In the original code for ecost, I made it so it would work called either of two ways:
+> %   s_c may be vector, q_c and q_f as scalars OR
+> %   s_c, q_c, and q_f may be all matrices of the same dimensions
+> 
+> The new types are requiring that s_c is an array and q_c and q_f are scalars (which isn't quite either of these).
+> 
+> In Julia, should I use the same code and have just have unions for the argument types, or should I write two different versions of this function?
+**assistant**:
+> In Julia, you can define a single function with flexible argument types using multiple dispatch, allowing it to handle different combinations of arguments seamlessly. This approach promotes code reusability and keeps the codebase clean and concise without the need for multiple versions of the same function.
+> 
+> For your `ecost` function, you can define it to handle both cases where `s_c` may be a vector and `q_c` and `q_f` are scalars, as well as the case where all three are matrices of the same dimensions. You can achieve this in Julia by defining multiple methods for the same function with different argument signatures.
+> 
+> Here is how you could structure it in Julia:
+> 
+> ```julia
+> """
+> Calculate the total economic costs for power generation based on different parameters.
+> 
+> Arguments:
+> - s_c: Clean energy share vector or matrix.
+> - Q: Total amount of power provided in MW.
+> - q_c: Power distribution for clean plants (scalar or matrix).
+> - q_f: Power distribution for dirty plants (scalar or matrix).
+> - P_f: Cost per energy unit for fossil fuels ($/MWs).
+> - alpha_wind: Exponent for wind technology cost calculation.
+> - alpha_solar: Exponent for solar technology cost calculation.
+> - declining: Flag indicating declining construction costs.
+> - e_of_scale: Flag indicating the use of cost scaling.
+> 
+> Returns:
+> - yy: Total economic costs for power generation.
+> """
+> function ecost(s_c::AbstractVector{T}, Q, q_c::T, q_f::T, P_f, alpha_wind, alpha_solar, declining, e_of_scale) where T
+>     # Implementation for vector inputs
+>     # You can unify the calculation logic for both the vector and scalar cases here
+>     # Example implementation follows
+>     # ...
+> 
+>     return yy
+> end
+> 
+> # Another method for handling matrix inputs
+> function ecost(s_c::AbstractMatrix{<:T}, Q, q_c::T, q_f::T, P_f, alpha_wind, alpha_solar, declining, e_of_scale) where T
+>     # Implementation for matrix inputs
+>     # You can reuse similar logic here but accommodate for matrix dimensions
+>     # ...
+> 
+>     return yy
+> end
+> ```
+> 
+> By defining both methods in this way, Julia will select the appropriate implementation based on the types of the arguments provided when the function is called. This approach leverages multiple dispatch in Julia to handle different input scenarios without the need for separate function definitions.
+> 
+> Feel free to adapt this structure to fit the specifics of your `ecost` function implementation and the behavior you desire! This method should allow you to handle both cases efficiently while keeping the code concise and modular.
+**user**:
+> make_action isn't working, because push! isn't building up a matrix. Here's the original chunk of matlab:
+> ```
+> state2a = [1:C]; % as indices
+> state2b = [1:C]; % as indices
+> prob2 = [1]; % prob of going to state2b
+> for ii = 1:sum(D_C < 0)
+>   state2a = [state2a; (1:C) + ceil(D_C(ii))];
+>   state2b = [state2b; (1:C) + floor(D_C(ii))];
+>   prob2 = [prob2 1 - (-floor(D_C(ii)) + D_C(ii))]; % The probability increases linearly with the magnitude of the action 
+> end
+> ```
+> You can see that state2a (e.g.) starts as a 1xC matrix, and then additional rows are added. Do I want to use [A; B] in Julia?
+**assistant**:
+> In Julia, you can use the `vcat()` function to vertically concatenate (stack) arrays along their first dimension, which is equivalent to `[A; B]` in MATLAB. This function allows you to add rows to a matrix over iterations, similar to how you are updating `state2a` and `state2b` in the MATLAB code snippet you provided.
+> 
+> Here is how you can adapt the MATLAB code snippet to Julia using `vcat()`:
+> 
+> ```julia
+> state2a = collect(1:C)  # Initialize as a vector
+> state2b = collect(1:C)  # Initialize as a vector
+> prob2 = [1.0]  # Probability of going to state2b
+> 
+> for ii in 1:sum(D_C .< 0)
+>     state2a = vcat(state2a, (1:C) .+ ceil(Int, D_C[ii]))
+>     state2b = vcat(state2b, (1:C) .+ floor(Int, D_C[ii]))
+>     push!(prob2, 1.0 - (-floor(D_C[ii]) + D_C[ii))  # The probability increases linearly with the magnitude of the action
+> end
+> ```
+> 
+> ### Explanation:
+> - `collect(1:C)` is used to initialize `state2a` and `state2b` as vectors containing elements from 1 to `C`.
+> - `vcat()` is then used to vertically concatenate the existing `state2a` and `state2b` vectors with the new rows obtained from `(1:C) .+ ceil(Int, D_C[ii])` and `(1:C) .+ floor(Int, D_C[ii])`, respectively.
+> - `push!()` is used to add elements to the `prob2` array as a floating-point number is appended.
+> 
+> By using `vcat()` and `push!()` in this way, you can dynamically expand `state2a`, `state2b`, and `prob2` in Julia as rows are added based on the conditions in your loop.
+> 
+> Feel free to try this in your Julia code and let me know if you need further assistance or modifications!

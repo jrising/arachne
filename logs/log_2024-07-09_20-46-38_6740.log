@@ -1,0 +1,73 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> I use Global Sensitivity Analysis (GSA) to evaluate the drivers of variation in the social cost of CO2 (SCC) and social cost of methane (SCCH4). I would like you to help draft up an appendix section for the academic paper. The full appendix section would do the following:
+> 
+> 1. Introduce GSA, with appropriate literature.
+> 2. Explain the steps of the analysis:
+>  - I use 1000 Monte Carlo draws with the same configuration as the main results of the paper.
+>  - For each MC, I extract 17 parameters describing AIS, 2 for Amazon Dieback, 2 for AMOC, 20 for tipping point interactions, 1 for ISM, 2 for OMH (when used), 2 for SAF, and 2 representing climate sensitivity. There are also 2 for temperature damages, and 1 for SLR damages, but uncertainty on these is not included in the standard results.
+>  - We use GlobalSensitivity.jl in Julia, which offers four methods of performing a GSA when Monte Carlo draws have already been taken: EASI, a Fourier-based technique; the Delta moment-independent method; and a regression method which can be performed either with a Pearson correlation or using ranks and the Spearman coefficient. We report all four of these options, along with the 95% confidence interval provided by the delta moment-independent.
+>  - Each of these produces a relative importance measure.
+>  - Since multiple parameters are included for most sources of sensitivity, we combine the importance measures according to \sqrt{\sum_k r_i^2}, which is more conservative in its assumptions about the independence of these factors than a straight sum.
+> 3. Report the results, the main form of which is a graph that shows the relative importance for each source of sensitivity, according to each method.
+> 
+> Can you start by drafting the introduction to this section, explaining the goal of the analysis, and introducing GSA?
+**assistant**:
+> ### Appendix: Global Sensitivity Analysis (GSA) of Drivers of Variation in SCC and SCCH4
+> 
+> #### Introduction
+> 
+> This appendix provides a comprehensive overview of our application of Global Sensitivity Analysis (GSA) to assess the drivers of variation in the social cost of CO2 (SCC) and the social cost of methane (SCCH4). The primary goal of this analysis is to quantify the relative contributions of various sources of uncertainty to the overall variability in SCC and SCCH4 estimates, thereby enhancing our understanding of which factors most critically influence these metrics.
+> 
+> Global Sensitivity Analysis is a powerful methodological framework used extensively across various fields, including environmental economics, climate science, and risk assessment, to evaluate how uncertainty in model inputs propagates through to model outputs. Sensitivity analysis can help identify key drivers of uncertainty and prioritize areas for further research or data collection, ultimately aiming to improve the robustness of policy recommendations.
+> 
+> The literature on GSA is rich and varied, with seminal works by Saltelli et al. (2000, 2008) laying the groundwork for many of the techniques employed today. More recent advancements include the development of methods for dealing with high-dimensional model outputs and complex, non-linear models (Iooss & Lemaître, 2015; Sobol, 2001). In our study, we leverage these advancements to evaluate the relative importance of various parameters that influence SCC and SCCH4 estimates.
+> 
+> We implement GSA using the GlobalSensitivity.jl package in Julia, employing multiple methods to ensure the robustness of our findings. These methods include the Efficient Algorithm for Sensitivity Indices (EASI) (Plischke et al., 2013), a Fourier amplitude sensitivity test (FAST) (Cukier et al., 1973), the Delta moment-independent method (Borgonovo, 2007), and regression techniques using both Pearson and Spearman correlation coefficients.
+> 
+> The following sections detail the steps of our analysis and present the results, focusing on the relative importance of different sources of uncertainty. Our approach provides a thorough examination of the factors driving variation in SCC and SCCH4, offering valuable insights for policymakers and researchers working on climate economic assessments.
+**user**:
+> Great. Can you now draft of the section that explains the method. Here are some additional details:
+>  - A couple of notes for some parameters that are not read directly from the model:
+>     - The AIS model is represented by the 5 regional \beta and \delta coefficients, and the 5 R functions summed according to \sum_t R_{it} (t - 2010), which is a sufficient stastitic under a linear SLR ramp.
+>     - For ISM, an exogenous estimate of Pbar is calculated using the same calculations as the normal Pbar, but holding the probability of a wet day constant at the baseline probability and the precipitation of a wet day constant at its baseline value.
+>     - For OMH and AMOC, an exogenous "year of triggering" is generated by applying the uniform probability values to the constant probability of triggering from 2010, and a second "year of triggering" parameter is generated by using a probability 10% of this 2010 probability.
+>     - Since the probability of Amazon Dieback starts at 0, we instead specify a probability of triggering of 0.5%, but otherwise the same procedure as for OMH and AMOC.
+>     - Climate sensitivity is represented by the first and second difference of GMST in 2010 (prior to the endogenous effects of tipping points)-- so, T_2010 - T_2009 and (T_2010 - T_2009) - (T_2009 - T_2008).
+>     - The SLR damage coefficient parameter is \sum_i Population_{i, 2010} coeff_i, across countries i, which is a sufficient statistic for SLR damages under the assumption of a log utility function.
+**assistant**:
+> ### Methodology
+> 
+> In this section, we outline the specific methodological approach employed to conduct the Global Sensitivity Analysis (GSA) on the social cost of CO2 (SCC) and social cost of methane (SCCH4) estimates. Our analysis aims to systematically investigate the relative importance of various parameters impacting the variability of these key metrics. 
+> 
+> #### Analysis Steps:
+> 
+> 1. **Parameter Extraction**:
+> 
+>    - For each Monte Carlo (MC) draw, we extract a total of 17 parameters describing the Antarctic Ice Sheet (AIS), 2 parameters for Amazon Dieback, 2 for Atlantic Meridional Overturning Circulation (AMOC), 20 for tipping point interactions, 1 for Indian Summer Monsoon (ISM), 2 for Ocean Methane (OMH) when applicable, 2 for South Atlantic Freshening (SAF), and 2 representing climate sensitivity. Additionally, we include 2 parameters for temperature damages and 1 for Sea Level Rise (SLR) damages, although their uncertainty is not included in the standard results.
+> 
+>    - Certain parameters are not directly read from the model but are derived through specified calculations. For example:
+>      - The AIS model is represented by regional coefficients and functions summed under a linear Sea Level Rise (SLR) ramp.
+>      - The ISM parameter, Pbar, is estimated using specific calculations that keep certain variables constant at their baseline values.
+>      - Parameters for OMH, AMOC, and Amazon Dieback are generated based on uniform probability values and specified triggering probabilities.
+> 
+>    - Climate sensitivity is represented by specific temperature differences from 2010, reflecting pre-endogenous tipping point effects.
+> 
+>    - The SLR damage coefficient parameter is calculated as a sum across countries, reflecting SLR damages under a log utility function assumption.
+> 
+> 2. **GSA Methods Using GlobalSensitivity.jl**:
+> 
+>    - We utilize the GlobalSensitivity.jl package in Julia, which supports various methods for GSA when MC draws are already available. These methods include:
+>      - Efficient Algorithm for Sensitivity Indices (EASI)
+>      - Fourier-based techniques
+>      - Delta moment-independent method
+>      - Regression methods using Pearson correlation or Spearman coefficient
+> 
+>    - Each method provides a relative importance measure for the parameters considered.
+> 
+> 3. **Combining Importance Measures**:
+> 
+>    - Given that multiple parameters contribute to most sources of sensitivity, we combine the importance measures using a conservative approach based on the sum of squared relative importance measures, \(\sqrt{\sum_k r_i^2}\), which accounts for potential dependencies among factors.
+> 
+> This methodological framework allows us to comprehensively investigate the sources of variation in SCC and SCCH4 estimates and present a detailed analysis of their relative importance. The next section will present the results of our GSA, showcasing the key drivers influencing these critical climate economic metrics.

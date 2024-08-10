@@ -54,25 +54,17 @@ def make_log(log_filename, ixwriter):
 
     tokenlen = num_tokens_from_string(content)
     if tokenlen > 4097 - 500 - 350: # error of 350 observed
-        lines = content.splitlines()
-        people = []
-        states = []
-        for line in lines:
-            if line in ['**user**:', '**assistant**:']:
-                people.append(line)
-                states.append("")
-            else:
-                states[-1] = states[-1] + line + "\n"
-        maxperstate = int((4097 - 500 - 350) / len(people)) - 10 # **word**: ...
+        messages = load_log('logs/' + log_filename)
+        maxperstate = int((4097 - 500 - 350) / len(messages)) - 10 # **word**: ...
         content = ""
-        for ii in range(len(people)):
-            charspertoken = len(states[ii]) / num_tokens_from_string(states[ii])
+        for message in messages:
+            charspertoken = len(message['content']) / num_tokens_from_string(message['content'])
             allowedlen = int(charspertoken * maxperstate)
-            content += people[ii] + "\n"
-            if len(states[ii]) < allowedlen:
-                content += states[ii]
+            content += message['role'] + "\n"
+            if len(message['content']) < allowedlen:
+                content += message['content']
             else:
-                content += states[ii][:allowedlen] + "..."
+                content += message['content'][:allowedlen] + "..."
     
     extra = "\n\nPlease respond in the following template:\n\nSynopsis: [SYNOPSIS]\n"
     

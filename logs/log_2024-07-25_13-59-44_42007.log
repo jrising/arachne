@@ -1,0 +1,132 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> Can you write a section for a paper supplementary information giving a precise description of the principles behind the following code? This code implements our method of inferring missing data based on data for taxonomically related species:
+> ```
+> library(readxl)
+> 
+> larvdyn2 <- read.csv(file.path(datapath, "floating/larvdyncustom.csv"))
+> taxonomy1 <- read.csv(file.path(datapath, "taxonomy/taxonomy-fixed.csv"))
+> 
+> hr.taxonomy <- read_xlsx(file.path(datapath, "homerange/Homerange Existing Data.xlsx"), sheet=6)
+> hrkeep <- is.na(hr.taxonomy$Drop)
+> withalt <- hrkeep & !is.na(hr.taxonomy$species.rename)
+> taxonomy2 <- data.frame(scientific=c(hr.taxonomy$species[hrkeep], hr.taxonomy$species.rename[withalt]),
+>                         alphaid=NA, kingdom=c(hr.taxonomy$kingdom[hrkeep], hr.taxonomy$kingdom[withalt]),
+>                         phylum=c(hr.taxonomy$phylum[hrkeep], hr.taxonomy$phylum[withalt]),
+>                         class=c(hr.taxonomy$class[hrkeep], hr.taxonomy$class[withalt]),
+>                         order=c(hr.taxonomy$order[hrkeep], hr.taxonomy$order[withalt]),
+>                         family=c(hr.taxonomy$family[hrkeep], hr.taxonomy$family[withalt]),
+>                         genus=c(hr.taxonomy$genus[hrkeep], hr.taxonomy$genus[withalt]))
+> 
+> taxonomy <- rbind(taxonomy1, taxonomy2,
+>                   data.frame(scientific=paste(larvdyn2$genus, larvdyn2$species),
+>                              alphaid=NA, kingdom="Animalia", phylum=larvdyn2$phylum,
+>                              class=larvdyn2$class, order=NA, family=NA, genus=larvdyn2$genus))
+> taxonomy <- taxonomy[!duplicated(taxonomy$scientific),]
+> 
+> lowest.hierarchy <- function(scientific, callback) {
+>     if (length(grep(" ", scientific)) == 0)
+>         scientific <- paste(scientific, "spp.")
+> 
+>     taxrow <- taxonomy[taxonomy$scientific == scientific,]
+>     if (nrow(taxrow) >= 1)
+>         taxrow <- taxrow[1, -c(1:2)] # Drop title
+>     else {
+>         genus <- strsplit(scientific, " ")[[1]][1]
+>         taxrow <- taxonomy[!is.na(taxonomy$genus) & taxonomy$genus == genus,]
+>         if (nrow(taxrow) >= 1)
+>             taxrow <- taxrow[1, -c(1:2)] # Drop title
+>         else
+>             taxrow <- data.frame(kingdom="Animalia", genus)
+>     }
+>     columns <- c('scientific', rev(names(taxrow)))
+>     entries <- c(scientific, rev(as.character(t(taxrow))))
+> 
+>     for (cc in 1:length(columns)) {
+>         if (columns[cc] == 'scientific')
+>             specwithin <- scientific
+>         else
+>             specwithin <- taxonomy$scientific[taxonomy[, columns[cc]] == entries[cc]]
+> 
+>         values <- callback(specwithin)
+>         if (is.data.frame(values)) {
+>             if (nrow(values) > 0) {
+>                 values$level <- columns[cc]
+>                 return(values)
+>             }
+>         } else if (length(values) > 0)
+>             return(list(values=values, level=columns[cc]))
+>     }
+> 
+>     stopifnot(F) # Should never get here
+> }
+> ```
+> For additional reference, the top of larvdyncustom.csv (which has information on larvae for some species) looks like this:
+> ```
+>       phylum        class           genus       species duration                                                 source
+> 1 Arthropoda Malacostraca     Callichirus    islagrande     14.0 http://www.int-res.com/articles/suppl/m393p001_app.xls
+> 2 Arthropoda Malacostraca     Hemigrapsus   oregonensis     24.5 http://www.int-res.com/articles/suppl/m393p001_app.xls
+> 3 Arthropoda Malacostraca Lepidophthalmus louisianensis      3.0 http://www.int-res.com/articles/suppl/m393p001_app.xls
+> 4 Arthropoda Malacostraca    Pachygrapsus     crassipes     88.0 http://www.int-res.com/articles/suppl/m393p001_app.xls
+> 5 Arthropoda Malacostraca        Pandalus      borealis    105.0 http://www.int-res.com/articles/suppl/m393p001_app.xls
+> 6 Arthropoda Malacostraca         Penaeus       monodon     14.0 http://www.int-res.com/articles/suppl/m393p001_app.xls
+> ```
+> The top of taxonomy-fixed.csv (which has information on species taxonomies) looks like this:
+> ```
+>          scientific alphaid  kingdom        phylum          class             order     family    genus
+> 1   Cyprinus carpio      NA Animalia      Chordata Actinopterygii     Cypriniformes Cyprinidae Cyprinus
+> 2 Perca fluviatilis      NA Animalia      Chordata Actinopterygii       Perciformes   Percidae    Perca
+> 3   Sphyrnidae spp.  105694 Animalia      Chordata Elasmobranchii Carcharhiniformes Sphyrnidae         
+> 4     Bramidae spp.  125520 Animalia      Chordata Actinopterygii       Perciformes   Bramidae         
+> 5   Asteroidea spp.  123080 Animalia Echinodermata     Asteroidea                                      
+> 6     Soleidae spp.  125581 Animalia      Chordata Actinopterygii Pleuronectiformes   Soleidae         
+> ```
+> and Homerange Existing Data.xlsx sheet 6 (which has information used to determine home ranges) looks like this:
+> ```
+>   species               species.rename length.mm length.desc length.link dist.mean.m homerange.notes functional_group kingdom phylum class order family genus Drop 
+>   <chr>                 <chr>              <dbl> <chr>       <chr>             <dbl> <chr>           <chr>            <chr>   <chr>  <chr> <chr> <chr>  <chr> <chr>
+> 1 Makaira indica        <NA>                4400 <NA>        <NA>           513800    <NA>           Large pelagics … Animal… Chord… Acti… Perc… Istio… Maka… <NA> 
+> 2 Pagrus auratus        <NA>                 178 <NA>        <NA>              266.   <NA>           Large demersals… Animal… Chord… Acti… Perc… Spari… Pagr… <NA> 
+> 3 Cheilodactylus fuscus <NA>                 350 <NA>        <NA>               68.1  <NA>           Medium reef ass… Animal… Chord… Acti… Perc… Cheil… Chei… <NA> 
+> 4 Parupeneus porphyreus <NA>                 233 <NA>        <NA>              156.   <NA>           Medium reef ass… Animal… Chord… Acti… Perc… Mulli… Paru… <NA> 
+> 5 Paralabrax clathratus <NA>                 720 max total … https://ww…        65.3 "wikipedia ent… Medium benthope… Animal… Chord… Acti… Perc… Serra… Para… <NA> 
+> 6 Semicossyphus pulcher <NA>                 910 max total … https://ww…       139.   <NA>           Medium benthope… Animal… Chord… Acti… Perc… Labri… Semi… <NA> 
+> ```
+> 
+> Please do not include any actual code in the text.
+**assistant**:
+> ### Supplementary Information: Inferring Missing Data Based on Taxonomically Related Species
+> 
+> #### Principles and Methodology
+> 
+> In ecological studies, it is often necessary to estimate missing data for certain species when direct empirical measurements are unavailable. To address this challenge, we implement a method that leverages taxonomically related species to infer missing values. This approach is grounded in the principle that closely related species share biological and ecological traits, making them suitable proxies for one another.
+> 
+> #### Data Sources and Preprocessing
+> 
+> The method relies on three primary data sources: 
+> 1. A custom dataset containing larval dynamics of various species (`larvdyn2`).
+> 2. A taxonomy dataset providing hierarchical taxonomic information for species (`taxonomy1`).
+> 3. An Excel sheet containing home range data, which includes both species names and renamed species (`hr.taxonomy`).
+> 
+> To ensure comprehensive taxonomic coverage, we augment the taxonomy dataset (`taxonomy1`) using the home range data by creating a combined taxonomy dataframe (`taxonomy2`). This integrated taxonomy includes scientific names, as well as hierarchical taxonomic classification (kingdom, phylum, class, order, family, and genus).
+> 
+> #### Taxonomic Hierarchy and Data Integration
+> 
+> The integrated taxonomy is constructed by merging species information from all three data sources and removing duplicates to ensure consistency. This taxonomy includes species-specific entries as well as entries aggregated at the genus level.
+> 
+> #### Hierarchical Inference Procedure
+> 
+> To infer missing values, we follow a hierarchical inference process:
+> 
+> 1. **Species-Specific Lookup:** The method first attempts to match the target species by its scientific name within the integrated taxonomy. If a match is found, the taxonomic data related to this species is retrieved.
+>    
+> 2. **Genus-Level Aggregation:** If no species-specific match is found, the method aggregates data at the genus level. It identifies all records within the taxonomy that share the same genus and retrieves the taxonomic information for the genus-level match.
+> 
+> 3. **Hierarchical Taxonomic Search:** For entries where neither species-level nor genus-level matches are found, the method constructs a hierarchical search process. It navigates through taxonomic levels (e.g., family, order, class) in reverse hierarchical order, searching for and utilizing the highest available taxonomic information that provides relevant data.
+> 
+> During this hierarchical search, the method dynamically adjusts the scope of the search, narrowing down the classification levels until suitable data is found. This ensures that even in the absence of exact matches, nearby taxonomic relatives can be used to infer missing values.
+> 
+> ### Conclusion
+> 
+> This method embodies a robust hierarchical approach to leveraging taxonomic relationships for data imputation in ecological studies. By systematically iterating through taxonomic levels from species to genus and beyond, the approach maximizes the utility of available data and provides a structured framework for addressing data gaps in ecological datasets. This taxonomically informed imputation enhances the reliability and comprehensiveness of ecological analyses, contributing to more accurate and sustainable environmental models.

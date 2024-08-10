@@ -1,0 +1,97 @@
+**assistant**:
+> The query asks how to remove bin labels from a legend in a ggplot visualization. The following past 
+**user**:
+> I am trying to make a kind of histogram-like plot in plot_ly under Shiny, but the order of points seems to get messed up. I am trying to do this with add_ribbons. Here are the first five points:
+>             [,1]         [,2]         [,3]         [,4]         [,5]
+> xx -2.198205e+00 1.007007e+01 1.007007e+01 2.125882e+01 21.258815099
+> ymax  8.151105e-05 8.151105e-05 8.043798e-04 8.043798e-04  0.001507133
+> 
+> and ymin is always 0. As you can see, the first two points should make a box with a flat top, but instead I get a trapazoid as point 1 is connected to point 3. How can I get this kind of histogram with custom-width bins?
+**assistant**:
+> It sounds like you're encountering an issue with the ordering of points when using `add_ribbons` in `plot_ly`. This is likely because `plot_ly` expects a specific order for the points to connect them correctly. To create histogram-like boxes with custom-width bins, you should ensure that your points are ordered correctly for each ribbon.
+> 
+> To achieve the desired box plot with flat tops and custom-width bins, we can structure the data and use `add_polygons` instead, which allows more control over the points' order. Here's how to get started:
+> 
+> 1. **Prepare the Data Points:**
+>    Structure the data for each bin to define the corners of the box. Each bin's data should follow the order: bottom-left, bottom-right, top-right, and top-left.
+>    
+>    Given your data, here's an example to prepare the points for the first few bins:
+> 
+>     ```r
+>     library(plotly)
+> 
+>     # Example data
+>     xx <- c(-2.198205e+00, 1.007007e+01, 1.007007e+01, 2.125882e+01, 21.258815099)
+>     ymax <- c(8.151105e-05, 8.151105e-05, 8.043798e-04, 8.043798e-04, 0.001507133)
+> 
+>     # Prepare the coordinates for the polygon (representing each bin)
+>     polygon_points <- data.frame(
+>         x = c(xx[1], xx[2], xx[2], xx[1],  # First box (flat top)
+>               xx[2], xx[3], xx[3], xx[2]), # Second box (flat top)
+>         y = c(0, 0, ymax[1], ymax[1],      # First box coordinates
+>               0, 0, ymax[2], ymax[2])      # Second box coordinates
+>         # Add more points as necessary for each bin
+>     )
+> 
+>     # Prepare polygon ID (group by bin)
+>     polygon_points$group <- rep(1:(nrow(polygon_points)/4), each=4)
+>     ```
+> 
+> 2. **Plot Using `add_polygons`:**
+>    Use `add_polygons` to draw each box based on the prepared `polygon_points`.
+> 
+>     ```r
+>     library(shiny)
+>     library(plotly)
+> 
+>     ui <- fluidPage(
+>         plotlyOutput("histogram")
+>     )
+> 
+>     server <- function(input, output, session) {
+>         output$histogram <- renderPlotly({
+>             plot_ly() %>%
+>                 add_polygons(
+>                     x = ~polygon_points$x,
+>                     y = ~polygon_points$y,
+>                     split = ~polygon_points$group, # Split by each bin
+>                     fillcolor = "blue",
+>                     line = list(width = 1),
+>                     opacity = 0.6,
+>                     name = "Custom Bins"
+>                 ) %>%
+>                 layout(
+>                     title = "Custom Width Histogram",
+>                     xaxis = list(title = "X axis"),
+>                     yaxis = list(title = "Y axis")
+>                 )
+>         })
+>     }
+> 
+>     shinyApp(ui, server)
+>     ```
+> 
+> In this example, we structured the data points such that each bin forms a polygon with the four corners defined. The `split` parameter of `add_polygons` allows each polygon (bin) to be drawn separately. Adjust the `polygon_points` data frame to include all the bins you need.
+> 
+> Using `add_polygons` should solve the issue with the points connecting incorrectly and allow you to create bins with custom widths correctly in the plot.
+**user**:
+> This works, but each bin is included in the legend. How can I stop that?
+**assistant**:
+> To exclude the bins from appearing in the legend when using `add_polygons` in `plot_ly`, you can set the `showlegend` attribute to `FALSE` within the `add_polygons` function. This will prevent the bins from being displayed in the legend.
+> 
+> Here's how you can modify the `add_polygons` function to exclude the bins from the legend:
+> 
+> ```r
+> add_polygons(
+>     x = ~polygon_points$x,
+>     y = ~polygon_points$y,
+>     split = ~polygon_points$group,
+>     fillcolor = "blue",
+>     line = list(width = 1),
+>     opacity = 0.6,
+>     name = "Custom Bins",
+>     showlegend = FALSE  # Exclude from the legend
+> )
+> ```
+> 
+> By adding `showlegend = FALSE` in the `add_polygons` function call, the bins will no longer be included in the legend of the plot. This modification should help you achieve the desired result of excluding the bins from the legend while displaying the custom-width histogram-like plot made up of polygons.

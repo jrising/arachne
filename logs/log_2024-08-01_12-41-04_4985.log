@@ -1,0 +1,316 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> Can you write a section for a paper supplementary information giving a
+> precise description of the principles behind the following code? This
+> code implements our method of determining the home range of any given species:
+> ```
+> do.hr.diagnostics <- F
+> 
+> library(dplyr)
+> library(readxl)
+> 
+> hrdf <- read_xlsx(file.path(datapath, "homerange/Homerange Existing Data.xlsx"), sheet=1)
+> hrdf2a <- read.csv(file.path(datapath, "homerange/attributes.csv"))
+> hrdf2b <- read.csv(file.path(datapath, "homerange/attributes-sealifebase.csv"))
+> 
+> if (do.hr.diagnostics) {
+>     names(hrdf2a)[!(names(hrdf2a) %in% names(hrdf2b))]
+>     names(hrdf2b)[!(names(hrdf2b) %in% names(hrdf2a))]
+>     ## Rename X.Lengths.s. in hrdf2a to Speed..Length.type.s., and add length.WD, Ref.
+> 
+>     hrdf2a[hrdf2a$species %in% hrdf2b$species,] %>% left_join(hrdf2b[hrdf2b$species %in% hrdf2a$species,], by='species', suffix=c('.fish', '.seal'))
+>     ## Drop the duplicates from sealifebase
+> 
+>     mean(!is.na(hrdf2b$Lmax..cm.) & hrdf2b$Lmax..cm. > 0)
+>     mean(!is.na(hrdf2b$length.SL) & hrdf2b$length.SL > 0)
+>     mean(!is.na(hrdf2b$length.) & hrdf2b$length. > 0)
+>     mean(!is.na(hrdf2b$length.FL) & hrdf2b$length.FL > 0)
+>     mean(!is.na(hrdf2b$length.none) & hrdf2b$length.none > 0)
+>     mean(!is.na(hrdf2b$length.TL) & hrdf2b$length.TL > 0)
+>     mean(!is.na(hrdf2b$Length) & hrdf2b$Length > 0)
+> }
+> names(hrdf2a)[names(hrdf2a) == 'X.Lengths.s.'] <- 'Speed..Length.type.s.'
+> hrdf2a <- cbind(hrdf2a, length.WD=NA, Ref.=NA)
+> hrdf2 <- rbind(hrdf2a, hrdf2b[!(hrdf2b$species %in% hrdf2a$species),])
+> 
+> hrdf <- hrdf %>% left_join(hrdf2, by=c("Species"="species"))
+> 
+> ## hrdf$log.area.mean <- log(hrdf$Average_HR_Area_m2)
+> ## hrdf$log.area.max <- log(hrdf$Max_HR_Area_m2)
+> ## hrdf$log.dist.max <- log(hrdf$Max_HR_Length_m)
+> 
+> hrdf$dist.mean <- as.numeric(hrdf$Average_HR_Length_m)
+> hrdf$dist.mean[is.na(hrdf$dist.mean)] <- 2*sqrt(hrdf$Average_HR_Area_m2[is.na(hrdf$dist.mean)] / pi)
+> 
+> ## hrdf$Swimming.type[hrdf$Swimming.type == ""] <- NA
+> ## hrdf$Speed..Length.type.s.[hrdf$X.Lengths.s. == ""] <- NA
+> ## hrdf$Length[hrdf$Length == ""] <- NA
+> ## hrdf$Swimming.mode[hrdf$Swimming.mode == ""] <- NA
+> ## hrdf$Wmax[hrdf$Wmax == ""] <- NA
+> ## hrdf$Length.type[hrdf$Length.type == ""] <- NA
+> ## hrdf$Speed..m.s.[hrdf$Speed..m.s. == ""] <- NA
+> ## hrdf$Mode[hrdf$Mode == ""] <- NA
+> 
+> hrdf$`Fork Length_mm`[is.na(hrdf$`Fork Length_mm`)] <- 10 * hrdf$length.FL[is.na(hrdf$`Fork Length_mm`)]
+> hrdf$`Fork Length_mm`[is.na(hrdf$`Fork Length_mm`)] <- 10 * hrdf$length.TL[is.na(hrdf$`Fork Length_mm`)]
+> hrdf$`Fork Length_mm`[is.na(hrdf$`Fork Length_mm`)] <- 10 * hrdf$length.SL[is.na(hrdf$`Fork Length_mm`)]
+> hrdf$`Fork Length_mm`[is.na(hrdf$`Fork Length_mm`)] <- 10 * hrdf$Lmax..cm.[is.na(hrdf$`Fork Length_mm`)]
+> 
+> if (do.hr.diagnostics) {
+>     hrdf$log.dist.mean <- log(hrdf$dist.mean)
+>     hrdf$log.dist.mean[!is.finite(hrdf$log.dist.mean)] <- NA
+>     hrdf$log.fl <- log(hrdf$`Fork Length_mm`)
+> 
+>     fit <- lm(log.dist.mean ~ log.fl + Lmax..cm. + Tmax..y., data=hrdf)
+>     fit <- lm(log.dist.mean ~ log.fl, data=hrdf)
+> }
+> 
+> ## Load additional data in homerange2
+> hrdfx <- read_xlsx(file.path(datapath, "homerange/Homerange Existing Data.xlsx"), sheet=2)
+> 
+> ## Load newer data from Green et al. (2014)
+> hrdf.2014 <- read_xlsx(file.path(datapath, "homerange/Homerange Existing Data.xlsx"), sheet=3)
+> hrdf.2014$dist.mean.m <- as.numeric(gsub("<", "", hrdf.2014$`Home range and territories (linear distance in km)`)) * 1000
+> othercol <- grep("term movements", names(hrdf.2014))
+> hrdf.2014$dist.mean.m[is.na(hrdf.2014$dist.mean.m)] <- as.numeric(gsub("[^0-9].*", "", gsub("<|( .*)", "", hrdf.2014[is.na(hrdf.2014$dist.mean.m), othercol])))
+> hrdf.2014$dist.mean.m[hrdf.2014[, othercol] == "1000s"] <- 2000 * 1000
+> 
+> hrdf.attrsa <- read.csv(file.path(datapath, "homerange/attributes-all.csv"))
+> if (do.hr.diagnostics) {
+>     names(hrdf.attrsa)[!(names(hrdf.attrsa) %in% names(hrdf2b))]
+>     names(hrdf2b)[!(names(hrdf2b) %in% names(hrdf.attrsa))]
+> }
+> hrdf.attrs <- rbind(hrdf.attrsa, hrdf2b[!(hrdf2b$species %in% hrdf.attrsa$species),])
+> hrdf.attrs$length.mm <- NA
+> hrdf.attrs$length.mm[is.na(hrdf.attrs$length.mm)] <- 10 * hrdf.attrs$length.FL[is.na(hrdf.attrs$length.mm)]
+> hrdf.attrs$length.mm[is.na(hrdf.attrs$length.mm)] <- 10 * hrdf.attrs$length.TL[is.na(hrdf.attrs$length.mm)]
+> hrdf.attrs$length.mm[is.na(hrdf.attrs$length.mm)] <- 10 * hrdf.attrs$length.SL[is.na(hrdf.attrs$length.mm)]
+> hrdf.attrs$length.mm[is.na(hrdf.attrs$length.mm)] <- 10 * hrdf.attrs$Lmax..cm.[is.na(hrdf.attrs$length.mm)]
+> 
+> hrdf.2014x <- hrdf.2014 %>% left_join(hrdf.attrs[, c('species', 'length.mm')], by=c('Species'='species'))
+> 
+> hrdfall <- data.frame(species=c(hrdf$Species, hrdfx$Species, hrdf.2014x$Species), length.mm=c(hrdf$`Fork Length_mm`, hrdfx$`Average length (cm)` * 10, hrdf.2014x$length.mm), dist.mean.m=c(hrdf$dist.mean, hrdfx$`Mean over median (km)` * 1000, hrdf.2014x$dist.mean.m), src=c(rep('Original', nrow(hrdf)), rep('Unpublished', nrow(hrdfx)), rep('Green et al.', nrow(hrdf.2014x))))
+> 
+> ## Fill in NAs with information from Kimberly
+> hrdf.corrected <- read_xlsx(file.path(datapath, "homerange/Homerange Existing Data.xlsx"), sheet=6)
+> hrdf.corrected <- hrdf.corrected[is.na(hrdf.corrected$Drop),]
+> hrdfall$altspecies <- NA
+> 
+> for (ii in 1:nrow(hrdf.corrected)) {
+>     matches <- hrdfall$species == hrdf.corrected$species[ii]
+>     if (!is.na(hrdf.corrected$species.rename[ii]))
+>         hrdfall$altspecies[matches] <- hrdf.corrected$species.rename[ii]
+>     hrdfall$src[matches & (is.na(hrdfall$length.mm) | is.na(hrdfall$dist.mean.m))] <- paste(hrdfall$src[matches & (is.na(hrdfall$length.mm) | is.na(hrdfall$dist.mean.m))], "Corrected")
+>     hrdfall$length.mm[matches & is.na(hrdfall$length.mm)] <- as.numeric(hrdf.corrected$length.mm[ii])
+>     hrdfall$dist.mean.m[matches & is.na(hrdfall$dist.mean.m)] <- as.numeric(hrdf.corrected$dist.mean.m[ii])
+> }
+> 
+> hrdfall$log.dist.mean.m <- log(hrdfall$dist.mean.m)
+> hrdfall$log.dist.mean.m[!is.finite(hrdfall$log.dist.mean.m)] <- NA
+> hrdfall$log.length.mm <- log(hrdfall$length.mm)
+> 
+> fit.homerange <- lm(log.dist.mean.m ~ log.length.mm, data=hrdfall)
+> 
+> if (do.hr.diagnostics) {
+>     ## Understand all missing data
+>     groups <- read.csv(file.path(datapath, "saudata/groups.csv"))
+>     groups <- groups[!duplicated(groups$scientific),]
+> 
+>     hrdfall2 <- hrdfall %>% left_join(groups, by=c('species'='scientific'))
+> 
+>     larvdyn2 <- read.csv(paste0(datapath, "floating/larvdyncustom.csv"))
+>     taxonomy1 <- read.csv(paste0(datapath, "taxonomy/taxonomy-fixed.csv"))
+> 
+>     taxonomy <- rbind(taxonomy1, data.frame(scientific=paste(larvdyn2$genus, larvdyn2$species),
+>                                             alphaid=NA, kingdom="Animalia", phylum=larvdyn2$phylum,
+>                                             class=larvdyn2$class, order=NA, family=NA, genus=larvdyn2$genus))
+>     taxonomy <- taxonomy[!duplicated(taxonomy$scientific),]
+> 
+>     hrdfall3 <- hrdfall2 %>% left_join(taxonomy, by=c('species'='scientific'))
+> 
+>     results <- data.frame(species=hrdfall3$species, length.mm=hrdfall3$length.mm, dist.mean.m=hrdfall3$dist.mean.m,
+>                           functional_group=hrdfall3$functional_group, kingdom=hrdfall3$kingdom, phylum=hrdfall3$phylum,
+>                           class=hrdfall3$class, order=hrdfall3$order, family=hrdfall3$family, genus=hrdfall3$genus)
+>     results <- subset(results, !is.na(dist.mean.m))
+>     write.csv(results, paste0(datapath, "homerange/homerange-combined.csv"), row.names=F)
+> }
+> 
+> ## Drop NA dist.mean.m rows
+> hrdfall <- hrdfall[!is.na(hrdfall$dist.mean.m),]
+> 
+> if (do.hr.diagnostics) {
+>     library(ggplot2)
+> 
+>     ggplot(hrdfall, aes(length.mm, dist.mean.m)) +
+>         geom_point(aes(colour=src)) + geom_smooth(method="lm", fullrange=T) +
+>         scale_x_log10() + scale_y_log10() + xlab("Fork Length (mm)") + ylab("Average homerange distance (m)") + theme_bw() + scale_colour_discrete(name="Source")
+> }
+> 
+> 
+> get.homeradius.m <- function(species) {
+>     lowest.hierarchy(species, function(specwithin) {
+>         if (sum(specwithin %in% hrdfall$species) > 0)
+>             hrdfall$dist.mean.m[hrdfall$species %in% specwithin]
+>         else {
+>             vals <- exp(predict(fit.homerange, data.frame(log.length.mm=log(hrdf.attrs$length.mm[hrdf.attrs$species %in% specwithin]))) + sd(fit.homerange$residuals) / 2)
+>             vals[!is.na(vals)]
+>         }
+>     })
+> }
+> 
+> if (do.hr.diagnostics) {
+>     groups <- read.csv(file.path(datapath, "saudata/groups.csv"))
+>     hrdfall2 <- hrdfall %>% left_join(groups, by=c('species'='scientific'))
+> 
+>     for (ii in 1:nrow(hrdf.corrected)) {
+>         matches <- hrdfall2$species == hrdf.corrected$species[ii]
+>         hrdfall2$functional_group[matches] <- hrdf.corrected$functional_group[ii]
+>     }
+> 
+>     hrdfall2$funcgroup_size <- NA
+>     hrdfall2$funcgroup_size[grep("90 cm", hrdfall2$functional_group)] <- "Large (>=90 cm)"
+>     hrdfall2$funcgroup_size[grep("89 cm", hrdfall2$functional_group)] <- "Medium (30 - 89 cm)"
+>     hrdfall2$funcgroup_size[grep("30 cm", hrdfall2$functional_group)] <- "Small (<30 cm)"
+> 
+>     hrdfall2$funcgroup_type <- "Other"
+>     hrdfall2$funcgroup_type[grep("demersals", hrdfall2$functional_group)] <- "Demersals"
+>     hrdfall2$funcgroup_type[grep("reef assoc", hrdfall2$functional_group)] <- "Reef assoc. fish"
+>     hrdfall2$funcgroup_type[grep("pelagics", hrdfall2$functional_group)] <- "Pelagics"
+>     hrdfall2$funcgroup_type[grep("benthopelagics", hrdfall2$functional_group)] <- "Benthopelagics"
+>     hrdfall2$funcgroup_type[grep("sharks", hrdfall2$functional_group)] <- "Sharks & rays"
+>     hrdfall2$funcgroup_type[grep("rays", hrdfall2$functional_group)] <- "Sharks & rays"
+>     hrdfall2$funcgroup_type <- factor(hrdfall2$funcgroup_type, levels=c("Reef assoc. fish", "Demersals", "Benthopelagics", "Benthydemersals", "Pelagics", "Sharks & rays", "Other"))
+> 
+>     ggplot(subset(hrdfall2, dist.mean.m > 0), aes(length.mm, dist.mean.m)) +
+>         geom_point(aes(colour=funcgroup_type)) + geom_smooth(method="lm", fullrange=T) +
+>         geom_smooth(aes(colour=funcgroup_type), method="lm", se=F, fullrange=T) +
+>         scale_x_log10(limits=c(30, max(hrdfall2$length.mm, na.rm=T))) + scale_y_log10(limits=c(1, max(hrdfall2$dist.mean.m, na.rm=T))) + xlab("Fork Length (mm)") + ylab("Average homerange distance (m)") + theme_bw() + scale_colour_discrete(name="Functional\nGroup:")
+> }
+> ```
+> 
+> The Homerange Existing Data.xlsx sheet 1 looks like this:
+> ```
+> Reference	URL	Species	Region	Quantity	Duration	Average_HR_Area_m2	Max_HR_Area_m2	Notes	Average_HR_Length_m	Max_HR_Length_m	Fork Length_mm
+> Gunn, Patterson, Pepperel (2003)	http://www.publish.csiro.au/mf/MF03022	Makaira indica	Northwest Coral Sea	5	3-64 days				513800	1185300	
+> Parsons et al. (2003)	http://www.int-res.com/abstracts/meps/v262/p253-265/	Pagrus auratus	New Zealand	5	12 months	55500	139600	Max is for one period for one species	NA	NA	
+> Lowry, Suthers (1998)	https://link.springer.com/article/10.1007%2Fs002270050422	Cheilodactylus fuscus	Southeast Australia	68	35 months	3639	NA	Significant diurnal variability in home range (used home range mean at night, which is greater); FL average from https://www.fishbase.de/popdyn/LengthFreqSummary.php?lfcode=1832	NA	NA	350
+> Meyer et al. (2000)	https://link.springer.com/article/10.1023%2FA%3A1007664813814	Parupeneus porphyreus	Hawaii	5	3-14 days	19200.6	35163	Each fish tracked for 93 hours over 3-14 days	NA	NA	
+> Lowe et al. (2003)	http://www.jstor.org/stable/24866987?seq=1#page_scan_tab_contents	Paralabrax clathratus	California	12	1 month	3349	11224	"SD +/- 3328 on mean, Tracked for up to 120 h for up to 5 continuous
+> 24 h periods over the course of 1 mo "	NA	NA
+> ...
+> ```
+> 
+> And sheet 2 just contains this:
+> ```
+> Reference	URL	Species	Region	Distance Travelled-Lower Bound	Distance Travelled-Upper Bound	Average Distance Travelled	Length of Observation Period	Mean over median (km)	Average length (cm)	Notes
+> Kroodsma et al. 	Unpublished: Vessel tracking enables assessment of human footprint on ocean ecosystems across scales	Merluccius merluccius	Southern Europe	20 km	200+ km		Several Months	110	45	Common TL Length
+> Kroodsma et al. 	Unpublished: Vessel tracking enables assessment of human footprint on ocean ecosystems across scales	Gadus macrocephalus	Bering Sea		900+ km	20-370km		195	67	Lm length
+> Kroodsma et al. 	Unpublished: Vessel tracking enables assessment of human footprint on ocean ecosystems across scales	Trichiurus lepturus	Bering Sea			191 km	1 Year	191	100	Common TL Length
+> estimated-homerange.R		Prionace glauca		48.6	112	55.4	433 days	112	143	
+> estimated-homerange.R		Salmo salar		15.1	925	42	32 days	58.2	18.7	
+> estimated-homerange.R		Salvelinus alpinus		3.31	11.2	3.76	18 days	3.94	52.1	
+> estimated-homerange.R		Thunnus maccoyii		1472
+> 6332	1499	2674 days	1046	78
+> ```
+> 
+> And sheet 3 looks like this:
+> ```
+> Species	CLASS	Family (common name)	Recommended minimum marine reserve size (linear distance in km)	Home range and territories (linear distance in km)	Spawning (breeding) migrations (linear distance in km)	Ontogenetic habitat shifts (linear distance in km)	Other long‐term movements (core areas of use) (linear distance in km)	Sources
+> Naso vlamingii	OSTEICHTHYES	Acanthuridae (surgeonfishes and unicornfishes)	0.2	<0.1	—	—	—	Robertson, Polunin & Leighton (1979); Abesamis & Russ (2005)
+> Acanthurus leucosternon	OSTEICHTHYES	Acanthuridae (surgeonfishes and unicornfishes)	0.2	<0.1	—	—	—	Robertson, Polunin & Leighton (1979); Abesamis & Russ (2005)
+> Ctenochaetus striatus	OSTEICHTHYES	Acanthuridae (surgeonfishes and unicornfishes)	0.6	<0.3	—	—	—	Bell & Kramer (2000); Chapman & Kramer (2000); Krone et al. (2008); Garcia et al. (2011); Claydon, McCormick & Jones (2012); Colin (2012)
+> Acanthurus coeruleus	OSTEICHTHYES	Acanthuridae (surgeonfishes and unicornfishes)	0.6	<0.3	—	—	—	Bell & Kramer (2000); Chapman & Kramer (2000); Krone et al. (2008); Garcia et al. (2011); Claydon, McCormick & Jones (2012); Colin (2012)
+> Acanthurus chirugus	OSTEICHTHYES	Acanthuridae (surgeonfishes and unicornfishes)	0.6	<0.3	—	—	—	Bell & Kramer (2000); Chapman & Kramer (2000); Krone et al. (2008); Garcia et al. (2011); Claydon, McCormick & Jones (2012); Colin (2012)
+> Naso unicornis	OSTEICHTHYES	Acanthuridae (surgeonfishes and unicornfishes)	2	<1	—	—	—	Robertson et al. (1979); Craig (1996); Craig et al. (1997); Meyer & Holland (2005); Hardman et al. (2010); Claisse et al. (2011); Marshell et al. (2011)
+> Zebrasoma flavescens	OSTEICHTHYES	Acanthuridae (surgeonfishes and unicornfishes)	2	<1	—	—	—	Robertson et al. (1979); Craig (1996); Craig et al. (1997); Meyer & Holland (2005); Hardman et al. (2010); Claisse et al. (2011); Marshell et al. (2011)
+> Zebrasoma scopas	OSTEICHTHYES	Acanthuridae (surgeonfishes and unicornfishes)	2	<1	—	—	—	Robertson et al. (1979); Craig (1996); Craig et al. (1997); Meyer & Holland (2005); Hardman et al. (2010); Claisse et al. (2011); Marshell et al. (2011)
+> ...
+> ```
+> 
+> And sheet 6 looks like this:
+> ```
+> species	species.rename	length.mm	length.desc	length.link	dist.mean.m	homerange.notes	functional_group	kingdom	phylum	class	order	family	genus	Drop
+> Makaira indica		4400			513800.0		Large pelagics (>=90 cm)	Animalia	Chordata	Actinopterygii	Perciformes	Istiophoridae	Makaira	
+> Pagrus auratus		178			265.8		Large demersals (>=90 cm)	Animalia	Chordata	Actinopterygii	Perciformes	Sparidae	Pagrus	
+> Cheilodactylus fuscus		350			68.1		Medium reef assoc. fish (30 - 89 cm)	Animalia	Chordata	Actinopterygii	Perciformes	Cheilodactylidae	Cheilodactylus	
+> Parupeneus porphyreus		233			156.4		Medium reef assoc. fish (30 - 89 cm)	Animalia	Chordata	Actinopterygii	Perciformes	Mullidae	Parupeneus	
+> Paralabrax clathratus		720	max total length	https://www.fishbase.se/summary/3335	65.3	wikipedia entry " Individuals are faithful to their home ranges, which average around 3,000 square metres (32,000 sq ft) and may show curiosity towards new objects. The younger fish are less site faithful than the older individuals and will move greater distances and this may be because their diet changes as they mature. " Other citations: Tagging studies have shown home ranges of widely varying sizes, from 33-11,224 m^2, with an average of 3,328-3,349 m^2. Kelp bass move throughout their entire range during both day and night. Range size does not appear to be associated with fish size, as in many other species. (Lowe, et al., 2003; Miller and Lea, 1972)	Medium benthopelagics (30 - 89 cm)	Animalia	Chordata	Actinopterygii	Perciformes	Serranidae	Paralabrax	
+> Semicossyphus pulcher		910	max total length	https://www.fishbase.se/summary/3671	138.8		Medium benthopelagics (30 - 89 cm)	Animalia	Chordata	Actinopterygii	Perciformes 	Labridae	Semicossyphus	
+> Achoerodus gouldii		350			1076.0		Medium demersals (30 - 89 cm)	Animalia	Chordata	Actinopterygii	Perciformes	Labridae	Achoerodus	
+> ...
+> ```
+> 
+> attributes.csv is like this:
+> ```
+> species,length-TL,Lmax (cm),length-SL,Mode,Swimming type,Tmax (y),Length,Swimming mode,length-,Wmax,length-FL,Length type,length-none,Speed (m/s),(Lengths/s)
+> Centropyge argi,,,,,,,,,,,,,nan,,
+> Cantherhines pullus,,,,,,,,,,,,,nan,,
+> Lutjanus decussatus,,32.5,16.2,,,nan,,,,,,,,,
+> Bodianus rufus,,,35.0,,,,,,,,,,,,
+> Naso unicornis,,54.075,28.7,,,nan,,,,,,,,,
+> ...
+> ```
+> 
+> attributes-sealifebase.csv looks like this:
+> ```
+> species,Speed (Length type/s),Mode,Lmax (cm),length-SL,length-,length-WD,Tmax (y),Speed (m/s),length-FL,Swimming type,Swimming mode,length-none,length-TL,Wmax,Length,Ref.,Length type
+> Pomadasys stridens,,,17.5,11.7,,,nan,,,,,,,95.00 g,,,
+> Cephalopholis miniata,,,43.07142857142857,20.53333333333333,,,28.0,,,,,nan,,9.6 kg,,,
+> Paralithodes camtschaticus,,,22.0,,,,nan,,,,,,,,,,
+> Atherinomorus lacunosus,,,25.0,5.7,,,nan,,,,,,,,,,
+> Prionace glauca,999,,319.6764705882353,,nan,,18.214285714285715,2,93.0,movements of body and/or caudal fin,subcarangiform,nan,,,0.0,4680,
+> Grammistes sexlineatus,,,28.5,6.75,,,nan,,,,,nan,11.0,,,,
+> ...
+> ```
+> 
+> and attibutes-all.csv looks like this:
+> ```
+> species,Mode,Lmax (cm),Tmax (y),length-FL,length-TL,Speed (m/s),Speed (Length type/s),length-,Wmax,length-SL,Length,Ref.,Swimming mode,length-WD,Swimming type,length-none,Length type
+> Pomadasys stridens,,17.5,nan,,,,,,95.00 g,11.7,,,,,,,
+> Cephalopholis miniata,,43.07142857142857,28.0,,,,,,9.6 kg,20.53333333333333,,,,,,nan,
+> Atherinomorus lacunosus,,25.0,nan,,,,,,,5.7,,,,,,,
+> Prionace glauca,,319.6764705882353,18.214285714285715,93.0,,2,999,nan,,,0.0,4680,subcarangiform,,movements of body and/or caudal fin,nan,
+> Grammistes sexlineatus,,28.5,nan,,11.0,,,,,6.75,,,,,,nan,
+> ...
+> ```
+> 
+> A key function here is `lowest.hierarchy` which returns data from
+> taxonomically related species, or from the species itself if its
+> available. If the species isn't available, we often get many rows,
+> since at the genus or higher level, we might have several species.
+> 
+> Please do not include any actual code or excerpts from the files in the text.
+**assistant**:
+> ### Supplementary Information: Principles Behind the Home Range Determination Method
+> 
+> #### Overview
+> The method implemented in the provided code aims to determine the home range of any given species by integrating and analyzing diverse datasets. This process involves data extraction, merging, cleaning, and prediction through a linear model. Key principles guiding this method include robustness in data integration, consistency in handling missing data, and model-driven estimation.
+> 
+> #### Data Integration and Cleaning
+> The foundational step involves importing and combining multiple sources of home range and species attribute data. These datasets include:
+> - An existing dataset of home range measurements (both areas and distances) from different studies.
+> - Attributes datasets containing various length metrics, species maximum lengths, swimming speeds, and other biological characteristics from different sources such as `attributes.csv`, `attributes-sealifebase.csv`, and `attributes-all.csv`.
+> 
+> The code ensures consistency across datasets by renaming columns for uniformity and merging data on the species level. This step is critical to create a comprehensive dataset that incorporates as much relevant information as possible about each species.
+> 
+> #### Handling Missing Data
+> To handle missing values, especially those related to species length and home range metrics, the code employs a completion strategy. Missing fork length values are imputed using available lengths from the datasets, applying a fixed conversion factor where necessary. This ensures that essential data points are available for further analysis.
+> 
+> Species-specific data gaps in home range measurements are filled using information from closely related species, leveraging the taxonomic hierarchy. This hierarchical approach allows for the use of genus or family-level data when species-level data is unavailable, ensuring broader coverage.
+> 
+> #### Diagnostic and Transformation Processes
+> Diagnostic checks assess the completeness of data fields, verifying the presence of critical values like maximum lengths and average home range distances across datasets. The code generates log-transformed fields, such as `log.dist.mean` and `log.length.mm`, to stabilize variance and normalize distributions, facilitating linear regression analysis.
+> 
+> #### Linear Model for Home Range Prediction
+> A linear model (`fit.homerange`) is developed to predict home range distances based on the logarithm of species length (e.g., `log.length.mm`). This model is trained on the merged dataset, allowing it to estimate home range metrics where direct measurements are unavailable. The model's predictions incorporate residuals' standard deviation to account for variability.
+> 
+> The prediction process uses the `lowest.hierarchy` function to extract relevant species data from taxonomic relatives when specific species data is missing, ensuring predictions are grounded in the most relevant available information.
+> 
+> #### Final Data Assembly and Validation
+> The cleaned and extended dataset is combined into a unified data frame (`hrdfall`), incorporating original measurements and imputed values. Corrections from additional datasets are merged to refine species-level home range data further.
+> 
+> Visual diagnostics are conducted using plots to verify the relationships between species length and home range, highlighting data sources and potential outliers. These plots provide visual confirmation of the model's fit and the integrity of the final dataset.
+> 
+> #### Conclusion
+> This method provides a systematic approach to home range determination, merging diverse datasets, handling missing data through imputation, and applying a robust predictive model. The procedure ensures comprehensive and accurate home range estimations, facilitating informed ecological and conservation decisions.

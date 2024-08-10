@@ -17,6 +17,23 @@ def get_log_filename(subdir=None):
     else:
         return os.path.join(subdir, filename)
 
+def load_log(filepath):
+    messages = []
+    current_role = None
+    current_message = None
+    with open(filepath, 'r') as fp:
+        for line in fp:
+            if line[:2] == '**':
+                if current_role is not None:
+                    messages.append({'role': current_role, 'content': current_message})
+                current_role = line[2:].strip().replace('**:', '')
+                current_message = ""
+            elif line[:2] == '> ':
+                current_message += line[2:]
+
+    messages.append({'role': current_role, 'content': current_message})
+    return messages
+
 def create_chat(input_text, past_messages, history_text="", custom_system=None):
     if custom_system:
         messages = [{"role": "system", "content": custom_system}]
