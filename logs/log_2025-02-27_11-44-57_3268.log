@@ -1,0 +1,36 @@
+**user**:
+> I am trying to fill in entries from one column into another, where the first column has missing data. I use this line, but get the following error:
+> ```
+> julia> calcdf[calcdf.flowDesc .== "Import", :cif_lost] .= coalesce.(
+>                    calcdf[calcdf.flowDesc .== "Import", :fob_lost],
+>                    calcdf[calcdf.flowDesc .== "Import", :cif_lost]
+>                )
+> ERROR: MethodError: convert(::Type{Union{}}, ::Float64) is ambiguous. Candidates:
+>   convert(::Type{T}, x::Number) where T<:Number in Base at number.jl:7
+>   convert(::Type{T}, x::Number) where T<:AbstractChar in Base at char.jl:184
+>   convert(::Type{PQ}, p::Number) where PQ<:Polynomials.AbstractRationalFunction in Polynomials at /Users/admin/.julia/packages/Polynomials/6i39P/src/rational-functions/common.jl:47
+>   convert(::Type{Union{}}, x) in Base at essentials.jl:216
+>   convert(::Type{T}, arg) where T<:VecElement in Base at baseext.jl:19
+>   convert(P::Type{<:Polynomials.AbstractPolynomial}, x) in Polynomials at /Users/admin/.julia/packages/Polynomials/6i39P/src/common.jl:512
+> Possible fix, define
+>   convert(::Type{Union{}}, ::Number)
+> ```
+> 
+> I don't understand the error. I see that `coalesce.(...)` gives back a valid 207 entry Vector{Union{Missing, Float64}}, which is the same length as the original `calcdf[calcdf.flowDesc .== "Import", :cif_lost]`. Actually, the problem may be that `calcdf[calcdf.flowDesc .== "Import", :cif_lost]` is all missing in this case, so it comes in as a Vector{Missing}.
+**assistant**:
+> The error you're encountering arises because you're attempting to assign a `Vector{Union{Missing, Float64}}` to a `Vector{Missing}`. The `Vector{Missing}` cannot accept anything other than `Missing` values, causing the `convert` method to fail when it tries to assign `Float64` values.
+> 
+> To resolve this issue, you'll want to ensure that the destination column can indeed hold `Float64` values. You can try converting your column to a compatible type or create a different array to store the results. Here's one approach to ensure the destination column supports both `Missing` and `Float64`:
+> 
+> ```julia
+> # Convert the entire column to support both Missing and Float64
+> calcdf[!, :cif_lost] = Union{Missing, Float64}[calcdf[:, :cif_lost]...]
+> 
+> # Now perform the operation
+> calcdf[calcdf.flowDesc .== "Import", :cif_lost] .= coalesce.(
+>     calcdf[calcdf.flowDesc .== "Import", :fob_lost],
+>     calcdf[calcdf.flowDesc .== "Import", :cif_lost]
+> )
+> ```
+> 
+> This approach first updates the type of the entire `:cif_lost` column to `Union{Missing, Float64}`. Then, you can safely assign the result of `coalesce` operation back to this column. Let me know if this resolves the issue or if you need further assistance!

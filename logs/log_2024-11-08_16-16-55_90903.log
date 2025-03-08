@@ -1,0 +1,177 @@
+**user**:
+> I have an google apps script to send an email out when a form gets filled out. Here's the script:
+> ```
+> function sendEmails() {
+>   var sheet = SpreadsheetApp.openById("1RevCXEnlZ2S1E3tR_7p9zgV0KH8UvAQJvYm6NT9_23Y").getSheetByName('Form Responses 1');
+>   var data = sheet.getDataRange().getValues();
+>   
+>   for (var i = 1; i < data.length; i++) { // Start at 1 to skip header row
+>     var processed = data[i][38]; // Index of the handling column
+>     var response = data[i][33] || data[i][30]; // Interests
+>     var firstinterest = data[i][2]; // initial filter
+>     var email = data[i][1]; // Column index for respondent's email
+> 
+>     // Check if email has already been sent
+>     if (!processed) {
+>       var recipient;
+>       if (firstinterest == "Marine Biology - The organisms and ecosystems in oceans and seas." ||
+>           firstinterest == "Physical Ocean Science or Engineering - Physical oceanography and dynamics.")
+>           recipient = "Drop"
+>       if (response == "Fisheries and natural resource management" || response == "Behaviors and decision-making") {
+>         recipient = "abirken@udel.edu";
+>       } else if (response == "Environmental policy analysis" || response == "Legal and institutional aspects") {
+>         recipient = "oremus@udel.edu";
+>       } else if (response == "Climate change risks and policy" || response == "Energy systems and technology") {
+>         recipient = "jrising@udel.edu";
+>       } else if (response == "Environmental justice" || response == "Sea-level rise and coastal communities") {
+>         recipient = "nathanaj@udel.edu";
+>       } else {
+>         recipient = "jrising@udel.edu";
+>       }
+>       // Add more conditions as necessary
+> 
+>       if (recipient) { // Ensure there's an email to send
+>         if (recipient != "Drop") {
+>           var subject = "Response from Program Interest Form";
+>           var message = "Please look at row " + (i + 1) + " of the program interest form, from " + email + ". The form is at https://docs.google.com/spreadsheets/d/1RevCXEnlZ2S1E3tR_7p9zgV0KH8UvAQJvYm6NT9_23Y/edit?usp=sharing";
+> 
+>           MailApp.sendEmail(recipient, subject, message, {
+>             //cc: email // Optional: CC the original respondent
+>           });
+>         }
+>         
+>         // Mark the row as processed by adding a value in the processed column
+>         sheet.getRange(i + 1, 38 + 1).setValue(recipient); // Adjust for 1-indexed rows
+>       }
+>     }
+>   }
+> }
+> ```
+> 
+> Now I would like to construct an extra element to the emails. Some kind of block that gives a summary of the applicant. Maybe even all of their information, but then also specifically a "candidate strength" measure and a "funding options" measure.
+> 
+> The challenge is that the form goes through a complicated tree of options, based on what the filler says, and as a result we have multiple pages that ask the same questions in different parts of the tree. It's all in the spreadsheet, but you can see the duplicates in the spreadsheet column names:
+> 
+> "Timestamp", "Email Address", "What area most closely aligns with your academic interests when considering a graduate degree in environmental or marine studies?", "What kind of educational experience are you seeking?", "What kind of educational experience are you seeking?", "What kind of educational experience are you seeking?", "How would you describe your interest and experience in quantitative work, mathematics, or programming?", "How would you describe your interest and experience in quantitative work, mathematics, or programming?", "How would you describe your interest and experience in quantitative work, mathematics, or programming?", "How would you describe your interest and experience in quantitative work, mathematics, or programming?", "How would you describe your interest and experience in quantitative work, mathematics, or programming?", "How would you describe your interest and experience in quantitative work, mathematics, or programming?", "Funding is a significant constraint in our ability to take students in the Masters in Marine Policy program. Do you have your own funds to pay for the two-year program?", "Funding is a significant constraint in our ability to take students in the Environmental Science & Management program. Do you have your own funds to pay for the two-year program?", "Funding is a significant constraint in our ability to take students in the Environmental Economics program. Do you have your own funds to pay for the two-year program?", "Funding is a significant constraint in our ability to take students in the Ph.D. in Marine Policy program. Do you have an existing fellowship to pay for the five-year program?", "Since a quantitative background is key to success in the program, please give us a sense of your strengths in the following areas. [Multivariate Calculus]", "Since a quantitative background is key to success in the program, please give us a sense of your strengths in the following areas. [Statistics, Econometrics, or Machine Learning]", "Since a quantitative background is key to success in the program, please give us a sense of your strengths in the following areas. [Microeconomic Theory]", "Since a quantitative background is key to success in the program, please give us a sense of your strengths in the following areas. [Programming]", "Please upload your transcripts as one or more PDFs.", "Funding is a significant constraint in our ability to take students in the Ph.D. in Environmental Economics. Do you have an existing fellowship to pay for the five-year program?", "Column 22", "Column 23", "Column 24", "Do you satisfy the above criteria?", "Please tell us about yourself and your interests.", "Please upload your CV as a PDF.", "Please tell us about yourself and your interests.", "Please upload your CV as a PDF.", "Which of the following topics matches your interests most closely?", "Please tell us about yourself and your interests.", "Please upload your CV as a PDF.", "Which of the following topics matches your interests most closely?", "Please tell us about yourself and your interests.", "Please upload your CV as a PDF.", "Please upload your transcripts as one or more PDFs.", "Do you satisfy the above criteria?", "Handling"
+> 
+> Can you add an additional function to my script, which I can call in the existing function, which would produce this additional text block for the email? It should look at all of the columns that are asking the same question and grab whichever answer is available. The text should include:
+> 1. A general summary of the filler's responses. Make sure to include the answer to "What area most closely aligns with your academic interests when considering a graduate degree in environmental or marine studies?", "What kind of educational experience are you seeking?", "How would you describe your interest and experience in quantitative work, mathematics, or programming?", and "Which of the following topics matches your interests most closely?"
+> 2. Quantitative strength: A total number of courses listed across the four quantitative background questions. For each of these questions, the filler answers one of the following options: "No courses or lower grades", "1 course, A or B grade", or "2 courses, A or B grades" (so that would add 0, 1, or 2 to the total).
+> 3. Funding prospect: One of the following options:
+> If "Funding is a significant constraint in our ability to take students in the Ph.D. in Marine Policy program. Do you have an existing fellowship to pay for the five-year program?" is answered "Yes, I am interested in self-funding.", say "Self-fund"; If it is answered "No, I would need funding to attend." but "Do you satisfy the above criteria?" is "Yes", then "GSA Candidate"; otherwise "No funding".
+**assistant**:
+> Sure! Here's an additional function that you can integrate into your existing script. This function, `constructApplicantSummary`, generates the text block with the requested information. It selects non-empty values from duplicate columns, calculates the quantitative strength, and determines the funding prospect based on the applicant's answers.
+> 
+> ```javascript
+> function constructApplicantSummary(row) {
+>   // Helper function to choose the first non-empty value from multiple options
+>   function chooseValue(choices) {
+>     for (var i = 0; i < choices.length; i++) {
+>       if (choices[i] !== "") return choices[i];
+>     }
+>     return null;
+>   }
+> 
+>   // Extracting relevant fields
+>   var academicInterest = row[2];
+>   var educationalExperience = chooseValue([row[3], row[4], row[5]]);
+>   var quantitativeInterest = chooseValue(row.slice(6, 12));
+>   var interestTopic = chooseValue([row[30], row[33]]);
+>   
+>   // Calculating quantitative strength
+>   var quantitativeCourses = [row[15], row[16], row[17], row[18]];
+>   var quantitativeStrength = 0;
+>   for (var i = 0; i < quantitativeCourses.length; i++) {
+>     if (quantitativeCourses[i] === "1 course, A or B grade") {
+>       quantitativeStrength += 1;
+>     } else if (quantitativeCourses[i] === "2 courses, A or B grades") {
+>       quantitativeStrength += 2;
+>     }
+>   }
+> 
+>   // Determining funding prospect
+>   var fundingResponsePhD = row[19];
+>   var fundingResponseOtherPhD = row[21];
+>   var criteriaSatisfied = row[36];
+>   var fundingProspect = "No funding";
+>   if (fundingResponsePhD === "Yes, I am interested in self-funding.") {
+>     fundingProspect = "Self-fund";
+>   } else if (fundingResponsePhD === "No, I would need funding to attend." && criteriaSatisfied === "Yes") {
+>     fundingProspect = "GSA Candidate";
+>   }
+> 
+>   // Constructing the summary text
+>   var summary = "Applicant Summary:\n";
+>   summary += "Academic Interest: " + academicInterest + "\n";
+>   summary += "Educational Experience: " + educationalExperience + "\n";
+>   summary += "Quantitative Interest: " + quantitativeInterest + "\n";
+>   summary += "Interest Topic: " + interestTopic + "\n";
+>   summary += "Quantitative Strength: " + quantitativeStrength + "\n";
+>   summary += "Funding Prospect: " + fundingProspect + "\n";
+> 
+>   return summary;
+> }
+> ```
+> 
+> To integrate this function into your existing script, you can call `constructApplicantSummary` within your loop, just before sending the email. Append the returned summary to your email message:
+> 
+> ```javascript
+> // Inside your existing sendEmails function, before sending the email:
+> var summary = constructApplicantSummary(data[i]);
+> var message = "Please look at row " + (i + 1) + " of the program interest form, from " + email + ". The form is at https://docs.google.com/spreadsheets/d/1RevCXEnlZ2S1E3tR_7p9zgV0KH8UvAQJvYm6NT9_23Y/edit?usp=sharing\n\n";
+> message += summary;
+> 
+> // Send the email
+> MailApp.sendEmail(recipient, subject, message);
+> ```
+> 
+> This should add a meaningful summary to your emails, capturing the requested details for each applicant. Adjust any column indices if they change in your spreadsheet.
+**user**:
+> How can I wrap my call to constructApplicantSummary in a try-catch block so errors there can fall back on the working code?
+**assistant**:
+> To wrap the call to `constructApplicantSummary` in a try-catch block, you can modify the email sending section of your script. This way, if an error occurs while generating the applicant summary, the code can still fall back to the original email logic. Here’s how you can implement it:
+> 
+> ```javascript
+> for (var i = 1; i < data.length; i++) { // Start at 1 to skip header row
+>     // ... existing code ...
+> 
+>     // Check if email has already been sent
+>     if (!processed) {
+>         // ... existing recipient logic ...
+> 
+>         if (recipient) { // Ensure there's an email to send
+>             if (recipient != "Drop") {
+>                 var subject = "Response from Program Interest Form";
+>                 var message = "Please look at row " + (i + 1) + " of the program interest form, from " + email + ". The form is at https://docs.google.com/spreadsheets/d/1RevCXEnlZ2S1E3tR_7p9zgV0KH8UvAQJvYm6NT9_23Y/edit?usp=sharing\n\n";
+> 
+>                 // Try to construct the applicant summary
+>                 try {
+>                     var summary = constructApplicantSummary(data[i]);
+>                     message += summary;
+>                 } catch (error) {
+>                     Logger.log("Error constructing applicant summary: " + error);
+>                     // Optionally add a fallback message
+>                     message += "Could not generate applicant summary due to an error.\n";
+>                 }
+> 
+>                 MailApp.sendEmail(recipient, subject, message, {
+>                     // cc: email // Optional: CC the original respondent
+>                 });
+>             }
+>             
+>             // Mark the row as processed by adding a value in the processed column
+>             sheet.getRange(i + 1, 38 + 1).setValue(recipient); // Adjust for 1-indexed rows
+>         }
+>     }
+> }
+> ```
+> 
+> ### Explanation:
+> - **Try-Catch Block**: The `try` block attempts to call `constructApplicantSummary(data[i])`. If it throws an error, the `catch` block will log the error message and optionally append a fallback message to the email.
+> - **Logging**: The error is logged using `Logger.log`, which you can view later in the Apps Script editor under "View > Logs" to understand any issues that arise during execution. 
+> 
+> This implementation ensures that the rest of your email-sending logic will still operate normally even if an error occurs while constructing the applicant's summary.
+**user**:
+> Thanks!
+**assistant**:
+> You're welcome! If you have any more questions or need further assistance, feel free to ask. Happy coding! 😊

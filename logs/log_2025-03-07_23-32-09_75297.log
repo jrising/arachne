@@ -1,0 +1,30 @@
+**assistant**:
+> None of the provided past conversation synopses directly relate to the Javascript `window.speechSynt
+**user**:
+> I'm getting a weird behavior from the window.speechSynthesis.getVoices() function. When I run it in my script (in a $(function() { })) it always gives []. But when I do it in the console, I see 200 voices.
+**assistant**:
+> The behavior you're encountering with `window.speechSynthesis.getVoices()` is a common issue due to how voice data is loaded asynchronously in the browser.
+> 
+> When `getVoices()` is called, the browser might not have finished loading the available voice data, especially if you're calling it immediately when the script runs. That's why you get an empty array initially.
+> 
+> In contrast, when you run the function in the console, enough time has typically passed for the browser to load this data, so you see the full list of voices.
+> 
+> To handle this, you can add an event listener for the `voiceschanged` event, which fires when the voice list is updated:
+> 
+> ```javascript
+> $(function() {
+>     function loadVoices() {
+>         var voices = window.speechSynthesis.getVoices();
+>         console.log(voices);
+>     }
+> 
+>     if (typeof speechSynthesis !== 'undefined') {
+>         speechSynthesis.onvoiceschanged = loadVoices;
+>     }
+> 
+>     // Call the function in case the voices are already loaded
+>     loadVoices();
+> });
+> ```
+> 
+> This code ensures that `loadVoices` is called once the voices have finished loading. Additionally, it calls `loadVoices` immediately in case the voices are already available by the time your script runs. This should allow you to access the full list of voices both in your script and when running from the console.

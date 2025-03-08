@@ -1,0 +1,118 @@
+**assistant**:
+> The query asks about the frequency of emails being sent in response to submitted responses.  None of
+**user**:
+> In google sheets, how can I make emails go to different people based on what's entered for one of the questions?
+**assistant**:
+> To send emails to different people based on the response to a specific question in Google Sheets, you can use Google Apps Script to trigger emails automatically. Here’s a step-by-step guide to get you started:
+> 
+> 1. **Prepare Your Google Sheet:**
+>    - Ensure your sheet has a column dedicated to the question that determines the recipient and another column for the respondent's email if needed.
+> 
+> 2. **Open Google Apps Script:**
+>    - Click on "Extensions" in the menu bar.
+>    - Choose "Apps Script" to open the scripting environment.
+> 
+> 3. **Write the Script:**
+>    - Use the following template to create your script. Modify it to fit your specific question and email logic.
+> 
+> ```javascript
+> function sendEmails() {
+>   var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+>   var data = sheet.getDataRange().getValues();
+>   
+>   for (var i = 1; i < data.length; i++) { // Start at 1 to skip the header row
+>     var response = data[i][YOUR_QUESTION_COLUMN_INDEX]; // Replace with your column index for the question
+>     var email = data[i][RESPONDENT_EMAIL_COLUMN_INDEX]; // Column index for respondent's email
+> 
+>     var recipient;
+>     if (response == "Option 1") {
+>       recipient = "email1@example.com";
+>     } else if (response == "Option 2") {
+>       recipient = "email2@example.com";
+>     }
+>     // Add more conditions as necessary
+> 
+>     if (recipient) { // Ensure there's an email to send to
+>       var subject = "Your Subject Here";
+>       var message = "Your Message Here";
+> 
+>       MailApp.sendEmail(recipient, subject, message, {
+>         cc: email // Optional: CC the original respondent
+>       });
+>     }
+>   }
+> }
+> ```
+> 
+> 4. **Set Up a Trigger:**
+>    - In the Apps Script editor, click on the clock icon (Triggers).
+>    - Click on "+ Add Trigger" in the bottom right.
+>    - Select the `sendEmails` function, choose an event (e.g., "On form submit"), and set the desired configuration to automate it based on submissions.
+> 
+> 5. **Test Your Script:**
+>    - Manually run the script to ensure it’s working as expected and test with a sample submission.
+> 
+> 6. **Handle Errors & Debugging:**
+>    - If the script doesn’t work, check the execution log in the script editor under "View > Execution Log" for any errors.
+> 
+> This should allow you to send emails to different recipients based on the entry in your Google Sheet. Be sure you've configured Gmail appropriately and that Google's email sending limits are respected.
+**user**:
+> Won't that send an email for every response, each time any response is submitted?
+**assistant**:
+> You're correct! The script I provided will send an email for every response each time it runs. To ensure that emails are only sent for new responses, you can modify the script to keep track of which responses have already been processed. Here’s how you can do that:
+> 
+> ### Steps to Modify the Script
+> 
+> 1. **Add a `Processed` Column:**
+>    - In your Google Sheet, add a new column at the end (let's say it’s column **C** if columns A and B are used for responses and emails). This column will track if an email has already been sent (e.g., you could label it "Processed").
+> 
+> 2. **Modify the Script:**
+>    - Update your script to check the "Processed" column before sending an email. After sending, mark that row as processed.
+> 
+> Here’s the revised version of the script:
+> 
+> ```javascript
+> function sendEmails() {
+>   var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+>   var data = sheet.getDataRange().getValues();
+>   
+>   for (var i = 1; i < data.length; i++) { // Start at 1 to skip header row
+>     var response = data[i][YOUR_QUESTION_COLUMN_INDEX]; // Replace with your column index for the question
+>     var email = data[i][RESPONDENT_EMAIL_COLUMN_INDEX]; // Column index for respondent's email
+>     var processed = data[i][PROCESSED_COLUMN_INDEX]; // Index of the processed column (e.g., 2 for third column)
+> 
+>     // Check if email has already been sent
+>     if (!processed) {
+>       var recipient;
+>       if (response == "Option 1") {
+>         recipient = "email1@example.com";
+>       } else if (response == "Option 2") {
+>         recipient = "email2@example.com";
+>       }
+>       // Add more conditions as necessary
+> 
+>       if (recipient) { // Ensure there's an email to send
+>         var subject = "Your Subject Here";
+>         var message = "Your Message Here";
+> 
+>         MailApp.sendEmail(recipient, subject, message, {
+>           cc: email // Optional: CC the original respondent
+>         });
+> 
+>         // Mark the row as processed by adding a value in the processed column
+>         sheet.getRange(i + 1, PROCESSED_COLUMN_INDEX + 1).setValue("Email Sent"); // Adjust for 1-indexed rows
+>       }
+>     }
+>   }
+> }
+> ```
+> 
+> ### Explanation:
+> - **Processed Check:** Before sending an email, the script checks if the "Processed" column for that row is empty (indicating that an email hasn't been sent).
+> - **Updating Processed Status:** After sending the email, it marks that row as processed (you can use "Email Sent" or any identifier you prefer).
+> 
+> ### Triggering the Script:
+> - Keep the trigger set for "On form submit" so that the script runs only when a new response is added.
+> 
+> ### Final Note:
+> - With this setup, emails will only send for new responses, preventing duplicate emails for previously processed responses. Be sure to test to confirm it works as intended!

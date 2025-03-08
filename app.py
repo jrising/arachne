@@ -10,24 +10,9 @@ from whoosh.index import open_dir
 from whoosh import qparser
 import numpy as np
 
-from wrappers import gemini
+from chatwrap import gemini, chatlog
 import utils
 from utils import create_chat, fillin_training_end, chat_tokens, chat_tokens_each, chat_tokens_one
-
-do_tts = False
-
-if do_tts:
-    try:
-        from TTS.api import TTS
-        import pygame
-        import threading
-        import queue
-        
-        tts = TTS("tts_models/en/ljspeech/glow-tts")
-        pygame.init()
-    except:
-        print("No text-to-speech functionality.")
-        pass
 
 app = Flask(__name__)
 
@@ -50,7 +35,7 @@ def index():
     else:
         load_filename = request.args.get('load')
         if load_filename:
-            pastmessages = utils.load_log(glob.glob('logs/log_' + load_filename.replace(' ', '_').replace(':', '-') + "*.log")[0])
+            pastmessages = chatlog.load_log(glob.glob('logs/log_' + load_filename.replace(' ', '_').replace(':', '-') + "*.log")[0])
             print(pastmessages)
             return render_template('index.html', log_filename=utils.get_log_filename(), menu_html=get_menu(),
                                    pastmessages=pastmessages)
@@ -120,20 +105,7 @@ def stream(input_text, past_messages, log_filename, history_text="",
         
     ## Write all out to logs
     if log_filename:
-        with open(os.path.join("logs", log_filename), 'w') as fp:
-            before_user = True
-            for message in messages:
-                if message['role'] == 'system':
-                    continue
-                messagetext = message['content']
-                if message['role'] == 'assistant' and before_user:
-                    messagetext = messagetext[:100]
-                else:
-                    before_user = False
-
-                fp.write(f"**{message['role']}**:\n")
-                for line in messagetext.split("\n"):
-                    fp.write(f"> {line}\n")
+        chatlog.save_log(os.path.join("logs", log_filename), messages)
 
 @app.route('/stop-stream', methods=['POST'])
 def stop_stream():
@@ -293,70 +265,9 @@ def audio():
 @app.route('/completion_audio', methods=['GET', 'POST'])
 def completion_audio():
     if request.method == "POST":
-        return Response(play_audio(completion_api()), mimetype='text/event-stream')
+        return Response(completion_api(), mimetype='text/event-stream')
     else:
         return Response(None, mimetype='text/event-stream')
-
-## Generates the waves
-def tts_consumer(qqin, qqout):
-    ii = 0
-    while True:
-        sentence = qqin.get()
-        if sentence is None or break_streaming:
-            break
-
-        tts.tts_to_file(text=sentence, file_path="waves/tts" + str(ii) + ".wav")
-        qqout.put("waves/tts" + str(ii) + ".wav")
-        
-        qqin.task_done()  # Signal that a formerly enqueued task is complete
-        ii += 1
-
-def play_audio(srm):
-    qqin = queue.Queue()
-    qqout = queue.Queue()
-    consumer_thread = threading.Thread(target=tts_consumer, args=(qqin, qqout))
-    consumer_thread.start()
-
-    channel = pygame.mixer.find_channel()
-
-    currentinput = ""
-    for token in srm:
-        currentinput += token
-        if re.search(r"[.!?] ", currentinput):
-            sentences = re.split(r"[.!?] ", currentinput)
-            for sentence in sentences[:-1]:
-                qqin.put(sentence)
-            currentinput = sentences[-1]
-        yield token
-
-        if break_streaming:
-            break
-
-        if not qqout.empty():
-            if not channel.get_queue():
-                my_sound = pygame.mixer.Sound(qqout.get())
-                channel.queue(my_sound)
-
-    if break_streaming:
-        channel.quit()
-                
-    if currentinput:
-        qqin.put(currentinput)
-
-    while (not qqin.empty() or not qqout.empty()) and not break_streaming:
-        if not qqout.empty() and not channel.get_queue():
-            my_sound = pygame.mixer.Sound(qqout.get())
-            channel.queue(my_sound)
-        time.sleep(0.2)
-
-    if break_streaming:
-        channel.quit()
-        
-    qqin.put(None)
-    while channel.get_busy():
-        time.sleep(0.2)
-        
-    consumer_thread.join()
 
 ## Hierarchical Memory
 
@@ -433,7 +344,7 @@ def news():
     with open(filepath.replace('.pkl', '-texts.pkl'), 'rb') as fp:
         texts = pickle.load(fp)
         
-    messages = utils.load_log(filepath.replace('.pkl', '.log'))
+    messages = chatlog.load_log(filepath.replace('.pkl', '.log'))
     
     welcome = now.strftime('# Daily Bulletin: %Y-%m-%d') + prev.strftime(' (<a href="/news?date=%Y-%m-%d">Previous</a>)\n\n') + process_bulletin(messages[0]['content'], texts, lambda ids: bulletin.incremenet_uses(engine, items, ids, 1))
 

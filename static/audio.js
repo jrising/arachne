@@ -1,3 +1,6 @@
+let speechRecognition = new webkitSpeechRecognition();
+chosenvoice = null;
+
 async function sendText(text) {
     let upperdiv = document.getElementById('upperid')
     upperdiv.innerHTML += `<div class="message">
@@ -30,6 +33,8 @@ async function sendText(text) {
 	    }
 	    textout += text;
 	}
+
+	speak(textout);
 	
 	upperdiv.innerHTML += `<div class="message">
                 <div class="appmessagediv">
@@ -43,23 +48,32 @@ async function sendText(text) {
     }
 }
 
-/*let stopListeningAfterSilence = (() => {
-    let silenceTimer = null;
-    const silenceDuration = 3000; // duration in ms, adjust to fit
-
-    return (recognition) => {
-        clearTimeout(silenceTimer);
-        silenceTimer = setTimeout(() => {
-            recognition.stop();
-        }, silenceDuration);
+function speak(text) {
+    $('#status').text("Speaking...");
+    const utterance = new SpeechSynthesisUtterance(text);
+    if (chosenvoice == null) {
+	voices = window.speechSynthesis.getVoices();
+	for (const voice of voices) {
+	    if (voice.name == "Karen") {
+		chosenvoice = voice;
+	    }
+	}
     }
-})();*/
+    utterance.voice = chosenvoice;
+    utterance.pitch = 0.75;
+    utterance.rate = 1.25;
+    utterance.onend = function(ev) {
+	speechRecognition.start();
+	$('#status').text("Listening.");
+    }
+    
+    window.speechSynthesis.speak(utterance);
+}
 
 if ("webkitSpeechRecognition" in window) {
     $(function() {
-	let speechRecognition = new webkitSpeechRecognition();
 	// Setup for note-taking
-	speechRecognition.continuous = true;
+	speechRecognition.continuous = false;
 	speechRecognition.interimResults = true;
 	speechRecognition.lang = 'en-US';
 
@@ -67,6 +81,7 @@ if ("webkitSpeechRecognition" in window) {
 	$('#status').text("Waiting.");
 
 	function stopSpeaking() {
+	    window.speechSynthesis.cancel();
 	    fetch('/stop-stream', { method: 'POST' }).then((response) =>
 		{});
 	}
@@ -89,27 +104,39 @@ if ("webkitSpeechRecognition" in window) {
 	    speechRecognition.stop();
 	}
 
+	document.body.onclick = () => {
+	    if ($('#status').text() == "Waiting.") {
+		speechRecognition.start();
+		$('#status').text("Listening.");
+	    } else {
+		stopSpeaking();
+	    }
+	}
+
 	speechRecognition.onstart = () => {
+	    console.log("onstart");
 	    $("#status").show();
 	    $("#status").text("Listening.");
 	};
     
 	speechRecognition.onend = () => {
+	    console.log("onend");
 	    if (final_transcript == "") {
 		speechRecognition.start();
+		$('#status').text("Listening.");
 		return;
 	    }
-	    $("#status").text("Speaking...");
 
 	    sendText(final_transcript).then(textout => {
 		final_transcript = "";
 		$("#final").html("");
 		$("#interim").html("");
-		$('#status').text("Waiting.");
+		$('#status').text("Responding.");
 	    }).catch(error => console.error(error));
 	};
 
 	speechRecognition.onError = () => {
+	    console.log("onerror");
 	    if (event.error == 'no-speech') {
 	        
 	    }
@@ -117,6 +144,7 @@ if ("webkitSpeechRecognition" in window) {
 	};
 
 	speechRecognition.onresult = (event) => {
+	    console.log("onresult");
 	    // Create the interim transcript string locally because we don't want it to persist like final transcript
 	    let interim_transcript = "";
 

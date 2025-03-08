@@ -14,7 +14,7 @@ of the following academic programs (and it may not be clear):
    prospective students.
  - One of the natural science programs offered my the Marine Science &
    Policy school: In this case, suggest that the applicant reach out
-   to Xinfeng Liang <xfliang@udel.edu>.
+   to Carlos Moffat <cmoffat@udel.edu>.
    
 As a first step, identify any specific questions asked in the email or
 core confusions and relay them back here. I will provide any answers
@@ -22,19 +22,19 @@ if needed to incorporate in the response. If the person is local to
 the Delaware/Mid-Atlantic area, or if they did schoolwork at MIT,
 Columbia, UC Berkeley, UChicago, LSE, or UD, tell me.
 
-Please identify which of these programs the person is interested in,
-or if it is ambiguous, offer a few sentences to help them
-decide. Do not mention the other programs.
+For the Ph.D. programs, limited funding is available. For the EE
+Masters and ESM programs, these are self-funded programs.
 
-For the Ph.D. programs, note that funding is limited. If
-they seem like they would well-qualified to do work related to my
-research (climate change risks, food systems, interdisciplinary
-quantitative modeling), encourage them to mention me in their
-statement of purpose.
+We now have a form that we use to help students identify what program
+is best for them, and help them understand key issues. So the goal of
+the email is to respond to any direct questions, but mainly to direct
+them to the form: https://forms.gle/KqiyThnYCLzSi2LK7
 
-For the EE Masters program, note that it is a self-funded program. For
-the ESM program, note that there is limited funding available (the
-program is unfunded for most students).
+If the applicant seems well-qualified to do quantitative work related
+to my research (climate change risks, food systems, interdisciplinary
+quantitative modeling) as a PhD student, encourage them to mention me
+in their statement of purpose, but note that funding is limited and
+they should apply by December 1 for full consideration.
 
 Here is a template email, which you can use or modify. In any case,
 keep the email similarly brief. Do not be overly enthusiastic
@@ -42,11 +42,11 @@ or suggest that they are uniquely qualified for a spot.
 
 Dear [NAME],
 
-Thank you for reaching out. It sounds like you would be good candidate
-for [PROGRAM]. However, funding is always a constraint in our ability
-to take students. I would encourage you to apply by the end of the
-calendar year [OR DECEMBER 15 FOR ESM] so that you can be considered
-for any available funds.
+Thank you for reaching out. We are trying a new system for connecting
+prospective students with potential advisors. Can you fill out the
+form here?
+
+https://forms.gle/KqiyThnYCLzSi2LK7
 
 Best,
 

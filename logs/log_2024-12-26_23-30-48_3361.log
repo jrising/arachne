@@ -1,0 +1,46 @@
+**user**:
+> I am running pytest from python like this:
+> result = subprocess.run(['pytest', script_name], capture_output=True, text=True, check=True)
+> But result ends up empty, even though I see output when I run it in the terminal. What's up?
+**assistant**:
+> When you use `subprocess.run` with `capture_output=True`, the standard output and standard error of the subprocess are captured to the `result.stdout` and `result.stderr` attributes of the returned result object. If `result` appears empty, ensure you're checking these attributes instead of `result` directly.
+> 
+> Here's how you can access the output:
+> 
+> ```python
+> import subprocess
+> 
+> result = subprocess.run(['pytest', script_name], capture_output=True, text=True, check=True)
+> 
+> # Check the captured output
+> output = result.stdout
+> errors = result.stderr
+> 
+> print("Standard Output:\n", output)
+> print("Standard Error:\n", errors)
+> ```
+> 
+> A few additional points to consider:
+> 
+> 1. **Ensure `script_name` is correctly specified:** If the script name is incorrect or the script does not exist in your working directory, `pytest` will not be able to run it, and you'll likely see some error messages in `result.stderr`.
+> 
+> 2. **Check for Exceptions:** If the `check=True` argument is used, `subprocess.run` will raise a `CalledProcessError` if the subprocess returns a non-zero exit status. In such a case, you can handle the error and inspect `e.stdout` and `e.stderr` as follows:
+> 
+>    ```python
+>    import subprocess
+> 
+>    try:
+>        result = subprocess.run(['pytest', script_name], capture_output=True, text=True, check=True)
+>        output = result.stdout
+>        errors = result.stderr
+>    except subprocess.CalledProcessError as e:
+>        output = e.stdout
+>        errors = e.stderr
+>        print("Error Running Pytest:\n", errors)
+> 
+>    print("Standard Output:\n", output)
+>    ```
+> 
+> 3. **Terminal-specific Output:** If you see output in your terminal but not when running through the `subprocess`, make sure there are no setup configurations in your shell (such as environment variables, pytest configuration files, or terminal settings) affecting the behavior that isn't replicated when the subprocess runs.
+> 
+> By checking these areas, you should be able to diagnose why your `subprocess` call isn't yielding the expected information in `result`.

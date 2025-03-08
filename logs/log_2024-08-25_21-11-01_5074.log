@@ -1,0 +1,25 @@
+**assistant**:
+> The following past discussions are relevant to the query:
+> 
+> **2023-05-03 15:25:35**: This discussion 
+**user**:
+> In dplyr, how can I apply a 10-year moving average (cumsum(x) - c(rep(0, 10), cumsum((x)[1:(length(x)-10)]))) to every column?
+**assistant**:
+> To apply a 10-year moving average to every column of a dataframe using `dplyr`, you can make use of the `mutate()` function along with `across()` for a neat solution. Here's how you can do it:
+> 
+> ```r
+> library(dplyr)
+> 
+> # Assuming df is your dataframe and it only contains numeric columns
+> df <- df %>%
+>   mutate(across(everything(), ~ (cumsum(.) - c(rep(0, 10), cumsum((.))[1:(length(.)-10)])) / 10))
+> ```
+> 
+> ### Explanation:
+> 
+> - `mutate()`: This function is used to create new columns or modify existing ones.
+> - `across()`: This function helps apply a given operation across selected columns. Here, `everything()` signifies that the operation should apply to all columns.
+> - `cumsum(.)`: Computes the cumulative sum for each column.
+> - `(cumsum(.) - c(rep(0, 10), cumsum((.))[1:(length(.)-10)])) / 10`: This expression calculates the 10-year moving average. It takes the difference between the cumulative sum of the column and a version shifted by 10 places, effectively subtracting the cumulative sum 10 years prior for each position, and then divides by 10 to get the average.
+> 
+> This code assumes all columns are numeric and you want to apply the moving average calculation across all of them. If your dataframe includes non-numeric columns, you might want to adjust the selection inside `across()` to target only numeric columns (e.g., `across(where(is.numeric), ~ ...)`).

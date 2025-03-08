@@ -4,6 +4,7 @@ import openai, tiktoken
 from dotenv import load_dotenv
 from whoosh.index import create_in, open_dir
 from whoosh.fields import *
+from chatwrap import chatlog
 
 load_dotenv()
 openai.api_key = os.getenv('OPENAI_API_KEY')
@@ -41,7 +42,7 @@ def num_tokens_from_string(string):
 def converse(messages, assistant_response, user_response, max_tokens):
     messages.append({"role": "assistant", "content": assistant_response})
     messages.append({"role": "user", "content": user_response})
-    completion = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=messages,
+    completion = openai.ChatCompletion.create(model="gpt-4o-mini", messages=messages,
                                               max_tokens=max_tokens, temperature=1)
     return completion['choices'][0]['message']['content']
 
@@ -54,7 +55,7 @@ def make_log(log_filename, ixwriter):
 
     tokenlen = num_tokens_from_string(content)
     if tokenlen > 4097 - 500 - 350: # error of 350 observed
-        messages = load_log('logs/' + log_filename)
+        messages = chatlog.load_log('logs/' + log_filename)
         maxperstate = int((4097 - 500 - 350) / len(messages)) - 10 # **word**: ...
         content = ""
         for message in messages:
@@ -69,31 +70,35 @@ def make_log(log_filename, ixwriter):
     extra = "\n\nPlease respond in the following template:\n\nSynopsis: [SYNOPSIS]\n"
     
     messages.append({"role": "user", "content": prompt1 + "\n" + content + extra})
-    completion = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=messages,
+    completion = openai.ChatCompletion.create(model="gpt-4o-mini", messages=messages,
                                               max_tokens=500, temperature=1)
     response1 = completion['choices'][0]['message']['content']
-
-    if response1[:len("Synopsis: ")] != "Synopsis: ":
-        print(response1)
+    response1 = response1.lstrip("#* \t\n")
+    
+    if not (response1[:len("Synopsis:")] in ["Synopsis:", "Synopsis\n", "Synopsis*"]):
+        print("Bad start: " + response1)
         return False
         
-    synopsis = response1[len("Synopsis: "):]
+    synopsis = response1[len("Synopsis"):]
+    synopsis = synopsis.lstrip(":#* \t\n")
     if not valid_synopsis(content, synopsis):
-        print(response1)
+        print("Invalid synopsis: " + response1)
         return False
 
     prompt2 = open('prompts/makelog2.md', 'r').read()
     response2 = converse(messages, response1, prompt2, 50)
+    response2 = response2.lstrip("#* \t\n")
 
     allowed_attempts = 3
     logline = None
     while allowed_attempts > 0:
         allowed_attempts -= 1
-        if response2[:len("Log: ")] != "Log: ":
-            response2 = converse(messages, response2, "This response did not start with 'Log: '. Please use the template:\n\nLog: [Digest James]; [Digest Arachne]\n", 50)
+        if response2[:len("Log:")] != "Log:":
+            response2 = converse(messages, response2, "This response did not start with 'Log:'. Please use the template:\n\nLog: [Digest James]; [Digest Arachne]\n", 50)
             continue
         
-        logline = response2[len("Log: "):]
+        logline = response2[len("Log:"):]
+        logline = logline.lstrip("#* \t\n")
         if len(logline) > 200:
             response2 = converse(messages, response2, "This response was significantly longer than the log entry I want to use. Can you try a short phrase for each digest? Again, use the template:\n\nLog: [Digest James]; [Digest Arachne]\n", 50)
             continue
@@ -109,14 +114,16 @@ def make_log(log_filename, ixwriter):
         break
     
     if not valid_logline(content, synopsis, logline):
-        print(response2)
+        print("Invalid logline: " + response2)
         return False
 
     prompt3 = open('prompts/makelog3.md', 'r').read()
     response3 = converse(messages, response2, prompt3, 50)
-
-    if response3[:len("Title: ")] == "Title: ":
-        title = response3[len("Title: "):]
+    response3 = response3.lstrip("#* \t\n")
+    
+    if response3[:len("Title:")] == "Title:":
+        title = response3[len("Title:"):]
+        title = title.lstrip("#* \t\n")
         if len(title) <= 100:
             if os.path.exists("database/logs/titles.pkl"):
                 with open("database/logs/titles.pkl", 'rb') as fp:

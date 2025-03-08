@@ -1,0 +1,77 @@
+**user**:
+> Below is a function definition. Can you provide an example for the docstring and a unit test for it?
+> 
+> """
+>     get_retail_price(dt0::DateTime, kwbytimestep::Vector{Float64}, timestep::Float64) -> Float64
+> 
+> Estimate the demand pricing cost, for Delmarva Power, given a vector a kw values all within a given month.
+> 
+> # Arguments
+>  - dt0::DateTime: The time of the first kw timestep value.
+>  - kwbytimestep::Vector{Float64}: A vector of kW used during each timestep.
+>  - timestep::Float64: The length of a timestep, in hours (typically a value of 1. or less).
+> 
+> # Returns
+>  - Float64: The demand pricing cost, according to this data.
+> """
+> function get_demand_cost(dt0::DateTime, kwbytimestep::Vector{Float64}, timestep::Float64)
+>     max60_peak = 0.
+>     max60_nonpeak = 0.
+>     timestepsper60 = round(Int, 1. / timestep)
+>     for tt in 1:length(kwbytimestep)
+>         max60 = maximum(kwbytimestep[tt:(tt + timestepsper60 - 1)])
+>         if is_peak(dt0 + Hour(round(Int, timestep * (tt - 1))))
+>             max60_peak = max(max60, max60_peak)
+>         else
+>             max60_nonpeak = max(max60, max60_nonpeak)
+>         end
+>     end
+> 
+>     18.73 * max(round(max60_peak), round(max60_nonpeak / 3))
+> end
+> 
+**assistant**:
+> Certainly! Let's start by updating the docstring. It appears the original docstring had some inaccuracies in terms of naming. Here's an example:
+> 
+> ```julia
+> """
+>     get_demand_cost(dt0::DateTime, kwbytimestep::Vector{Float64}, timestep::Float64) -> Float64
+> 
+> Estimate the demand pricing cost for Delmarva Power, given a vector of kW values all within a given month.
+> 
+> # Arguments
+>  - dt0::DateTime: The time of the first kW timestep value.
+>  - kwbytimestep::Vector{Float64}: A vector of kW used during each timestep.
+>  - timestep::Float64: The length of a timestep, in hours (typically a value of 1. or less).
+> 
+> # Returns
+>  - Float64: The demand pricing cost, calculated based on the peak and non-peak kW demand.
+> """
+> ```
+> 
+> Next, let's create a unit test for `get_demand_cost`. We need a mock implementation of the `is_peak` function and some test data.
+> 
+> ```julia
+> using Test
+> using Dates
+> 
+> # Mock implementation for `is_peak` function.
+> function is_peak(dt::DateTime)
+>     # Simple example: assume peak hours are 7 AM to 7 PM.
+>     hour(dt) in 7:18
+> end
+> 
+> # Unit test
+> @testset "get_demand_cost" begin
+>     dt0 = DateTime(2024, 8, 1, 0, 0) # Starting at midnight
+>     kwbytimestep = [1.0, 2.5, 3.0, 0.5, 4.0, 3.5, 2.0, 6.0] # Power usage in kW
+>     timestep = 1.0 / 4 # 15 minutes
+> 
+>     result = get_demand_cost(dt0, kwbytimestep, timestep)
+>     expected_result = 18.73 * max(round(6.0), round(6.0 / 3)) # The expected demand cost based on the mock data
+> 
+>     @test result ≈ expected_result
+> end
+> ```
+> 
+> This unit test provides a basic evaluation of `get_demand_cost` to ensure it behaves correctly for a given set of inputs. The `is_peak` mock function defines peak hours for the sake of testing, which can be adjusted based on how "peak" is defined in your actual implementation.

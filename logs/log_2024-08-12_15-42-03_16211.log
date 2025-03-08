@@ -1,0 +1,222 @@
+**assistant**:
+> The following entries are relevant to the query:
+> 
+> **2024-07-29 16:47:39:** James requested adding do
+**user**:
+> Below is a partially documented set of functions that I've written for use within a dynamic programming optimization problem:
+> ```
+> using Roots, Distributions
+> 
+> function periodstep(steps::Int)
+>     Hour(round(Int, timestep * steps)) + Minute((timestep * steps - round(Int, timestep * steps)) * 60)
+> end
+> 
+> """
+> For a given enerfrac_plugged, determine the portion of the plugged-in fleet below the prescribed level
+> Returns:
+>  - portion of vehicles below the level
+>  - enerfrac for low-power portion
+>  - enerfrac for high-power portion
+> """
+> function split_below(enerfrac_plugged::Float64, enerfrac_needed::Float64)
+>     # Limits come from truncated(Normal(mu, 0.05), lower=0., upper=1.)
+>     if enerfrac_plugged ≤ 0.03989422804014327
+>         return 1.0, 0.0, enerfrac_needed
+>     elseif enerfrac_plugged ≥ 0.9601057719598567
+>         return 0.0, enerfrac_needed, 1.0
+>     end
+>     ## Use normal distribution, so I can calculate means of truncated
+>     # Need to get a truncated normal with the desired mean
+>     f(mu) = mean(truncated(Normal(mu, 0.05), lower=0., upper=1.)) - enerfrac_plugged
+>     mu = find_zero(f, (0., 1.))
+>     dist = truncated(Normal(mu, 0.05), lower=0., upper=1.)
+>     portion_below = cdf(dist, enerfrac_needed)
+>     portion_below, mean(truncated(dist, upper=enerfrac_needed)), mean(truncated(dist, lower=enerfrac_needed))
+> end
+> 
+> split_below(0.5, 0.5)
+> split_below(0.5, 0.3)
+> split_below(0.7, 0.3)
+> split_below(0.3, 0.3)
+> split_below(0.1, 0.3)
+> 
+> function adjust_below(tup::Tuple{Float64, Float64, Float64}, enerfrac_below::Float64, vehicles_below::Float64)
+>     vehicles_plugged = tup[1] + vehicles_below
+>     @assert vehicles_plugged ≤ vehicles + 1e-8
+> 
+>     if vehicles_plugged > 0
+>         enerfrac_plugged = (enerfrac_below * vehicles_below + tup[2] * tup[1]) / vehicles_plugged
+>     else
+>         enerfrac_plugged = tup[2]
+>     end
+>     (vehicles_plugged, enerfrac_plugged, tup[3])
+> end
+> ```
+> Can you complete docstrings for these?
+**assistant**:
+> Certainly! Adding docstrings is a good practice to document your code, making it easier for others (and yourself) to understand its purpose and usage in the future. Here are the completed docstrings for the functions in your code:
+> 
+> ```julia
+> using Roots, Distributions
+> 
+> """
+> Convert a given number of steps into a period expressed in hours and minutes.
+> 
+> # Arguments
+> - `steps::Int`: The number of timestep increments to convert.
+> 
+> # Returns
+> - `Period`: A period of time represented in hours and minutes.
+> """
+> function periodstep(steps::Int)
+>     Hour(round(Int, timestep * steps)) + Minute((timestep * steps - round(Int, timestep * steps)) * 60)
+> end
+> 
+> """
+> For a given fraction of energy plugged (`enerfrac_plugged`), determine the portion of the fleet that is below a 
+> prescribed level (`enerfrac_needed`). Assumes the fleet follows a truncated normal distribution.
+> 
+> # Arguments
+> - `enerfrac_plugged::Float64`: The current fraction of the fleet that is plugged in.
+> - `enerfrac_needed::Float64`: The prescribed energy fraction required.
+> 
+> # Returns
+> - `Tuple{Float64, Float64, Float64}`: 
+>   1. Portion of vehicles below the required energy fraction.
+>   2. Energy fraction for the low-power portion of the fleet.
+>   3. Energy fraction for the high-power portion of the fleet.
+> """
+> function split_below(enerfrac_plugged::Float64, enerfrac_needed::Float64)
+>     # Limits come from truncated(Normal(mu, 0.05), lower=0., upper=1.)
+>     if enerfrac_plugged ≤ 0.03989422804014327
+>         return 1.0, 0.0, enerfrac_needed
+>     elseif enerfrac_plugged ≥ 0.9601057719598567
+>         return 0.0, enerfrac_needed, 1.0
+>     end
+>     ## Use normal distribution, so I can calculate means of truncated
+>     # Need to get a truncated normal with the desired mean
+>     f(mu) = mean(truncated(Normal(mu, 0.05), lower=0., upper=1.)) - enerfrac_plugged
+>     mu = find_zero(f, (0., 1.))
+>     dist = truncated(Normal(mu, 0.05), lower=0., upper=1.)
+>     portion_below = cdf(dist, enerfrac_needed)
+>     portion_below, mean(truncated(dist, upper=enerfrac_needed)), mean(truncated(dist, lower=enerfrac_needed))
+> end
+> 
+> split_below(0.5, 0.5)
+> split_below(0.5, 0.3)
+> split_below(0.7, 0.3)
+> split_below(0.3, 0.3)
+> split_below(0.1, 0.3)
+> 
+> """
+> Adjusts the fraction of vehicles and energy plugged based on the vehicles and energy considered below a certain level.
+> 
+> # Arguments
+> - `tup::Tuple{Float64, Float64, Float64}`: A tuple containing:
+>   1. The current portion of vehicles plugged.
+>   2. The energy fraction for this portion.
+>   3. The energy fraction above the needed level.
+> - `enerfrac_below::Float64`: The energy fraction of vehicles considered below a certain threshold.
+> - `vehicles_below::Float64`: The number of vehicles below the given threshold.
+> 
+> # Returns
+> - `Tuple{Float64, Float64, Float64}`: 
+>   1. Adjusted number of vehicles plugged.
+>   2. Adjusted energy fraction for plugged vehicles.
+>   3. Original energy fraction for vehicles above the threshold.
+> """
+> function adjust_below(tup::Tuple{Float64, Float64, Float64}, enerfrac_below::Float64, vehicles_below::Float64)
+>     vehicles_plugged = tup[1] + vehicles_below
+>     @assert vehicles_plugged ≤ vehicles + 1e-8
+> 
+>     if vehicles_plugged > 0
+>         enerfrac_plugged = (enerfrac_below * vehicles_below + tup[2] * tup[1]) / vehicles_plugged
+>     else
+>         enerfrac_plugged = tup[2]
+>     end
+>     (vehicles_plugged, enerfrac_plugged, tup[3])
+> end
+> ```
+> 
+> These docstrings should help clarify the purpose and expected input/output of each function for anyone who might use or maintain this code. If any comments in the code are unclear or incorrect, let me know, and I can help refine them further.
+**user**:
+> Can you provide a set of unit tests for these functions? Note that the `split_below` lines were cheap unit tests.
+**assistant**:
+> Sure! Below is a set of more comprehensive unit tests for the `periodstep`, `split_below`, and `adjust_below` functions. These tests will cover various scenarios and edge cases to ensure the correctness of your implementation.
+> 
+> You can use the Julia `Test` standard library to structure these tests:
+> 
+> ```julia
+> using Test
+> 
+> # Define test suite
+> function run_tests()
+>     # Test for periodstep function
+>     @testset "Testing periodstep" begin
+>         # Test with 0 steps
+>         @test periodstep(0) == Hour(0) + Minute(0)
+> 
+>         # Test with 1 step (assuming timestep is defined as 1 hour)
+>         timestep = 1.0   # Example value, adjust as necessary for your use case
+>         @test periodstep(1) == Hour(1) + Minute(0)
+> 
+>         # Test with fractional steps
+>         timestep = 0.5   # 30 minutes
+>         @test periodstep(1) == Hour(0) + Minute(30)
+>         @test periodstep(2) == Hour(1) + Minute(0)
+>     end
+> 
+>     # Test for split_below function
+>     @testset "Testing split_below" begin
+>         # Edge cases
+>         @test split_below(0.0, 0.3) == (1.0, 0.0, 0.3)
+>         @test split_below(1.0, 0.3) == (0.0, 0.3, 1.0)
+> 
+>         # General case
+>         portion_below, low_mean, high_mean = split_below(0.5, 0.5)
+>         @test portion_below ≈ 0.5   # Example expected value, adjust based on your logic
+>         @test low_mean ≈ 0.5        # Example expected value, adjust based on your logic
+>         @test high_mean ≈ 0.5       # Example expected value, adjust based on your logic
+>         
+>         # Additional test with different values
+>         portion_below, low_mean, high_mean = split_below(0.5, 0.3)
+>         @test portion_below ≈ 0.3   # Example expected value, adjust
+>     end
+> 
+>     # Test for adjust_below function
+>     @testset "Testing adjust_below" begin
+>         # Initial condition
+>         tup = (0.5, 0.3, 0.7)
+>         vehicles_below = 2.0
+>         
+>         # Test with valid input
+>         vehicles_plugged, enerfrac_plugged, _ = adjust_below(tup, 0.2, vehicles_below)
+>         @test vehicles_plugged ≈ 2.5       # Adjust based on input values
+>         @test enerfrac_plugged ≈ 0.4       # Adjust based on input values
+> 
+>         # Test when no vehicles are below
+>         tup = (0.5, 0.3, 0.7)
+>         vehicles_below = 0.0
+>         vehicles_plugged, enerfrac_plugged, _ = adjust_below(tup, 0.2, vehicles_below)
+>         @test vehicles_plugged ≈ 0.5       # Remains the same
+>         @test enerfrac_plugged ≈ 0.3       # Remains the same
+> 
+>         # Test assertion failure when exceeding vehicle count
+>         @test_throws AssertionError adjust_below(tup, 0.2, 10.0)  # Adjust based on your vehicle definition
+>     end
+> end
+> 
+> # Execute tests
+> run_tests()
+> ```
+> 
+> ### Notes:
+> 1. **Adjust Constants**: The expected results for `split_below` and `adjust_below` depending on your actual computations. Here, we've used placeholder values (e.g., `≈ 0.5`), which you should adjust based on the expected output of your functions.
+> 
+> 2. **Example Values**: For `timestep`, an example value is provided; this should be aligned with your actual context.
+> 
+> 3. **Edge Cases**: The unit tests check edge cases (e.g., `enerfrac_plugged` at 0 and 1) and general cases to ensure robust functionality.
+> 
+> 4. **Assertions**: Test for assertion errors in `adjust_below` to confirm your function correctly handles overflow for plugged vehicles.
+> 
+> You can directly run these tests in your Julia environment to validate your functions. If you need further customization or have any specific cases in mind, feel free to ask!

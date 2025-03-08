@@ -1,0 +1,38 @@
+**user**:
+> I have a NetCDF with hourly data, with the time variable in "valid_time". How can I output a NetCDF with a daily time variable, in the same units (seconds since 1970) as the original one?
+**assistant**:
+> To convert hourly data in a NetCDF file to daily-averaged data while keeping the same time format, you can use Python with the xarray library. Here's a step-by-step guide:
+> 
+> 1. **Install the necessary packages**: Make sure you have `xarray`, `pandas`, and `netCDF4` installed. You can install them using pip if needed:
+>    ```bash
+>    pip install xarray pandas netCDF4
+>    ```
+> 
+> 2. **Load your NetCDF file and calculate daily averages**: Here's a Python script that performs the conversion:
+> 
+>    ```python
+>    import xarray as xr
+>    import numpy as np
+> 
+>    # Load the existing NetCDF file
+>    ds = xr.open_dataset('your_input_file.nc')
+> 
+>    # Convert 'valid_time' to a datetime format if necessary
+>    # Assuming 'valid_time' is already in seconds since 1970-01-01
+>    ds['valid_time'] = xr.decode_cf(ds, decode_times=True).valid_time
+> 
+>    # Resample to daily average
+>    ds_daily = ds.resample(valid_time='1D').mean()
+> 
+>    # Convert daily times back to seconds since 1970-01-01
+>    ds_daily['valid_time'] = ((ds_daily.valid_time.astype('datetime64[s]')
+>                               - np.datetime64('1970-01-01T00:00:00Z'))
+>                               / np.timedelta64(1, 's')).astype('int64')
+> 
+>    # Save the daily data to a new NetCDF file
+>    ds_daily.to_netcdf('your_output_file.nc')
+>    ```
+> 
+> This script loads your hourly data NetCDF, converts the time variable to datetime, resamples (averages) it to a daily frequency, and then reconverts the time variable back to seconds since 1970-01-01. Finally, it writes the new data to a new NetCDF file.
+> 
+> Replace `'your_input_file.nc'` and `'your_output_file.nc'` with the paths to your input and output files, respectively. Adjust as needed based on any specific variable details in your dataset.
