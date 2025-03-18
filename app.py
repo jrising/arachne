@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, Response
 
-import os, pickle, subprocess, time, random, glob
+import os, pickle, subprocess, time, random, glob, json, base64
 import regex as re
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from whoosh.index import open_dir
 from whoosh import qparser
 import numpy as np
+from pypdf import PdfReader
 
 from chatwrap import gemini, chatlog
 import utils
@@ -268,6 +269,93 @@ def completion_audio():
         return Response(completion_api(), mimetype='text/event-stream')
     else:
         return Response(None, mimetype='text/event-stream')
+
+def load_document_metadata():
+    docsdir = 'readdocs'
+    metapath = os.path.join(docsdir, 'documents.json')
+    if os.path.exists(metapath):
+        with open(metapath, 'r') as fp:
+            metadocs = json.load(fp)
+    else:
+        metadocs = {}
+
+    return metadocs
+
+def save_document_metadata(metadocs):
+    docsdir = 'readdocs'
+    metapath = os.path.join(docsdir, 'documents.json')
+    with open(metapath, 'w') as fp:
+        json.dump(metadocs, fp)
+
+@app.route('/reader', methods=['GET'])
+def reader():
+    metadocs = load_document_metadata()
+    docsdir = 'readdocs'
+    for root, dirs, files in os.walk(docsdir, followlinks=True):
+        for filename in files:
+            fullpath = os.path.join(root, filename)
+            if fullpath not in metadocs:
+                metadocs[fullpath] = {}
+
+    print(metadocs)
+            
+    return render_template('reader.html', log_filename=utils.get_log_filename(), metadocs=metadocs)
+
+@app.route('/completion_reader', methods=['GET', 'POST'])
+def completion_reader():
+    if request.method == "POST":
+        data = request.form
+
+        metadocs = load_document_metadata()
+        if data['document'] not in metadocs:
+            metadocs[data['document']] = {}
+            
+        page = metadocs[data['document']].get('next-page', 0)
+        metadocs[data['document']]['next-page'] = page + 1
+        save_document_metadata(metadocs)
+        
+        reader = PdfReader(data['document'])
+
+        page = reader.pages[page]
+
+        ## Process images
+        imagetexts = []
+        for count, image_file_object in enumerate(page.images):
+            if len(image_file_object.data) > 1024 * 1024 * 4:
+                detail = "low"
+            else:
+                detail = "high"
+            encoded = base64.b64encode(image_file_object.data).decode("utf-8")
+
+            completion = openai.ChatCompletion.create(
+                model="gpt-4o",
+                messages=[
+                    { "role": "user",
+                      "content": [
+                          { "type": "text", "text": "Please describe this image in detail." },
+                          { "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{encoded}",
+                                "detail": detail
+                            }}]}])
+
+            print(detail)
+            print(completion.choices[0].message.content)
+            imagetexts.append(completion.choices[0].message.content)
+            
+        text = page.extract_text(extraction_mode="layout", layout_mode_space_vertically=False, layout_mode_strip_rotated=False)
+        if page == 0:
+            prompt = "Here is the first page of a PDF, in a text-based layout:\n===\n" + text + "\n===\n"
+        else:
+            prompt = f"Here is page {page} of a PDF, in a text-based layout:\n===\n" + text + "\n===\n"
+        if len(imagetexts) > 0:
+            prompt += "In addition, the page has the following images, as described below:\n===\n" + "\n===\n".join(imagetexts) + "\n===\n"
+        
+        strm = stream(prompt + "Please write this in a stream appropriate for a text-to-speech reader. Use only the provided text, and include everything unless there are number-heavy tables, which you can summarize.", [], data['log_filename'])
+
+        return Response(strm, mimetype='text/event-stream')
+    else:
+        return completion()
 
 ## Hierarchical Memory
 
