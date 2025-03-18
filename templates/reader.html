@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Arachne: Reader</title>
+  <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+  <script src="{{ url_for('static', filename='reader.js') }}"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='main.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='reader.css') }}" />
+  <script type="text/javascript">
+    $(function() {
+	if (window.speechSynthesis.onvoiceschanged !== undefined) {
+	    window.speechSynthesis.onvoiceschanged = function() {
+		populateVoiceList($('#voice'));
+	    };
+	}
+
+	populateVoiceList($('#voice'));
+
+	$('#input-form').submit(function(event) {
+	    event.preventDefault();
+
+	    respond("");
+	});
+
+	$('#pitch').change(function() {
+	    $('#pitch-value').html($('#pitch').val());
+	});
+
+	$('#rate').change(function() {
+	    $('#rate-value').html($('#rate').val());
+	});
+
+	$('#document').change(function() {
+	});
+    });
+  </script>
+</head>
+
+<body>
+
+  <div class="p-3" style="border: 1px solid gray; height: 100px; border-radius: 8px;">
+    <span id="final" class="text-light"></span>
+    <span id="interim" class="text-secondary" style="color: #999;"></span>
+  </div>
+
+  <div id="upperid">
+  </div>
+
+  <form id="input-form" method="POST">
+
+    <select name="document" id="document">
+      {% for path in metadocs.keys() %}
+      {% if 'title' in metadocs[path] %}
+      <option value="{{ path }}">{{ metadocs[path]['title'] }}</option>
+      {% else %}
+      <option value="{{ path }}">{{ path }}</option>
+      {% endif %}
+      {% endfor %}
+    </select>
+      
+    <div>
+      <label for="rate">Rate</label><input type="range" min="0.5" max="2" value="1.5" step="0.1" id="rate" />
+      <div class="rate-value" id="rate-value">1</div>
+      <div class="clearfix"></div>
+    </div>
+    <div>
+      <label for="pitch">Pitch</label><input type="range" min="0" max="2" value="0.5" step="0.1" id="pitch" />
+      <div class="pitch-value" id="pitch-value">1</div>
+      <div class="clearfix"></div>
+    </div>
+    <select id="voice"></select>
+
+    <input type="hidden" name="log_filename" value="{{ log_filename }}" />
+    <button type="submit">Go.</button>
+  </form>
+  <p id="status" class="lead mt-3 text-light">Loading...</p>
+</body>
+</html>
