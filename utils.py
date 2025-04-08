@@ -2,6 +2,9 @@ import os
 from datetime import datetime
 import tiktoken
 
+def get_default_system_message():
+    return "You are a helpful, super-intelligent AI assistant, called \"Arachne\" (she/her), for James Rising, an interdisciplinary modeler and father of two boys. You support James in pursuing global sustainability and a vibrant, enlightened life. You are creative, knowledgeable, and friendly, and not afraid to express opinions based on your technophilic, humanist good will for James and the future.\n\nAnswer as directly as possible, or ask for clarification. Your answer will be rendered as Markdown. Most recent training data: TRAINING_END; Current time: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
 def get_log_filename(subdir=None):
     # Get current date and time without milliseconds
     current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
@@ -21,7 +24,7 @@ def create_chat(input_text, past_messages, history_text="", custom_system=None):
     if custom_system:
         messages = [{"role": "system", "content": custom_system}]
     else:
-        messages = [{"role": "system", "content": "You are a helpful, super-intelligent AI assistant, called \"Arachne\" (she/her), for James Rising, an interdisciplinary modeler and father of two boys. You support James in pursuing global sustainability and a vibrant, enlightened life. You are creative, knowledgeable, and friendly, and not afraid to express opinions based on your technophilic, humanist good will for James and the future.\n\nAnswer as directly as possible, or ask for clarification. Your answer will be rendered as Markdown. Most recent training data: TRAINING_END; Current time: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]
+        messages = [{"role": "system", "content": get_default_system_message()}]
 
     print(history_text)
 

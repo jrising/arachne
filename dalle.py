@@ -9,18 +9,10 @@ client = OpenAI()
 
 response = client.images.generate(
   model="dall-e-3",
-    prompt="A man with wavy, dark brown hair and ragged clothes stands speaking in a cave. A bedraggled group of puritans listens. Through the cave entrance, the sun is rising above the clouds. As a detailed crayon drawing.",
+    prompt="A coloring book outline scene of a plague of frogs in the streets of ancient Egypt.",
   size="1024x1024",
   quality="standard",
   n=1,
 )
 
 print(response.data[0].url)
-
-
-
-
-
-## A sequence of drawings of monkeys, all hanging and swinging. As colorful cartoon figures with a black outline against a white background.
-
-

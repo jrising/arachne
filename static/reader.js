@@ -1,4 +1,5 @@
 let speechRecognition = new webkitSpeechRecognition();
+var cancelStream = false;
 
 function populateVoiceList($select) {
     voices = window.speechSynthesis.getVoices().sort(function (a, b) {
@@ -56,6 +57,12 @@ async function speakStream($render, reader, voice, pitch, rate) {
 
     var lastutterance = null;
     while (true) {
+	if (cancelStream) {
+	    cancelStream = false;
+	    window.speechSynthesis.cancel();
+	    return;
+	}
+	
         const { done, value } = await reader.read();
         
         if (done) {
@@ -130,13 +137,18 @@ async function respond(text) {
 
     var searchForm = document.getElementById('input-form');
     var formData = new FormData(searchForm);
-    //formData.append('past_messages', upperdiv.innerHTML);
-    //formData.append('input_text', text);
-    
-    const response = await fetch('/completion_reader', {
-	method: 'POST',
-	body: formData
-    });
+
+    if (text == "summarize") {
+	var response = await fetch('/completion_reader_summary', {
+	    method: 'POST',
+	    body: formData
+	});
+    } else {
+	var response = await fetch('/completion_reader', {
+	    method: 'POST',
+	    body: formData
+	});
+    }
     const reader = response.body.getReader();
 
     upperdiv.innerHTML += `<div class="message">
@@ -161,21 +173,17 @@ if ("webkitSpeechRecognition" in window) {
 	$('#status').text("Waiting.");
 
 	function stopSpeaking() {
+	    cancelStream = true
 	    window.speechSynthesis.cancel();
 	    fetch('/stop-stream', { method: 'POST' }).then((response) =>
 		{});
+	    speechRecognition.start();
+	    $('#status').text("Listening.");
 	}
 
 	document.body.onkeydown = function(e) {
 	    if (e.key == " " || e.code == "Space" || e.keyCode == 32) {
-		if ($('#status').text() == "Speaking...") {
-		    stopSpeaking();
-		    $('#status').text("Waiting.");
-		}
-		if ($('#status').text() == "Waiting.") {
-		    speechRecognition.start();
-		    $('#status').text("Listening.");
-		}
+		stopSpeaking();
 	    }
 	}
 
@@ -202,6 +210,33 @@ if ("webkitSpeechRecognition" in window) {
 	speechRecognition.onend = () => {
 	    console.log("onend");
 	    if (final_transcript == "") {
+		speechRecognition.start();
+		$('#status').text("Listening.");
+		return;
+	    }
+
+	    if (final_transcript.startsWith("note ")) {
+		var searchForm = document.getElementById('input-form');
+		var formData = new FormData(searchForm);
+		formData.append('input_text', final_transcript);
+
+		let upperdiv = document.getElementById('upperid')
+		upperdiv.innerHTML += `<div class="message">
+                <div class="usermessagediv">
+                        <div class="usermessage">
+                            ${final_transcript}
+                        </div>
+                </div>
+            </div>`;
+
+		fetch('/reader_note', {
+		    method: 'POST',
+		    body: formData
+		});
+		
+		final_transcript = "";
+		$("#final").html("");
+		$("#interim").html("");
 		speechRecognition.start();
 		$('#status').text("Listening.");
 		return;

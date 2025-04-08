@@ -44,7 +44,7 @@ def index():
             return render_template('index.html', log_filename=utils.get_log_filename(), menu_html=get_menu())
  
 def stream(input_text, past_messages, log_filename, history_text="",
-           custom_system=None, custom_model=None):
+           custom_system=None, custom_model=None, on_stream_end=None):
     global break_streaming
     break_streaming = False
 
@@ -107,6 +107,9 @@ def stream(input_text, past_messages, log_filename, history_text="",
     ## Write all out to logs
     if log_filename:
         chatlog.save_log(os.path.join("logs", log_filename), messages)
+
+    if on_stream_end:
+        on_stream_end(response)
 
 @app.route('/stop-stream', methods=['POST'])
 def stop_stream():
@@ -266,57 +269,93 @@ def audio():
 @app.route('/completion_audio', methods=['GET', 'POST'])
 def completion_audio():
     if request.method == "POST":
-        return Response(completion_api(), mimetype='text/event-stream')
+        return Response(completion_api(custom_system=utils.get_default_system_message().replace("Your answer will be rendered as Markdown.", "You are interacting through a speech-to-text and text-to-speech system. There may be speech misinterpretations in the input text.")), mimetype='text/event-stream')
     else:
         return Response(None, mimetype='text/event-stream')
 
-def load_document_metadata():
-    docsdir = 'readdocs'
-    metapath = os.path.join(docsdir, 'documents.json')
-    if os.path.exists(metapath):
-        with open(metapath, 'r') as fp:
-            metadocs = json.load(fp)
-    else:
-        metadocs = {}
-
-    return metadocs
-
-def save_document_metadata(metadocs):
-    docsdir = 'readdocs'
-    metapath = os.path.join(docsdir, 'documents.json')
-    with open(metapath, 'w') as fp:
-        json.dump(metadocs, fp)
-
-@app.route('/reader', methods=['GET'])
-def reader():
-    metadocs = load_document_metadata()
-    docsdir = 'readdocs'
+def load_document_metadata(docsdir):
+    ## Metadata: { pdfpath: { 'next-page': N, 'log-filename': ..., 'context': ... } }
+    metadocs = {}
     for root, dirs, files in os.walk(docsdir, followlinks=True):
         for filename in files:
             fullpath = os.path.join(root, filename)
-            if fullpath not in metadocs:
-                metadocs[fullpath] = {}
+            if os.path.splitext(filename)[1] == '.pdf':
+                if fullpath not in metadocs:
+                    metadocs[fullpath] = {}
+            elif os.path.splitext(filename)[1] == '.json':
+                with open(fullpath, 'r') as fp:
+                    metadocs[fullpath.replace(".json", ".pdf")] = json.load(fp)
 
-    print(metadocs)
-            
+    return metadocs
+
+@app.route('/reader', methods=['GET'])
+def reader():
+    metadocs = load_document_metadata('readdocs')
     return render_template('reader.html', log_filename=utils.get_log_filename(), metadocs=metadocs)
 
+def log_summary(prompt, response, log_filename):
+    new_messages = [{ "role": "user",
+                      "content": prompt + "Please write this in a stream appropriate for a text-to-speech reader." },
+                    { "role": "assistant",
+                      "content": response }]
+    if not os.path.exists(os.path.join("logs", log_filename)):
+        chatlog.save_log(os.path.join("logs", log_filename), new_messages)
+        return
+
+    ## Summarize the previous page
+    messages = chatlog.load_log(os.path.join("logs", log_filename))
+    # Collect all notes after the page
+    notes = []
+    while len(messages) > 0 and messages[-1]['role'] == 'user':
+        notes.insert(0, messages[-1])
+        messages = messages[:-1]
+
+    completion = openai.ChatCompletion.create(
+        model="gpt-4o",
+        messages=messages + [
+            { "role": "user",
+              "content": "Now, please provide a short summary of the previous page. Include this in a block as follows: ```[summary here]```." }])
+    matches = re.findall(r'```(.*?)```', completion.choices[0].message.content, re.DOTALL)
+    
+    if len(matches) == 0:
+        summary = completion.choices[0].message.content
+    else:
+        summary = matches[0]
+
+    past_messages = messages[:-2]
+    if past_messages:
+        past_messages.append({'role': "user", 'content': "Summarize the next page."})
+    else:
+        past_messages.append({'role': "user", 'content': "Summarize the first page."})
+        
+    past_messages.append({'role': "assistant", 'content': summary})
+    
+    chatlog.save_log(os.path.join("logs", log_filename), past_messages + notes + new_messages)
+
+def load_reader_metadata(document, default_log_filename):
+    metadatapath = document.replace('.pdf', '.json')
+    if os.path.exists(metadatapath):
+        with open(metadatapath, 'r') as fp:
+            return json.load(fp)
+    else:
+        return {'log-filename': default_log_filename}
+    
 @app.route('/completion_reader', methods=['GET', 'POST'])
 def completion_reader():
     if request.method == "POST":
         data = request.form
 
-        metadocs = load_document_metadata()
-        if data['document'] not in metadocs:
-            metadocs[data['document']] = {}
-            
-        page = metadocs[data['document']].get('next-page', 0)
-        metadocs[data['document']]['next-page'] = page + 1
-        save_document_metadata(metadocs)
+        metadata = load_reader_metadata(data['document'], data['log_filename'])
+        metadatapath = data['document'].replace('.pdf', '.json')
         
+        pagenum = metadata.get('next-page', 0)
+        metadata['next-page'] = pagenum + 1
+        with open(metadatapath, 'w') as fp:
+            json.dump(metadata, fp, indent=4)
+            
         reader = PdfReader(data['document'])
 
-        page = reader.pages[page]
+        page = reader.pages[pagenum]
 
         ## Process images
         imagetexts = []
@@ -339,23 +378,47 @@ def completion_reader():
                                 "detail": detail
                             }}]}])
 
-            print(detail)
-            print(completion.choices[0].message.content)
             imagetexts.append(completion.choices[0].message.content)
             
         text = page.extract_text(extraction_mode="layout", layout_mode_space_vertically=False, layout_mode_strip_rotated=False)
-        if page == 0:
+        if pagenum == 0:
             prompt = "Here is the first page of a PDF, in a text-based layout:\n===\n" + text + "\n===\n"
         else:
-            prompt = f"Here is page {page} of a PDF, in a text-based layout:\n===\n" + text + "\n===\n"
+            prompt = f"Here is page {pagenum} of a PDF, in a text-based layout:\n===\n" + text + "\n===\n"
         if len(imagetexts) > 0:
             prompt += "In addition, the page has the following images, as described below:\n===\n" + "\n===\n".join(imagetexts) + "\n===\n"
-        
-        strm = stream(prompt + "Please write this in a stream appropriate for a text-to-speech reader. Use only the provided text, and include everything unless there are number-heavy tables, which you can summarize.", [], data['log_filename'])
+
+        if os.path.exists(os.path.join("logs", metadata['log-filename'])):
+            messages = chatlog.load_log(os.path.join("logs", metadata['log-filename']))
+            history = messages[-2:]
+        else:
+            history = []
+            
+        strm = stream(prompt + "Please write this in a stream appropriate for a text-to-speech reader. Use only the provided text, and include everything unless there are number-heavy tables, which you can summarize. Incorporate abbreviated footnote material into the text stream and specify references as Name et al. YYYY (for academic papers) or Report Title YYYY (for institution reports).", history, None, on_stream_end=lambda response: log_summary(prompt, response, metadata['log-filename']))
 
         return Response(strm, mimetype='text/event-stream')
     else:
         return completion()
+
+@app.route('/completion_reader_summary', methods=['POST'])
+def completion_reader_summary():
+    data = request.form
+    metadata = load_reader_metadata(data['document'], data['log_filename'])
+    messages = chatlog.load_log(os.path.join("logs", metadata['log-filename']))
+
+    strm = stream("Now, please provide a summary of the entire document to this point and any notes from me.", messages, None)
+
+    return Response(strm, mimetype='text/event-stream')
+
+@app.route('/reader_note', methods=['POST'])
+def reader_note():
+    data = request.form
+    metadata = load_reader_metadata(data['document'], data['log_filename'])
+    messages = chatlog.load_log(os.path.join("logs", metadata['log-filename']))
+
+    chatlog.save_log(os.path.join("logs", metadata['log-filename']), messages + [{'role': "user", 'content': data['input_text']}])
+
+    return '', 200  # Respond with success status
 
 ## Hierarchical Memory
 
