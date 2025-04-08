@@ -1,0 +1,86 @@
+**user**:
+> I want to retrieve a URL in python. If I get back HTML, I want to process it one way in memory. If I get back a PDF, I'll process it another, saving it to a file and then checking it. And if it's neither, I want to drop it. Also, if the download is too big or takes too long, I want to drop it. How can I do this?
+**assistant**:
+> Certainly! This is a common task that can be handled efficiently with the `requests` library in Python, along with some additional packages like `beautifulsoup4` for HTML and `PyPDF2` for PDF processing. Here’s a comprehensive example of how you might structure your code to achieve these requirements:
+> 
+> ```python
+> import requests
+> from bs4 import BeautifulSoup  # For HTML processing
+> from PyPDF2 import PdfReader   # For PDF processing
+> import os
+> 
+> def process_html(content):
+>     """Process HTML content."""
+>     soup = BeautifulSoup(content, 'html.parser')
+>     # Example processing: extracting all text
+>     text = soup.get_text()
+>     print("HTML Content Processed:", text[:200])  # Print first 200 characters for brevity
+> 
+> def process_pdf(file_path):
+>     """Process PDF file."""
+>     with open(file_path, 'rb') as file:
+>         reader = PdfReader(file)
+>         text = ""
+>         # Example processing: extracting text from each page
+>         for page in reader.pages:
+>             text += page.extract_text()
+>     print("PDF Content Extracted:", text[:200])  # Print first 200 characters for brevity
+> 
+> def download_and_process(url):
+>     try:
+>         # Set a timeout and limit for streaming to control download size
+>         response = requests.get(url, timeout=10, stream=True)
+>         
+>         # Check for response size limit (e.g., 10 MB)
+>         max_size_mb = 10
+>         total_size = 0
+>         chunk_size = 1024
+> 
+>         complete_content = bytes()
+>         for chunk in response.iter_content(chunk_size=chunk_size):
+>             total_size += len(chunk)
+>             if total_size > max_size_mb * 1024 * 1024:
+>                 print("Downloaded content exceeds size limit and will be dropped.")
+>                 return
+>             complete_content += chunk
+> 
+>         content_type = response.headers.get('Content-Type', '')
+>         
+>         # Determine content type and process accordingly
+>         if 'text/html' in content_type:
+>             process_html(complete_content.decode('utf-8'))
+>         elif 'application/pdf' in content_type:
+>             pdf_file_path = "downloaded.pdf"
+>             # Save PDF to file
+>             with open(pdf_file_path, 'wb') as f:
+>                 f.write(complete_content)
+>             process_pdf(pdf_file_path)
+>             os.remove(pdf_file_path)  # Clean up the PDF file after processing
+>         else:
+>             print("Content type is not supported and will be dropped.")
+>             
+>     except requests.exceptions.RequestException as e:
+>         print(f"An error occurred: {e}")
+> 
+> # Usage
+> url = "http://example.com/somefile"  # Replace with your URL
+> download_and_process(url)
+> ```
+> 
+> ### Key Points:
+> 1. **Timeout and Streaming**: Set a `timeout` for the request to ensure it doesn't hang, and use `stream=True` to download the content in chunks, enabling control over large files.
+>    
+> 2. **Content-Type Checking**: The `Content-Type` header is used to determine if the content is HTML, PDF, or unsupported.
+> 
+> 3. **Size Limiting**: This script checks the downloaded size to ensure it doesn't exceed a specified limit, dropping it if it does.
+> 
+> 4. **Library Usage**: Utilize `BeautifulSoup` for parsing HTML and `PyPDF2` for reading PDFs.
+> 
+> 5. **Error Handling**: Wrap the request with a try-except block to handle network issues gracefully.
+> 
+> Make sure to install the necessary libraries, if not already available, using:
+> ```bash
+> pip install requests beautifulsoup4 PyPDF2
+> ```
+> 
+> Feel free to modify and expand this template to better suit your specific requirements!

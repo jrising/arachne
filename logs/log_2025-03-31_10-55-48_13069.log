@@ -1,0 +1,37 @@
+**user**:
+> I have one dataframe with annual data and another with country-level coefficients, and now I want to combine them so I get country-by-year results in R. Traditionally, I do this by iterating through one or the other, and then rbind-ing the results up. Here's how it looks with the annual data in "projected" and the country-level patterns in pattern.
+> ```
+>     results <- data.frame()
+>     for (ii in 1:nrow(projected)) {
+>         results <- rbind(results, data.frame(ISO=pattern$ISO, Year=projected$year[ii],
+>                                              rtl_landtemp=pattern$slope * (projected$gmst - gmst.1995.2015)))
+>     }
+> ```
+> 
+> This probably isn't as efficient as doing things in dplyr, but I don't know how it should be done more efficiently.
+**assistant**:
+> You're right that using `dplyr` can significantly enhance the efficiency and readability of this operation. You can achieve this by using a combination of `crossing`, `mutate`, and other dplyr functions. Here's how you can do it:
+> 
+> ```r
+> library(dplyr)
+> library(tidyr)
+> 
+> gmst_baseline <- gmst.1995.2015  # Assuming gmst.1995.2015 is defined elsewhere
+> 
+> # Create all combinations of pattern (country-level) and projected (annual) data
+> results <- crossing(pattern, projected) %>%
+>   mutate(
+>     rtl_landtemp = slope * (gmst - gmst_baseline)
+>   ) %>%
+>   select(ISO, Year = year, rtl_landtemp)
+> 
+> print(results)
+> ```
+> 
+> Here's a breakdown of the code:
+> 
+> - `crossing`: This function creates a Cartesian product of the `pattern` and `projected` data frames, generating all combinations of rows.
+> - `mutate`: Calculates the `rtl_landtemp` for each combination using the formula you provided.
+> - `select`: Rearranges and selects the relevant columns (`ISO`, `Year`, and `rtl_landtemp`) for the final results dataset.
+> 
+> This approach is more efficient, as it leverages vectorized operations inherent in the `dplyr` package, and avoids the overhead of repeatedly growing a data frame with `rbind` inside a loop.

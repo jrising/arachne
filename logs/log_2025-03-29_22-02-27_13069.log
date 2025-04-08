@@ -1,0 +1,39 @@
+**user**:
+> When I try to install raster or terra on my system, I get the errors:
+> checking GDAL: checking whether PROJ is available for running:... ERROR 1: PROJ: proj_create_from_database: /home/jrising/miniconda3/share/proj/proj.db contains DATABASE.LAYOUT.VERSION.MINOR = 2 whereas a number >= 3 is expected. It comes from another PROJ installation.
+> ERROR 1: PROJ: proj_create_from_database: /home/jrising/miniconda3/share/proj/proj.db contains DATABASE.LAYOUT.VERSION.MINOR = 2 whereas a number >= 3 is expected. It comes from another PROJ installation.
+> ERROR 1: PROJ: proj_create: unrecognized format / unknown name
+> ERROR 1: PROJ: proj_create: unrecognized format / unknown name
+> no
+> configure: error: OGRCoordinateTransformation() does not return a coord.trans: PROJ not available? 
+> 
+> I know I have proj-dev installed, but following some info from different sites, I noticed that my PROJ_DATA variable is set to a miniconda installation:
+> > Sys.getenv("PROJ_DATA")
+> [1] "/home/jrising/miniconda3/share/proj"
+> 
+> But I'm not sure what it should be set to or how. Can you advise?
+**assistant**:
+> It looks like your installation is trying to use an old version of the PROJ database, which is causing the issue. It seems like a version mismatch between the PROJ library and the PROJ database. Here’s how you can resolve this issue:
+> 
+> 1. **Identify Locations**: First, find out where your PROJ installations are. You should have at least one that is installed outside of Conda which is recent enough for what's needed. Check locations like `/usr/local/share/proj` or similar by using a command like `find /usr -name proj.db`.
+> 
+> 2. **Update Conda Environment**: Ensure that your Conda environment is using the latest versions of the necessary packages. Run:
+>    ```bash
+>    conda update --all
+>    ```
+> 
+> 3. **Update PROJ Database**: You might also need to update the PROJ database used by Conda:
+>    ```bash
+>    conda install -c conda-forge proj
+>    ```
+> 
+> 4. **Correct PROJ_DATA Variable**: Once you have a valid PROJ version and database, set the `PROJ_DATA` environment variable to point to the correct database directory. For instance, if you find a suitable PROJ database in `/usr/share/proj`, you could set the variable in R like so:
+>    ```r
+>    Sys.setenv(PROJ_DATA = "/usr/share/proj")
+>    ```
+> 
+> 5. **Test the Installation**: Try to install `raster` or `terra` again. Make sure that R is using the right environment variables and it can find the updated PROJ database.
+> 
+> 6. **Check Multiple PROJ Installations**: Ensure that you don’t have conflicting installations on your system. If necessary, remove older installations that you don't need.
+> 
+> By ensuring that the PROJ library and database are aligned and updating any environment variables to point to the right locations, you should be able to resolve these issues. Let me know if there's anything else you need help with!

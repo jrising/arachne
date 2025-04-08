@@ -1,0 +1,111 @@
+**assistant**:
+> None of the provided conversation synopses directly address how to create a function that is hidden 
+**user**:
+> Where does the help index of a package in R come from, in its code?
+**assistant**:
+> In R, the help index of a package is generated from specially formatted documentation files using a markup language called **Roxygen** comments or, more traditionally, **Rd (R Documentation) files**. These files are located in the package's `man` directory, and their content is processed to create the help pages you see when you use the `?` or `help()` functions.
+> 
+> 1. **Roxygen Comments**: These are comments written above functions in the source code files, using special tags like `#'`. Developers can generate Rd files automatically from these comments using the `roxygen2` package. For instance:
+>    ```r
+>    #' Title of the Function
+>    #' 
+>    #' Description of the function's purpose.
+>    #' 
+>    #' @param arg1 Description of the first argument.
+>    #' @return Description of the return value.
+>    #' @export
+>    my_function <- function(arg1) {
+>      # Function code goes here
+>    }
+>    ```
+> 
+> 2. **Rd Files**: These are files with a `.Rd` extension that use a specific syntax to describe the functions, data, and any other package-level documentable items. An Rd file might look like this:
+>    ```r
+>    \name{my_function}
+>    \alias{my_function}
+>    \title{Title of the Function}
+>    \description{Description of the function's purpose.}
+>    \usage{my_function(arg1)}
+>    \arguments{
+>      \item{arg1}{Description of the first argument.}
+>    }
+>    \value{Description of the return value.}
+>    \author{Author Name}
+>    \keyword{utilities}
+>    ```
+> 
+> These documentation files are bundled with the package and are used by the `R CMD` processing tools to build the HTML or text help index that you access.
+> 
+> If you're working on or maintaining an R package, the `roxygen2` package makes it convenient to write and update documentation alongside your code, reducing the overhead of maintaining separate Rd files.
+**user**:
+> I see a package which has files in `man` for several internal functions, but not all of these are listed on the list of help pages in the package's index. How do they do that?
+**assistant**:
+> In R, it's possible for a package to include documentation for internal functions while selectively preventing them from appearing in the package's help index (or package documentation). This is usually done using the `@keywords` and `@export` tags in the Rd files or Roxygen comments.
+> 
+> Here’s how it generally works:
+> 
+> 1. **Using `@export` Tag**: Functions marked with `@export` in Roxygen comments (or their equivalents in Rd) will be accessible in the package's help index. If a function is not exported (i.e., it does not have the `@export` tag), it won’t appear in the help index, even if it has a corresponding Rd file in the `man` directory.
+> 
+>    ```r
+>    #' @export
+>    my_exported_function <- function() {
+>        # Function code here
+>    }
+> 
+>    #' @noRd
+>    my_internal_function <- function() {
+>        # Function code here
+>    }
+>    ```
+> 
+> 2. **Using `@noRd` Tag**: For functions that you want to document but keep private, you can use the `@noRd` tag. This tells R not to generate documentation for this function in the help index, even though an Rd file exists for it.
+> 
+> 3. **Manual Rd Files without `\alias` Entries**: If you create Rd files manually, you can omit the `\alias` entries for functions not meant to be indexed. This way, R will recognize them but will not show them in the help pages.
+> 
+> 4. **Documentation Structure**: The overall structure of the documentation in a package can also be tailored by selectively exporting only what you want users to see. This keeps the API clean, ensuring that internal functions are available for the package’s internal processes without cluttering the documentation that end-users consult.
+> 
+> In summary, by controlling the use of `@export`, `@noRd`, and `\alias` in Rd files, package authors can create internal documentation for their functions without making them visible in the user-facing help index. This approach allows for cleaner package interfaces and better encapsulation of internal functionality.
+**user**:
+> And how could one make a function that is not exposed to users-- so, for example, it wouldn't show up in a help search?
+**assistant**:
+> To create a function in an R package that is not exposed to users and does not show up in the help search, you can follow these steps:
+> 
+> 1. **Document the Function with `@noRd`**: Use Roxygen comments to document the function, but include the `@noRd` tag in its documentation. This prevents R from generating a help page for the function, making it invisible in the help search.
+> 
+>    Here’s an example:
+> 
+>    ```r
+>    #' A function not to be exposed to users
+>    #' 
+>    #' This function is intended for internal use only.
+>    #' 
+>    #' @noRd
+>    my_internal_function <- function(x) {
+>        return(x^2)
+>    }
+>    ```
+> 
+> 2. **Do Not Use `@export`**: Ensure that the function does **not** have the `@export` tag. This prevents the function from being included in the package's namespace, further ensuring that it remains internal.
+> 
+> 3. **Ensure Proper File Naming**: Place the function in an appropriate R script within your R directory (for example, in `R/`), but do not include naming conventions or comments that would suggest it’s an exported function.
+> 
+> 4. **Manual Rd File Creation**: If you are creating Rd files manually, simply omit the `\alias` entry for the function in the corresponding Rd file. This will ensure that it is not indexed in the package's documentation.
+> 
+> ### Example Implementation
+> 
+> Here's how a hidden function might look in the package code:
+> 
+> ```r
+> # In R/my_functions.R
+> 
+> #' An internal utility function.
+> #' 
+> #' This function calculates the square of a number.
+> #' 
+> #' @noRd
+> my_internal_function <- function(x) {
+>     return(x^2)
+> }
+> ```
+> 
+> By following these steps, `my_internal_function` will not show up in the help system when users search for functions in your package, ensuring it stays internal and is only accessible to functions within the same package.
