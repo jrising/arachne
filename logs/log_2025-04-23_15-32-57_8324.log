@@ -1,0 +1,176 @@
+**user**:
+> I have a number of scenarios I want to display in a ggplot graph. They all describe GDP per capita growth rates in the UK around 2030, but there are different dimensions to each.
+> 1. A probabilistic projection (Monte Carlos). Here's the first few rows:
+> ```
+> > head(rffdf)
+>      num period ISO     pop.grow  gdppc.grow
+> 234    1   2030 GBR 0.0059033146  0.02214131
+> 2004   2   2030 GBR 0.0052523267 -0.01154902
+> 3774   3   2030 GBR 0.0049501094  0.01819130
+> 5544   4   2030 GBR 0.0037852234  0.01931751
+> 7314   5   2030 GBR 0.0026913735  0.01091932
+> 9084   6   2030 GBR 0.0006856348  0.02666789
+> ```
+> I want to show gdppc.grow * 100 (so a percent) as some kind of distribution.
+> 
+> 2. SSP projections: there are 2 IAMs and they each produce 5 scenarios (the SSPs):
+> ```
+> > sspdf
+>                model ssp year Region      rate   rate.lb   rate.ub
+> 567        IIASA GDP   1 2030    GBR 2.7167954 2.7167954 2.7167954
+> 5671       IIASA GDP   2 2030    GBR 2.5085523 2.5085523 2.5085523
+> 5672       IIASA GDP   3 2030    GBR 1.4312153 1.4312153 1.4312153
+> 5673       IIASA GDP   4 2030    GBR 2.3493090 2.3493090 2.3493090
+> 5674       IIASA GDP   5 2030    GBR 2.9725411 2.9725411 2.9725411
+> 611  OECD Env-Growth   1 2030    GBR 1.6832110 1.6832110 1.6832110
+> 6111 OECD Env-Growth   2 2030    GBR 1.2307452 1.2307452 1.2307452
+> 6112 OECD Env-Growth   3 2030    GBR 0.9357362 0.9357362 0.9357362
+> 6113 OECD Env-Growth   4 2030    GBR 1.7335329 1.7335329 1.7335329
+> 6114 OECD Env-Growth   5 2030    GBR 2.1846700 2.1846700 2.1846700
+> ```
+> Here I want to show each of these 10 rows, grouped by scenario. I only need to show the `rate` variable.
+> 
+> 3. NGFS scenarios: Here there are 3 models and they produce 6 scenarios each:
+> ```
+> > ngfsdf
+> # A tibble: 18 × 5
+> # Groups:   Model [3]
+>    Model                                     Scenario                                   gdppc2025 gdppc2035 gdppcgrow
+>    <chr>                                     <chr>                                          <dbl>     <dbl>     <dbl>
+>  1 Downscaling [GCAM 5.3+ NGFS]              Below 2°C                                       41.5      47.4    0.0133
+>  2 Downscaling [GCAM 5.3+ NGFS]              Current Policies                                41.5      47.4    0.0133
+>  3 Downscaling [GCAM 5.3+ NGFS]              Delayed transition                              41.5      47.4    0.0133
+>  4 Downscaling [GCAM 5.3+ NGFS]              Divergent Net Zero                              41.5      47.4    0.0133
+>  5 Downscaling [GCAM 5.3+ NGFS]              Nationally Determined Contributions (NDCs)      41.5      47.4    0.0133
+>  6 Downscaling [GCAM 5.3+ NGFS]              Net Zero 2050                                   41.5      47.4    0.0133
+>  7 Downscaling [MESSAGEix-GLOBIOM 1.1-M-R12] Below 2°C                                       42.4      47.9    0.0121
+>  8 Downscaling [MESSAGEix-GLOBIOM 1.1-M-R12] Current Policies                                42.5      48.1    0.0124
+>  9 Downscaling [MESSAGEix-GLOBIOM 1.1-M-R12] Delayed transition                              42.5      47.2    0.0104
+> 10 Downscaling [MESSAGEix-GLOBIOM 1.1-M-R12] Divergent Net Zero                              42.0      47.1    0.0115
+> 11 Downscaling [MESSAGEix-GLOBIOM 1.1-M-R12] Nationally Determined Contributions (NDCs)      42.5      48.0    0.0121
+> 12 Downscaling [MESSAGEix-GLOBIOM 1.1-M-R12] Net Zero 2050                                   42.2      47.4    0.0117
+> 13 Downscaling [REMIND-MAgPIE 3.0-4.4]       Below 2°C                                       41.2      46.4    0.0120
+> 14 Downscaling [REMIND-MAgPIE 3.0-4.4]       Current Policies                                41.2      46.5    0.0121
+> 15 Downscaling [REMIND-MAgPIE 3.0-4.4]       Delayed transition                              41.2      46.0    0.0110
+> 16 Downscaling [REMIND-MAgPIE 3.0-4.4]       Divergent Net Zero                              41.0      46.1    0.0118
+> 17 Downscaling [REMIND-MAgPIE 3.0-4.4]       Nationally Determined Contributions (NDCs)      41.1      46.4    0.0120
+> 18 Downscaling [REMIND-MAgPIE 3.0-4.4]       Net Zero 2050                                   41.1      46.1    0.0116
+> ```
+> And I want to show gdppcgrow * 100, grouped by scenario.
+> 
+> Can you propose a ggplot (or cowplot with ggplot) command to show all 3 of these sets of scenarios, grouped first by source and then by scenario?
+**assistant**:
+> Absolutely, you can put together a combined plot that visualizes all three sets of GDP growth scenarios using `ggplot2` and `cowplot`. Each data frame will be plotted separately and then combined into one figure. Here's a possible approach for assembling this with `R`:
+> 
+> ```r
+> library(ggplot2)
+> library(dplyr)
+> library(cowplot)
+> 
+> # Prepare the Monte Carlo plot
+> monte_carlo_plot <- ggplot(rffdf, aes(x = num, y = gdppc.grow * 100)) +
+>   geom_violin() +
+>   labs(title = "Monte Carlo Projections", y = "GDP per Capita Growth (%)", x = "Scenario Number") +
+>   theme_minimal()
+> 
+> # Prepare the SSP plot
+> ssp_plot <- ggplot(sspdf, aes(x = factor(ssp), y = rate)) +
+>   geom_point(aes(color = model)) +
+>   scale_color_manual(values = c("IIASA GDP" = "blue", "OECD Env-Growth" = "red")) +
+>   labs(title = "SSP Projections", y = "GDP per Capita Growth (%)", x = "SSP Scenario") +
+>   theme_minimal()
+> 
+> # Prepare the NGFS plot
+> ngfs_plot <- ggplot(ngfsdf, aes(x = Scenario, y = gdppcgrow * 100, color = Model)) +
+>   geom_point() +
+>   labs(title = "NGFS Projections", y = "GDP per Capita Growth (%)", x = "Scenario") + 
+>   theme_minimal() +
+>   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+> 
+> # Combine plots with cowplot
+> combined_plot <- plot_grid(
+>   monte_carlo_plot, ssp_plot, ngfs_plot,
+>   labels = c("A", "B", "C"),
+>   ncol = 1,
+>   align = 'v'
+> )
+> 
+> # Print the combined plot
+> print(combined_plot)
+> ```
+> 
+> ### Explanation:
+> 
+> - **Monte Carlo Plot:** Displayed as a violin plot to show the distribution of GDP per capita growth rates, making use of `geom_violin()`. The scenarios are plotted on the x-axis, and the growth rates are shown as percentages on the y-axis.
+> 
+> - **SSP Plot:** This uses `geom_point()` to display each SSP scenario, colored by the IAM model. It uses `scale_color_manual()` for custom color coding.
+> 
+> - **NGFS Plot:** Another point plot, with growth rates converted to percentages. It categorizes the scenarios on the x-axis and utilizes `theme()` call to rotate x-axis labels for better readability.
+> 
+> - **Plot Grid:** `cowplot::plot_grid()` is used to stack these three plots vertically (`ncol = 1`), labeling them A, B, and C.
+> 
+> You can further customize these plots (such as adjusting themes, modifying labels, or adding more annotations) as per your requirements.
+**user**:
+> I feel like it would look better if I do SSP and NGFS as just two panels in-- say-- a facet_grid, with the scenarios labeled on the axis.
+**assistant**:
+> Great idea! Using `facet_grid` will allow you to combine the SSP and NGFS scenarios into a single panel, improving the overall aesthetics. We’ll keep the Monte Carlo plot separate and use facets for the other two. Here's how you can modify the code:
+> 
+> ```r
+> library(ggplot2)
+> library(dplyr)
+> library(cowplot)
+> library(tidyr)
+> 
+> # Prepare the Monte Carlo plot
+> monte_carlo_plot <- ggplot(rffdf, aes(x = num, y = gdppc.grow * 100)) +
+>   geom_violin() +
+>   labs(title = "Monte Carlo Projections", y = "GDP per Capita Growth (%)", x = "Scenario Number") +
+>   theme_minimal()
+> 
+> # Prepare the SSP and NGFS data for faceting
+> ssp_plot <- sspdf %>%
+>   select(ssp, rate) %>%
+>   mutate(Source = "SSP") %>%
+>   rename(Scenario = ssp, GrowthRate = rate)
+> 
+> ngfs_plot <- ngfsdf %>%
+>   select(Scenario, gdppcgrow) %>%
+>   rename(GrowthRate = gdppcgrow) %>%
+>   mutate(Source = "NGFS", GrowthRate = GrowthRate * 100)
+> 
+> # Combine SSP and NGFS into one data frame
+> combined_df <- bind_rows(ssp_plot, ngfs_plot)
+> 
+> # Create faceted plot for SSP and NGFS
+> faceted_plot <- ggplot(combined_df, aes(x = Scenario, y = GrowthRate, color = Source)) +
+>   geom_point() +
+>   facet_grid(~ Source) +
+>   labs(title = "SSP and NGFS Projections", y = "GDP per Capita Growth (%)", x = "Scenario") +
+>   theme_minimal() +
+>   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+> 
+> # Combine plots with cowplot
+> combined_plot <- plot_grid(
+>   monte_carlo_plot, faceted_plot,
+>   labels = c("A", "B"),
+>   ncol = 1,
+>   align = 'v'
+> )
+> 
+> # Print the combined plot
+> print(combined_plot)
+> ```
+> 
+> ### Explanation:
+> 
+> 1. **Faceting Data Preparation:**
+>    - We extract and modify the relevant columns from `sspdf` and `ngfsdf`, adding a new column `Source` to differentiate between SSP and NGFS scenarios.
+>    - The growth rates from NGFS are multiplied by 100 directly during this transformation.
+> 
+> 2. **Facet Grid for Combining Plots:**
+>    - The combined data from SSP and NGFS is plotted using `facet_grid(~ Source)`, which organizes the plots side by side, one for SSP and one for NGFS.
+> 
+> 3. **Styling Adjustments:**
+>    - `theme_minimal()` and angle adjustments for the x-axis labels are applied to improve readability and overall look.
+> 
+> This approach will help create a more cohesive visual comparison between the SSP and NGFS scenarios while keeping the Monte Carlo projections prominently displayed at the top. Adjust colors and themes as needed to match your preferred style!

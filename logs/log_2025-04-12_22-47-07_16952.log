@@ -1,0 +1,56 @@
+**user**:
+> How can I generate a unique ID for rows in a google spreadsheet as I fill them in? These will be for a lit review, so I was originally thinking something like "Authors (YEAR) - HASH-OF-TITLE", but I got worried that this would get messed up if anyone ever changed an entry.
+**assistant**:
+> Generating a unique ID for each row in a Google Sheet while ensuring that it remains unchanged even if the row is modified can be a bit tricky, but it's certainly doable! Here’s a strategy you might consider:
+> 
+> ### Strategy: Combine Static Elements with a Unique Identifier
+> 
+> 1. **Static Unique Identifier**: Use a sequential numeric ID or a timestamp. A simple way to implement this is to use Google Apps Script to auto-generate a unique number or timestamp when a new row is added.
+> 
+> 2. **Descriptive Elements**: Include non-changing elements like the authors' names and year in the ID for easier reference.
+> 
+> ### Implementation Steps:
+> 
+> 1. **Add a Helper Column for the Unique Identifier**:
+>     - Leave a dedicated column for a unique ID. Let's call it `Unique_ID`.
+> 
+> 2. **Use Apps Script for Unique ID Generation**:
+>     - Open the script editor in your Sheet by going to `Extensions` > `Apps Script`.
+>     - Use the following script to automatically add a unique ID when a new row is added:
+>     ```javascript
+>     function onEdit(e) {
+>       var sheet = e.source.getActiveSheet();
+>       var colToWatch = 1; 
+>       var targetCell = e.range;
+>       var editedColumn = targetCell.getColumn();
+>       var row = targetCell.getRow();
+> 
+>       // Check if the edit is in the first column, and that the unique ID column is empty.
+>       if (editedColumn == colToWatch && row > 1 && !sheet.getRange(row, 2).getValue()) {
+>         // Generate a sequential or timestamp-based ID.
+>         // For sequential IDs:
+>         var lastRow = sheet.getLastRow();
+>         var newId = lastRow; // Assuming IDs start at 1 and are sequential
+>         sheet.getRange(row, 2).setValue(newId);
+> 
+>         // For timestamp-based IDs (unique and readable):
+>         // var timestamp = new Date().getTime();
+>         // sheet.getRange(row, 2).setValue("ID-" + timestamp);
+>       }
+>     }
+>     ```
+>     - Customize the script as needed, especially the column numbers (e.g., `colToWatch`, `2` for Unique_ID, etc.) based on your sheet setup.
+> 
+> 3. **Format the Final ID**:
+>     - Once you have the unique number or timestamp, you can concatenate it with other details like the authors and year using a formula in another column. For example:
+>     ```plaintext
+>     =CONCATENATE(A2, " (", B2, ") - ", C2)
+>     ```
+>     - Replace `A2`, `B2`, `C2`, etc., with the actual columns for authors, year, and the generated ID.
+> 
+> ### Considerations:
+> - **Avoid Dependencies on Editable Fields**: By generating a completely independent ID and optionally appending descriptive elements, you can ensure that the ID remains unchanged if other fields are edited.
+> - **Encourage Non-Editable IDs**: If possible, lock the ID column to prevent manual edits, safeguarding the integrity of the identifier.
+> - **Backups**: Regularly back up your data to avoid accidental changes or losses.
+> 
+> Using this approach, you will not only maintain consistent and unique identifiers but also harness the power of Google Sheets and Apps Script to streamline your literature review process.
