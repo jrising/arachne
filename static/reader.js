@@ -143,6 +143,13 @@ async function respond(text) {
 	    method: 'POST',
 	    body: formData
 	});
+    } else if (text.startswith("page ")) {
+	match = text.match(/\d+/);
+	formData.append('page', parseInt(match[0], 10));
+	var response = await fetch('/completion_reader', {
+	    method: 'POST',
+	    body: formData
+	});
     } else {
 	var response = await fetch('/completion_reader', {
 	    method: 'POST',
@@ -215,7 +222,7 @@ if ("webkitSpeechRecognition" in window) {
 		return;
 	    }
 
-	    if (final_transcript.startsWith("note ")) {
+	    if (/notes?\s+/.test(final_transcript) || final_transcript == "document") {
 		var searchForm = document.getElementById('input-form');
 		var formData = new FormData(searchForm);
 		formData.append('input_text', final_transcript);
@@ -229,25 +236,38 @@ if ("webkitSpeechRecognition" in window) {
                 </div>
             </div>`;
 
-		fetch('/reader_note', {
-		    method: 'POST',
-		    body: formData
-		});
-		
+		if (final_transcript == "document") {
+		    $.getJSON('/reader_document', {log_filename: $('#log_filename').val(),
+						   document: $('#document').val()}, function(json) {
+			speak_ui(`The document has {json.total} pages and the next page is {json.nextpage}.`, $('#voice'), $('#pitch').val(), $('#rate').val());
+		    });
+		} else {
+		    fetch('/reader_note', {
+			method: 'POST',
+			body: formData
+		    });
+		}
+		    
 		final_transcript = "";
 		$("#final").html("");
 		$("#interim").html("");
 		speechRecognition.start();
 		$('#status').text("Listening.");
 		return;
+	    } else if (/^(next\s)?page(\splease)?$/.test(final_transcript) ||
+		       /^summarize$/.test(final_transcript) ||
+		       /^page\s+\d+(\splease)?$/.test(final_transcript)) {
+		respond(final_transcript).then(textout => {
+		    final_transcript = "";
+		    $("#final").html("");
+		    $("#interim").html("");
+		    $('#status').text("Responding.");
+		}).catch(error => console.error(error));
+	    } else {
+		speak_ui("I didn't catch that.", $('#voice'), $('#pitch').val(), $('#rate').val());
+		return;
 	    }
 
-	    respond(final_transcript).then(textout => {
-		final_transcript = "";
-		$("#final").html("");
-		$("#interim").html("");
-		$('#status').text("Responding.");
-	    }).catch(error => console.error(error));
 	};
 
 	speechRecognition.onError = () => {

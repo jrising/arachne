@@ -55,7 +55,7 @@ def make_log(log_filename, ixwriter):
 
     tokenlen = num_tokens_from_string(content)
     if tokenlen > 4097 - 500 - 350: # error of 350 observed
-        messages = chatlog.load_log('logs/' + log_filename)
+        messages = chatlog.load_log('', 'logs/' + log_filename)
         maxperstate = int((4097 - 500 - 350) / len(messages)) - 10 # **word**: ...
         content = ""
         for message in messages:

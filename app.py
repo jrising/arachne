@@ -269,7 +269,7 @@ def audio():
 @app.route('/completion_audio', methods=['GET', 'POST'])
 def completion_audio():
     if request.method == "POST":
-        return Response(completion_api(custom_system=utils.get_default_system_message().replace("Your answer will be rendered as Markdown.", "You are interacting through a speech-to-text and text-to-speech system. There may be speech misinterpretations in the input text.")), mimetype='text/event-stream')
+        return Response(completion_api(custom_system=utils.get_default_system_message().replace("Your answer will be rendered as Markdown.", "You are interacting through a speech-to-text and text-to-speech system, which does not handle Markdown. There may be speech misinterpretations in the input text.")), mimetype='text/event-stream')
     else:
         return Response(None, mimetype='text/event-stream')
 
@@ -347,15 +347,18 @@ def completion_reader():
 
         metadata = load_reader_metadata(data['document'], data['log_filename'])
         metadatapath = data['document'].replace('.pdf', '.json')
-        
-        pagenum = metadata.get('next-page', 0)
-        metadata['next-page'] = pagenum + 1
+
+        if 'page' in data:
+            nextpage = int(data['page'])
+        else:
+            nextpage = metadata.get('next-page', 0) + 1
+        metadata['next-page'] = nextpage
         with open(metadatapath, 'w') as fp:
             json.dump(metadata, fp, indent=4)
             
         reader = PdfReader(data['document'])
 
-        page = reader.pages[pagenum]
+        page = reader.pages[nextpage - 1]
 
         ## Process images
         imagetexts = []
@@ -381,10 +384,10 @@ def completion_reader():
             imagetexts.append(completion.choices[0].message.content)
             
         text = page.extract_text(extraction_mode="layout", layout_mode_space_vertically=False, layout_mode_strip_rotated=False)
-        if pagenum == 0:
+        if nextpage == 1:
             prompt = "Here is the first page of a PDF, in a text-based layout:\n===\n" + text + "\n===\n"
         else:
-            prompt = f"Here is page {pagenum} of a PDF, in a text-based layout:\n===\n" + text + "\n===\n"
+            prompt = f"Here is page {nextpage} of a PDF, in a text-based layout:\n===\n" + text + "\n===\n"
         if len(imagetexts) > 0:
             prompt += "In addition, the page has the following images, as described below:\n===\n" + "\n===\n".join(imagetexts) + "\n===\n"
 
@@ -394,7 +397,7 @@ def completion_reader():
         else:
             history = []
             
-        strm = stream(prompt + "Please write this in a stream appropriate for a text-to-speech reader. Use only the provided text, and include everything unless there are number-heavy tables, which you can summarize. Incorporate abbreviated footnote material into the text stream and specify references as Name et al. YYYY (for academic papers) or Report Title YYYY (for institution reports).", history, None, on_stream_end=lambda response: log_summary(prompt, response, metadata['log-filename']))
+        strm = stream(prompt + "Please write this in a stream appropriate for a text-to-speech reader which does not handle symbols well (it names each one). Use only the provided text, and include everything except background images unless there are number-heavy tables, which you can summarize. Incorporate abbreviated footnote material into the text stream and specify references as Name et al. YYYY (for academic papers) or Report Title YYYY (for institution reports).", history, None, on_stream_end=lambda response: log_summary(prompt, response, metadata['log-filename']))
 
         return Response(strm, mimetype='text/event-stream')
     else:
@@ -409,6 +412,15 @@ def completion_reader_summary():
     strm = stream("Now, please provide a summary of the entire document to this point and any notes from me.", messages, None)
 
     return Response(strm, mimetype='text/event-stream')
+
+@app.route('/reader_document', methods=['GET'])
+def reader_document():
+    metadata = load_reader_metadata(request.args.get('document'), request.args.get('log_filename'))
+
+    pagenum = metadata.get('next-page', 0)
+    reader = PdfReader(request.args.get('document'))
+    
+    return {"total": len(reader.pages), "nextpage": pagenum+1}
 
 @app.route('/reader_note', methods=['POST'])
 def reader_note():
