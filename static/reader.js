@@ -143,7 +143,7 @@ async function respond(text) {
 	    method: 'POST',
 	    body: formData
 	});
-    } else if (text.startswith("page ")) {
+    } else if (text.startsWith("page ")) {
 	match = text.match(/\d+/);
 	formData.append('page', parseInt(match[0], 10));
 	var response = await fetch('/completion_reader', {
