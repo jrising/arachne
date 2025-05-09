@@ -36,7 +36,7 @@ def index():
     else:
         load_filename = request.args.get('load')
         if load_filename:
-            pastmessages = chatlog.load_log(glob.glob('logs/log_' + load_filename.replace(' ', '_').replace(':', '-') + "*.log")[0])
+            pastmessages = chatlog.load_log(utils.get_default_system_message(), glob.glob('logs/log_' + load_filename.replace(' ', '_').replace(':', '-') + "*.log")[0])
             print(pastmessages)
             return render_template('index.html', log_filename=utils.get_log_filename(), menu_html=get_menu(),
                                    pastmessages=pastmessages)
@@ -303,7 +303,7 @@ def log_summary(prompt, response, log_filename):
         return
 
     ## Summarize the previous page
-    messages = chatlog.load_log(os.path.join("logs", log_filename))
+    messages = chatlog.load_log(utils.get_default_system_message(), os.path.join("logs", log_filename))
     # Collect all notes after the page
     notes = []
     while len(messages) > 0 and messages[-1]['role'] == 'user':
@@ -392,7 +392,7 @@ def completion_reader():
             prompt += "In addition, the page has the following images, as described below:\n===\n" + "\n===\n".join(imagetexts) + "\n===\n"
 
         if os.path.exists(os.path.join("logs", metadata['log-filename'])):
-            messages = chatlog.load_log(os.path.join("logs", metadata['log-filename']))
+            messages = chatlog.load_log(utils.get_default_system_message(), os.path.join("logs", metadata['log-filename']))
             history = messages[-2:]
         else:
             history = []
@@ -407,7 +407,7 @@ def completion_reader():
 def completion_reader_summary():
     data = request.form
     metadata = load_reader_metadata(data['document'], data['log_filename'])
-    messages = chatlog.load_log(os.path.join("logs", metadata['log-filename']))
+    messages = chatlog.load_log(utils.get_default_system_message(), os.path.join("logs", metadata['log-filename']))
 
     strm = stream("Now, please provide a summary of the entire document to this point and any notes from me.", messages, None)
 
@@ -426,7 +426,7 @@ def reader_document():
 def reader_note():
     data = request.form
     metadata = load_reader_metadata(data['document'], data['log_filename'])
-    messages = chatlog.load_log(os.path.join("logs", metadata['log-filename']))
+    messages = chatlog.load_log(utils.get_default_system_message(), os.path.join("logs", metadata['log-filename']))
 
     chatlog.save_log(os.path.join("logs", metadata['log-filename']), messages + [{'role': "user", 'content': data['input_text']}])
 
@@ -507,7 +507,7 @@ def news():
     with open(filepath.replace('.pkl', '-texts.pkl'), 'rb') as fp:
         texts = pickle.load(fp)
         
-    messages = chatlog.load_log(filepath.replace('.pkl', '.log'))
+    messages = chatlog.load_log(utils.get_default_system_message(), filepath.replace('.pkl', '.log'))
     
     welcome = now.strftime('# Daily Bulletin: %Y-%m-%d') + prev.strftime(' (<a href="/news?date=%Y-%m-%d">Previous</a>)\n\n') + process_bulletin(messages[0]['content'], texts, lambda ids: bulletin.incremenet_uses(engine, items, ids, 1))
 
