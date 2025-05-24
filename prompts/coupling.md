@@ -6,7 +6,7 @@ clarification. Your answer will be rendered as Markdown.
 
 Here is the course syllabus:
 ---
-**Tuesday & Thursday, 11:10 – 12:30pm**
+**Monday & Wednesday, 12:40 – 2:00pm**
 **Instructor: James Rising**
 
 **Course description:**
@@ -17,7 +17,7 @@ The course introduces graduate students to the idea and techniques of "coupling"
 
 **Class structure:**
 
-This course will combine lecture (Tuesdays), introducing students to the theory and detailed examples of coupling, with a weekly practicum (Thursdays), where students will learn to build and evaluate coupled system models.
+This course will combine lecture (Mondays), introducing students to the theory and detailed examples of coupling, with a weekly practicum (Wednesdays), where students will learn to build and evaluate coupled system models.
 
 The course is roughly split into 3 modules, to study natural-human coupling in three contexts: Polynesian islands, marine fisheries, and global climate change. Each of these modules offer different issues, scales, and modeling and management challenges.
 
@@ -51,31 +51,27 @@ The mid-term exam (week 9) will cover concepts and formulations discussed throug
 
 This course is being heavily revised this semester, and the topics below may shift as the planning process continues and as the semester progresses.
 
-| **Week** | **Tuesday** | **Thursday** | **Assignments due** |
-| --- | --- | --- | --- |
-| 1(8/29) | Introduction to the course | Introduction to InsightMaker modeling; Stocks and flows |
- |
-| 2(9/5) | Principles of system dynamics | Feedback loops |
- |
-| Module 1: Easter Island |
-| 3(9/12) | Historical context, Planetary boundaries | Predator-prey dynamics; Growth and collapse | Problem set 1 |
-| 4(9/19) | Ecosystem services | Basics of nonlinear dynamics and chaos |
- |
-| 5(9/26) | Cultivated food systems and land use change, socioecological systems | R data handling | Problem set 2 |
-| Module 2: Marine Fisheries |
-| 6(10/3) | Fish population dynamics | Fishery production function model |
- |
-| 7(10/10) | Fish population dynamics | **Group presentations** | Problem set 3, Presentation (Thursday) |
-| 8(10/17) | Tragedy of commons, Ideal economic management | Bioeconomic modeling |
- |
-| 9(10/24) | Uncertainty and variability, scales and management | R statistical analysis | Problem set 4 |
-| Module 3: Global climate change |
-| 10(10/31) | The greenhouse effect | **Mid-term exam** | Exam (Thursday) |
-| 11(11/7) | The global energy system | Physical climate modeling; Emissions modeling | Problem set 5 |
-| 12(11/14) | Climate impacts | Integrated assessment modeling |
- |
-| 13(11/28) | Cost-benefit policy | Net-zero competition setup | Problem set 6 |
-| 14(12/5) | Places to intervene and logic of failure | Net-zero competition | Paper (week from Thursday) |
+| Week | Monday | Wednesday | Assignments due |
+|---|---|---|---|
+| 1 (8/28) |   | Introduction to the course |   |
+| 2 (9/4) |   | Introduction to InsightMaker modeling; Stocks and flows |   |
+| 3 (9/9) | Principles of system dynamics | Feedback loops |   |
+| Module 1: Easter Island |  |  |  |
+| 4 (9/16) | Historical context, Planetary boundaries | Predator-prey dynamics; Growth and collapse | Problem set 1 |
+| 5 (9/23) | Ecosystem services | Basics of nonlinear dynamics and chaos |   |
+| 6 (9/30) | Cultivated food systems and land use change, socioecological systems | R data handling | Problem set 2 |
+| Module 2: Marine Fisheries |  |  |  |
+| 7 (10/7) | Fish population dynamics | Fishery production function model |   |
+| 8 (10/14) | Fish population dynamics | Bioeconomic modeling | Problem set 3 |
+| 9 (10/21) | Tragedy of commons, Ideal economic management | Group presentations | Presentation (Wednesday) |
+| 10 (10/28) | Uncertainty and variability, scales and management | R statistical analysis | Problem set 4 |
+| Module 3: Global climate change |  |  |  |
+| 11 (11/4) | The greenhouse effect | Mid-term exam | Exam (Wednesday) |
+| 12 (11/11) | The global energy system | Physical climate modeling; Emissions modeling | Problem set 5 |
+| 13 (11/18) | Climate impacts | Integrated assessment modeling |   |
+| 14 (12/2) | Cost-benefit policy | Net-zero competition setup | Problem set 6 |
+| 15 (12/9) | Places to intervene and logic of failure |   | Paper (week from Wednesday) |
+
 ---
 
 The students have taken their mid-term and may have questions on
@@ -84,7 +80,7 @@ multiple-choice questions) and ANSWER: ....
 
 The exam below is written in LaTeX, but if a student's question
 requires writing equations, standard markdown should be used to
-approximate it.
+approximate it. LaTeX equations cannot be rendered.
 ---
 \section{Question Set 1: multiple choice.}\hfill (25\%)\\
 
@@ -95,13 +91,13 @@ approximate it.
   
   \begin{tabular}{rcc}
     & Stock & Flow \\
-    Groundwater levels & $\Box$ & $\Box$ \\ % ANSWER: Stock
+    Adult fish biomass & $\Box$ & $\Box$ \\ % ANSWER: Stock
+    Fox deaths & $\Box$ & $\Box$ \\ % ANSWER: Flow
     New COVID infections & $\Box$ & $\Box$ \\ % ANSWER: Flow
-    Rabbits eaten by foxes & $\Box$ & $\Box$ \\ % ANSWER: Flow
-    Spawning biomass & $\Box$ & $\Box$ \\ % ANSWER: Stock
+    Groundwater levels & $\Box$ & $\Box$ \\ % ANSWER: Stock
   \end{tabular}
 
-\question[3] The following questions relate to the following heat island
+\question[3] The following questions relate to this heat island
   causal flow diagram.
 
   \includegraphics[width=5in]{heatisland.png}
@@ -117,7 +113,7 @@ approximate it.
     \choice None of the above
     \end{oneparchoices}
 
-  \part Which term describes ``climate change'' in the system?
+  \part Which term describes ``Global average temperature'' in the system?
 
     \begin{oneparchoices}
     \choice Endogenous variable
@@ -143,21 +139,40 @@ approximate it.
     \end{oneparchoices}
   \end{parts}
 
-\question[1] On Easter Island, most locations around the island
-  experienced multiple waves of deforestation and re-growth, even as
-  the average tree density decreased smoothly. Which of the following
-  concepts do these facts reflect?
+\question[2] The following questions refer to this graph of COVID-19
+  cases in the United States between March 2020 and September 2022,
+  from Google's COVID-19 Open Data.
 
-  \begin{choices}
-  \choice Carrying capacity
-  \choice Scale % CORRECT
-  \choice Shifting baselines
-  \end{choices}
+  \includegraphics[width=6.5in]{covidgraph.png}
 
-	% NOTE: Many students missed this, presumably not
-	understanding that at a high resolution, things look different
-	than when the whole Easter Island is aggregated.
-	
+  \begin{parts}
+    \part The ``new cases'' bars follow a weekly cycle, with the least
+      new cases on weekends and more new cases each day Monday through
+      Friday. The case data is corrected for approximate infection
+      date. This could be explained by changes in which variable in a
+      standard SIR model?
+
+      \begin{oneparchoices}
+      \choice Susceptible population
+      \choice Recovery time
+      \choice Workplace policies
+      \choice Rate of infection % CORRECT
+      \end{oneparchoices}
+
+    \part The 7-day average line shows gradual increases and
+      decreases. However, at the individual level, infections would
+      suddenly tear through families and then go away. These two
+      descriptions of the infection dynamic represent which key
+      difference?
+  
+      \begin{oneparchoices}
+      \choice A difference in susceptibility
+      \choice A difference in scale % CORRECT
+      \choice A difference in carrying capacity
+      \choice A difference in precision
+      \end{oneparchoices}
+    \end{parts}
+
 \question[1] When an ecosystem service displays rivet redundancy, which
   of the following reductions in biodiversity will produce the
   largest reduction in service provision?
@@ -168,20 +183,23 @@ approximate it.
   \choice 33\% biodiversity to 0\% biodiversity % CORRECT
   \end{choices}
 
-\question[1] Which of the following is NOT true about a region managed at
-  its multi-species maximum sustainable yield?
+\question[2] Consider a marine region with multiple species, which is
+  initially unexploited. Now, fishing effort ramps up in the region,
+  until it is fully-exploited (fished near its multispecies maximum
+  sustainable yeild).  Which of the following is USUALLY TRUE or
+  USUALLY FALSE about this impact.
 
-  \begin{choices}
-  \choice Roughly half of all species are reduced to below 10\% of
-    their unfished biomass.
-  \choice The total biomass of the fishery is roughly half of its
-    unfished biomass.
-  \choice The annual biomass caught in the fishery is roughly half of
-    its full potential. % CORRECT
-  \end{choices}
-
-	% NOTE: Many students missed this, but the annual biomass caught
-	it at the peak of its potential-- that's why its the MMSY.
+  \begin{tabular}{p{4in}cc}
+    & USUALLY & USUALLY \\
+    & TRUE & FALSE \\
+    All species are at a biomass below their unfished biomass & $\Box$ & $\Box$ \\ % ANSWER: USUALLY FALSE
+    Roughly half of all species are ``collapsed'' (below 10\% of
+    their unfished biomass). & $\Box$ & $\Box$ \\ % ANSWER: USUALLY TRUE
+    Total ecosystem provision services are roughly half of their
+    potential sustainable level.  & $\Box$ & $\Box$ \\ % ANSWER: USUALLY FALSE
+    The total biomass of the fishery is roughly half of its
+    unfished biomass. & $\Box$ & $\Box$ \\ % ANSWER: USUALLY TRUE
+  \end{tabular}
 
 \question[2] Suppose that a fishery is at its open-access
   equilibrium. Then, in one particular year, the catch is higher
@@ -197,24 +215,23 @@ approximate it.
     Biomass of stock & $\Box$ & $\Box$ & $\Box$ \\ % ANSWER: Increase
     Price per fish sold & $\Box$ & $\Box$ & $\Box$ \\ % ANSWER: Increase
     Cost per unit effort & $\Box$ & $\Box$ & $\Box$ \\ % ANSWER: Decrease
-    Fisher's discount rate & $\Box$ & $\Box$ & $\Box$ \\ % ANSWER: Unaffected
   \end{tabular}
 
-\question[1.5] Suppose that a total allowable catch policy is imposed on an
-  open-access fishery, eventually shifting it to an MSY
-  equilibrium. Which direction will each of the following move?
+% \question[1.5] Suppose that an individual transferable quota policy
+%   with proportional catch shares is imposed on an open-access fishery,
+%   eventually shifting it to an MSY equilibrium. Which direction will
+%   each of the following move?
 
-  \begin{tabular}{rccc}
-    & Increase & Decrease & No change \\
-    Biomass of stock & $\Box$ & $\Box$ & $\Box$ \\ % ANSWER: Increase
-    Total fishing effort & $\Box$ & $\Box$ & $\Box$ \\ % ANSWER: Decrease
-    Catch per year & $\Box$ & $\Box$ & $\Box$ \\ % ANSWER: Increase
-  \end{tabular}
+%   \begin{tabular}{rccc}
+%     & Increase & Decrease & No change \\
+%     Biomass of stock & $\Box$ & $\Box$ & $\Box$ \\ % ANSWER: Increase
+%     Total fishing effort & $\Box$ & $\Box$ & $\Box$ \\ % ANSWER: Decrease
+%     Catch per year & $\Box$ & $\Box$ & $\Box$ \\ % ANSWER: Increase
+%   \end{tabular}
 
-	% NOTE: Many students got 1-2 of these wrong.
-
-\question[1] Which of the following frameworks does NOT assume that
-  sustainability requires preservation of the natural environment?
+\question[1] All of the following frameworks assume that economic
+  sustainability requires the preservation of the natural environment,
+  EXCEPT WHICH ONE?
   
   \begin{choices}
   \choice Embedded economy
@@ -223,28 +240,23 @@ approximate it.
   \choice Planetary boundaries
   \end{choices}
 
-	% NOTE: Many students missed this, but as we heard in a podcast,
-	by economically valuing ecosystem services, it implies that one
-	can make trade-offs between the natural and human environments.
-
-\question[1] Fisheries management is aimed at resolving the tragedy of
-  the commons. All of the following can be components of a fishery
-  policy, but which of the following is the central issue that must be
-  addressed to resolve the tragedy of the commons?
+  % NOTE: Many students missed this, but as we heard in a podcast,
+  % by economically valuing ecosystem services, it implies that one
+  % can make trade-offs between the natural and human environments.
+    
+\question[1] Which of the following conditions is NOT required to
+  produce a tragedy of the commons in a fishery?
 
   \begin{choices}
-  \choice Ensure that new fishers cannot join a fishery when profit is
-    available.
-  \choice Ensure that an individual fisher cannot increase their
-    effort level for private benefit. % CORRECT
-  \choice Ensure that the benefits of the fishery are maximized.
-  \choice Ensure that fishers can purchase a spatial segment of the
-    fishing grounds as their private property.
+  \choice New fishers can enter or existing fishers can increase their
+    effort, if they so choose.
+  \choice All of the fishers are responding rationally to the costs
+    and benefits they observe. % CORRECT
+  \choice Individual fishers can increase receive a private benefit by
+    increasing their effort.
+  \choice For every fish one fisher extracts, other fishers experience
+    greater costs to extract fish.
   \end{choices}
-  
-  % NOTE: Many students missed this, but the core issue with the
-  tragedy of the commons is that people make private decisions that
-  undermine public goods.
   
 \end{questions}
 
@@ -252,7 +264,11 @@ approximate it.
 
 \section{Question Set 2: fill in the blank.}\hfill (25\%)\\
 
-Answer all questions by filling in the answer on the line.
+\begin{center}
+\fbox{\fbox{\parbox{5.5in}{\centering
+Answer all questions by filling in the answer on the line.}}}
+\end{center}
+\vspace{0.1in}
 
 \begin{questions}
 \question The following questions relate to a leaky bathtub. The
@@ -269,17 +285,22 @@ Answer all questions by filling in the answer on the line.
 
     \answerline % ANSWER: negative feedback
 
-  \part[1] What is the stationary point of the system, in terms of the volume of water?
+  \part[1] What is the stationary point of the system, in terms of the
+    volume of water? Include units.
 
     \answerline % ANSWER: 10 gallons
-    
-  \part[3] Draw an approximate plot for the volume of water over time, if
-    the volume is 0 initially. You do not need to exactly calculate
+
+  \part[1] Assume that the bathtub starts empty. How quickly will the
+    volume of water be increasing initially? Include units.
+
+    \answerline % ANSWER: 1 gallon / minute
+
+  \part[2] Draw an approximate plot for the volume of water over time,
+    if the volume is 0 initially. You do not need to exactly calculate
     any of the points, but explicitly show (a) the units on the
-    y-axis, (b) the slope of the your curve at time 0, and (c) how the
-    volume approaches the stationary point. The y-axis values are not
-    labeled, and you do not need to label them as long as you include
-    a, b, and c.
+    y-axis, and (b) how the volume approaches the stationary
+    point. The y-axis values are not labeled, and you do not need to
+    label them as long as you include a, b, and c.
 
     \includegraphics[width=3in]{graph-bathtub.png}
 
@@ -288,10 +309,10 @@ Answer all questions by filling in the answer on the line.
     % gallons.
   \end{parts}
 
-\question[1] Under the Easter Island model, population levels increase
-  until the available environmental goods are only enough to maintain
-  a subsistence population (or less than this level). What is the name
-  for this kind of dynamic?
+\question[1] Under the Easter Island model, population levels
+  continually grow or shrink until the available environmental goods
+  are only enough to maintain the population at a subsistence
+  level. What is the name for this kind of dynamic?
 
   \answerline % ANSWER: Malthusian scarcity
   
@@ -301,32 +322,35 @@ Answer all questions by filling in the answer on the line.
 
   \answerline % ANSWER: Fishing effort
 
-\question[1] In a static setting (where only one effort level is chosen,
-  and where we only consider the resulting equilibrium), what is
-  maximized under optimal economic management of a fishery?
+\question[1] In a static setting (where only one effort level is
+  chosen, and where we only consider the resulting equilibrium), what
+  outcome is maximized under optimal economic management of a fishery?
 
   \answerline % ANSWER: Profit
 
+  % NOTE: Many students missed this, for example saying that harvest
+  % is maximized. But that's not true.
+  
 \question[1] In a dynamic setting (where biomass and catch can change
   over multiple years), what is maximized under optimal economic
   management of a fishery?
 
   \answerline % ANSWER: Net present value of profits
   
-  % NOTE: Many students missed this, for example saying that harvest
-  is maximized. But that's not true.
-
-\question[1] What is the name for a relationship between environmental
-  degradation and income, where degradation initially increases within
-  income levels but eventually decreases at high incomes?
-
-  \answerline % ANSWER: Environmental Kuznets Curve
-  
 \end{questions}
+
+
+\bigskip
+\bigskip
+\bigskip
 
 \section{Question Set 3: labeling graphs.}\hfill (25\%)\\
 
-Answer all questions by filling in the answer in the space provided.
+\begin{center}
+\fbox{\fbox{\parbox{5.5in}{\centering
+Answer all questions by filling in the answer in the space provided.}}}
+\end{center}
+\vspace{0.1in}
 
 \setlength\answerlinelength{6.5in}
 
@@ -342,9 +366,9 @@ Answer all questions by filling in the answer in the space provided.
   growth rate, $\beta$ is the transmission rate, and $T$ is the
   infection duration.
   
-  % NOTE: In discussing this with students, do not use LaTeX
-    notation. e.g., replace \frac{S I}{N} with (S I) / N.
-
+  % NOTE: Many students missed this, for example saying that harvest
+  % is maximized. But that's not true.
+  
   \begin{parts}
   \part[2] What is/are the stationary point(s) produced by the
     $\nicefrac{dS}{dt}$ equation?
@@ -358,10 +382,11 @@ Answer all questions by filling in the answer in the space provided.
 
   \part[4] On the graph below, clearly add all the stationary lines
     (label each with either $\nicefrac{dS}{dt}$ or
-    $\nicefrac{dI}{dt}$) and up-down and left-right arrows to each
-    region of the graph.
+    $\nicefrac{dI}{dt}$). For each resulting region of the phase
+    space, draw a pair of arrows (up-down and left-right) in the
+    directions that the state changes.
 
-    \includegraphics[width=.52\textwidth]{phasespace.png}
+    \includegraphics[width=.5\textwidth]{phasespace.png}
 
     % ANSWER: Lines along the x-axis and y-axis, and additional
     % vertical and horizontal line, dividing the graph into four
@@ -400,69 +425,77 @@ Answer all questions by filling in the answer in the space provided.
     % on the right side of the graph.
   \end{parts}
 
-\question[3] Suppose that a stock has Logistic growth. Initially, its
+\question[2] Suppose that a stock has Logistic growth. Initially, its
   biomass is equal to the carrying capacity, $X_0 = K$. What happens
-  if it is continuously harvested slightly above the maximum
+  if it is continuously harvested slightly below the maximum
   sustainable yield? Draw a curve for biomass over time on the left
-  graph, and label (a) where the slope of the biomass curve (it's rate
-  of falling) is the lowest, and (b) the two areas on the graph where
-  the rate approaches its highest value.
+  graph. Label (a) where the slope of the biomass curve is highest and
+  lowest.
 
-  \includegraphics[width=\textwidth]{harvestpolicy.png}
+  \includegraphics[width=.9\textwidth]{harvestpolicy.png}
 
-  % ANSWER: The curve starts at K at time = 0 and falls quickly (one
-  % location with high slope) before gradually evening out. It never
-  % goes horizontal, but nears has its lowest slope where the curve
-  % crosses B_MSY. The slope then begins to fall more quickyl as the
-  % curve moves away from B_MSY, reaching 0 at the population collapse
-  % point.
+  % ANSWER: Curve that starts from carrying capacity K on the left,
+  % and declines most quickly initially. It asymptotically approaches
+  % a level a little above B_MSY, with its lowest slope on the right.
 
-  % NOTE: Many students missed this, saying that the rate of falling
-  is low at the beginning. But when stock is near K, growth is low, so
-  the falling rate is high. As you approach MSY, you nearly are able
-  to grow as much as the harvest, but not quite.
-
+  % NOTE: Many students missed this, for example saying that harvest
+  % is maximized. But that's not true.
+  
 \end{questions}
 
 \newpage
 
 \section{Question Set 4: essay question.}\hfill (25\%)\\
 
+\begin{center}
+\fbox{\fbox{\parbox{5.5in}{\centering
 Choose {\bf one} essay question to answer, and write your essay on the
-paper provided.
+paper provided.}}}
+\end{center}
+\vspace{0.1in}
 
 \begin{questions}
-  \question Provide a critical assessment of the assumptions behind
-  strong sustainability. What is being sustained, what assumptions
-  underly this definition of sustainability, how has strong
-  sustainability been quantified, and what are the limitations of this
-  perspective?
+\question Provide a critical assessment of the use of optimization to
+  represent policy. What assumptions are embedded in the use of
+  optimization or optimal control? How do these assumptions relate to
+  the debate over strong and weak sustainability? What are the
+  limitations of this approach?
 
-  % ANSWER: Essay should include the following points:
-  % - d Environment / dt = 0.
-  % - Discussion of what "Environment" means in the above equation:
-  % ecosystem services? biodiversity? natural state?
-  % - Assumptions: embedded economy (explain), planetary boundaries
-  % (explain).
-  % - Quantified: Natural capital (not discussed in class); planetary
-  % boundaries; measures of biodiversity or species abundance.
-  % - Limitations: What if people reshape the environment? What if we
-  % de-couple from it?
+  % KEY POINTS:
+  % Assumptions:
+  % - There is a single mettric that policy is directed at.
+  % - There is a single optimizing agent with a consistent set of values
+  % - Trade-offs between users and uses can be made, based on their value
+
+  % From an optimization perspective, both strong + weak sustainability
+  % are represented by constraints, but the difference depends on what
+  % kinds of trade-offs are allowed (weak allows environment to be
+  % traded-off against human welfare).
+
+  % Limitations: Rewording of assumptions.
   
-  \question The Anthropocene is characterized by the coupling of human
-  and natural systems on a global scale. Identify three types of bad
-  behavior we have seen in coupled systems (behavior that results bad
-  outcomes) that could occur at the global level. Explain how each
-  might be observed globally and how it can be managed.
+\question The Anthropocene is characterized by the coupling of human
+  and natural systems on a global scale. It is also driven by the
+  exponential increase in human drivers. Consider the health of the
+  environment as a single stock (``natural capital'') and the size of
+  the economy as a separate stock (``produced capital''). Describe two
+  possible long-term dynamics for these two coupled stocks. Explain
+  the system feedbacks between them that would produce these dynamics,
+  and what can be done to manage the dynamics.
 
-  % ANSWER: Essay should include the discussions of three of the
-  % following "bad behaviors":
-  % - Collapse (from exceeding boundaries)
-  % - Exponential growth (also exceeds boundaries)
-  % - Malthusian scarcity (cannot maintain wealth)
-  % - Oscillations (can be unprediable and variable)
-  % - Tragedy of the commons (everyone has profit = 0)
-  % - Shifting baselines
+  % Some possible answers:
+  % Dynamic 1: Limits to growth
+  % - Negative feedback as economy approaches planetary boundaries
+  % - Manage by ensuring smooth transition from growth to stability
+  % Dynamic 2: Collapse
+  % - Human stock far-exceeds carrying capacity, then crashes
+  % - Manage by stopping growth before the collapse
+  % Dynamic 3: Oscillation
+  % - Can occur as natural world recovers from collapse, or if there's a
+  %   dynamic that stops produced capital from far-exceeding boundary.
+  % Dynamic 4: Continued exponential growth
+  % - Looks lik e success-to-successful system, where natural world is destroyed
+  % - Manage by either ignoring (anthrocentric response) or preserving (ecocentric)
   
 \end{questions}
 
