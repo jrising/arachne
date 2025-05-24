@@ -1,0 +1,570 @@
+**assistant**:
+> The error message "BufferError: Existing exports of data: object cannot be re-sized" within the cont
+**user**:
+> Can I use pypeteer to get a URL from the REPL in python?
+**assistant**:
+> Yes, you can use `pyppeteer` to fetch a URL within a Python REPL. Pyppeteer is a Python port of Puppeteer, a library that allows for automated control of web browsers. Here's an example of how you might use it to open a URL and extract some information:
+> 
+> First, you'll need to install `pyppeteer`:
+> 
+> ```bash
+> pip install pyppeteer
+> ```
+> 
+> Then, you can use the following code snippet in your Python REPL to open a URL and, for example, get the page's title:
+> 
+> ```python
+> import asyncio
+> from pyppeteer import launch
+> 
+> async def get_page_title(url):
+>     browser = await launch()
+>     page = await browser.newPage()
+>     await page.goto(url)
+>     title = await page.title()
+>     await browser.close()
+>     return title
+> 
+> # Example usage
+> url = 'https://www.example.com'
+> title = asyncio.run(get_page_title(url))
+> print(f'The page title is: {title}')
+> ```
+> 
+> This script launches a headless browser, navigates to the specified URL, retrieves the page title, and then closes the browser. You can modify this snippet to extract other data by using additional functions provided by `pyppeteer`. 
+> 
+> Let me know if you need help with a different aspect of using `pyppeteer`!
+**user**:
+> I get the error:
+> Traceback (most recent call last):
+>   File "<python-input-3>", line 1, in <module>
+>     title = asyncio.run(get_page_title(url))
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/runners.py", line 195, in run
+>     return runner.run(main)
+>            ~~~~~~~~~~^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/runners.py", line 118, in run
+>     return self._loop.run_until_complete(task)
+>            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 725, in run_until_complete
+>     return future.result()
+>            ~~~~~~~~~~~~~^^
+>   File "<python-input-1>", line 4, in get_page_title
+>     await page.goto(url)
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/page.py", line 832, in goto
+>     raise PageError(result)
+> pyppeteer.errors.PageError: net::ERR_ABORTED at https://journals.nasspublishing.com/index.php/rwae/article/download/1186/914
+> 
+> I don't know where it's failing though.
+**assistant**:
+> The error `net::ERR_ABORTED` usually indicates that the page navigation was unsuccessful, typically due to an issue such as the URL being unreachable, the page requiring user authentication, or an invalid URL format. 
+> 
+> Here are some steps you can take to troubleshoot the problem:
+> 
+> 1. **Check the URL**: Ensure that the URL is accessible in a web browser. For example, you can open `https://journals.nasspublishing.com/index.php/rwae/article/download/1186/914` in a regular web browser to see if it loads correctly.
+> 
+> 2. **Response Check**: Some URLs might lead directly to file downloads or require special headers (like `User-Agent`). You can switch to navigating a main page first and then interact with elements to download or access restricted content.
+> 
+> 3. **Error Handling**: Implement error handling to determine more about the error. Here’s an updated version of your code with error handling:
+> 
+>    ```python
+>    import asyncio
+>    from pyppeteer import launch, errors
+> 
+>    async def get_page_title(url):
+>        browser = await launch()
+>        page = await browser.newPage()
+>        try:
+>            await page.goto(url)
+>            title = await page.title()
+>            return title
+>        except errors.PageError as e:
+>            print(f'PageError: {e}')
+>            return None
+>        except Exception as e:
+>            print(f'Error: {e}')
+>            return None
+>        finally:
+>            await browser.close()
+> 
+>    # Example usage
+>    url = 'https://journals.nasspublishing.com/index.php/rwae/article/download/1186/914'
+>    title = asyncio.run(get_page_title(url))
+>    if title:
+>        print(f'The page title is: {title}')
+>    else:
+>        print('Failed to retrieve the page title.')
+>    ```
+> 
+> 4. **Headless Mode**: Ensure the page isn't blocking headless browsers. Sometimes using `headless=False` while launching the browser can help in revealing issues:
+> 
+>    ```python
+>    browser = await launch(headless=False)
+>    ```
+> 
+> 5. **Check Network Settings**: If your network requires proxy or any additional configurations to access certain URLs, make sure that those settings are correctly applied.
+> 
+> If you're still having trouble, please let me know the specific requirements of that URL or whether you see any different errors when attempting the above suggestions!
+**user**:
+> When I go to that URL in my browser, it works fine-- but it does result in a PDF download.
+**assistant**:
+> Since the URL results in a PDF download, it means that directly navigating to it doesn't render a webpage but initiates a file download. To handle such cases in `pyppeteer`, you generally need to interact with the page to initiate the download correctly.
+> 
+> Here's how you can approach the issue:
+> 
+> 1. **Open an HTML Page First**: Navigate to the URL of the webpage that contains the link to the PDF, then click on the link to trigger the download.
+> 
+> 2. **Save the PDF**: Use the `page.pdf()` method after navigation to capture the PDF or handle the download via a request. 
+> 
+> Here’s an updated example where you would first navigate to a page and then click on a link to download the PDF:
+> 
+> ```python
+> import asyncio
+> from pyppeteer import launch, errors
+> 
+> async def download_pdf(url):
+>     browser = await launch(headless=False)  # Set headless=True if you prefer hidden browsing
+>     page = await browser.newPage()
+>     
+>     try:
+>         await page.goto(url)
+>         
+>         # Example: Find the link to the PDF and click (update the selector based on actual link)
+>         # Assuming the PDF is downloadable via a button/link you can click
+>         await asyncio.sleep(2)  # Wait for the page to load
+>         pdf_link_selector = 'a[href*="download"]'  # Adjust this logic to fit the actual link you need.
+>         pdf_link = await page.querySelector(pdf_link_selector)
+>         
+>         if pdf_link:
+>             await pdf_link.click()
+>             # Wait a bit for the download to start or complete
+>             await asyncio.sleep(5)
+>         else:
+>             print("PDF link not found.")
+>     
+>     except errors.PageError as e:
+>         print(f'PageError: {e}')
+>     except Exception as e:
+>         print(f'Error: {e}')
+>     finally:
+>         await browser.close()
+> 
+> # Use the main page URL which contains the downloadable link
+> main_url = 'https://journals.nasspublishing.com/index.php/rwae/article/view/1186'  # Change this to a valid page URL
+> asyncio.run(download_pdf(main_url))
+> ```
+> 
+> ### Key Adjustments:
+> - **Selector Update**: Ensure you update the `pdf_link_selector` to correctly point to the actual link or button that triggers the PDF download.
+> - **Sleep Duration**: Adjust wait times (`asyncio.sleep()`) based on page load speed.
+> 
+> This way, you interact with a webpage instead of directly attempting to access the PDF URL, which avoids the download error encountered previously. Let me know if you need further help refining this!
+**user**:
+> Could I just access this URL and download the PDF without pypeteer?
+**assistant**:
+> Yes, you can download the PDF directly without using `pyppeteer` by utilizing libraries such as `requests` and `os`. Here’s how you can do it:
+> 
+> 1. **Use the Requests Library**: You can simply send a GET request to the URL to fetch the PDF file and save it locally.
+> 
+> Here's a basic example:
+> 
+> ```python
+> import requests
+> 
+> def download_pdf(pdf_url, save_path):
+>     try:
+>         # Send a GET request to the PDF URL
+>         response = requests.get(pdf_url, stream=True)
+>         response.raise_for_status()  # Check for HTTP errors
+> 
+>         # Write the content to a file
+>         with open(save_path, 'wb') as file:
+>             for chunk in response.iter_content(chunk_size=8192):
+>                 file.write(chunk)
+> 
+>         print(f"Downloaded PDF to: {save_path}")
+>     except requests.exceptions.HTTPError as e:
+>         print(f"HTTP error: {e}")
+>     except Exception as e:
+>         print(f"Error: {e}")
+> 
+> # URL of the PDF file
+> pdf_url = 'https://journals.nasspublishing.com/index.php/rwae/article/download/1186/914'
+> 
+> # Path where the PDF will be saved
+> save_path = 'downloaded_file.pdf'
+> download_pdf(pdf_url, save_path)
+> ```
+> 
+> ### Explanation:
+> - **`requests.get()`**: Sends a request to the provided `pdf_url`.
+> - **`stream=True`**: Allows you to download large files in chunks.
+> - **`iter_content()`**: Reads the downloaded content in chunks, which is memory efficient.
+> - **Error Handling**: The code includes basic error handling to catch and report HTTP errors and other exceptions.
+> 
+> ### Requirements:
+> Ensure you have the `requests` library installed. You can install it via pip if it’s not already present:
+> 
+> ```bash
+> pip install requests
+> ```
+> 
+> This approach is straightforward and works well for downloading files when you know the direct URL to the file. Let me know if you need additional assistance!
+**user**:
+> How do I get the content type of that download?
+**assistant**:
+> To get the content type of the file being downloaded, you can use the `requests` library to inspect the headers returned by the server. The `Content-Type` header indicates the type of the file.
+> 
+> Here's how you can modify the previous example to include fetching the content type:
+> 
+> ```python
+> import requests
+> 
+> def download_pdf(pdf_url, save_path):
+>     try:
+>         # Send a HEAD request to get the headers
+>         response = requests.head(pdf_url)
+>         response.raise_for_status()  # Check for HTTP errors
+> 
+>         # Get the content type from headers
+>         content_type = response.headers.get('Content-Type')
+>         print(f'Content-Type: {content_type}')
+> 
+>         # If the content type is 'application/pdf', download the file
+>         if content_type == 'application/pdf':
+>             response = requests.get(pdf_url, stream=True)  # Download the PDF
+>             response.raise_for_status()  # Check for HTTP errors
+> 
+>             # Write the content to a file
+>             with open(save_path, 'wb') as file:
+>                 for chunk in response.iter_content(chunk_size=8192):
+>                     file.write(chunk)
+> 
+>             print(f"Downloaded PDF to: {save_path}")
+>         else:
+>             print(f"Expected application/pdf but got {content_type}.")
+> 
+>     except requests.exceptions.HTTPError as e:
+>         print(f"HTTP error: {e}")
+>     except Exception as e:
+>         print(f"Error: {e}")
+> 
+> # URL of the PDF file
+> pdf_url = 'https://journals.nasspublishing.com/index.php/rwae/article/download/1186/914'
+> 
+> # Path where the PDF will be saved
+> save_path = 'downloaded_file.pdf'
+> download_pdf(pdf_url, save_path)
+> ```
+> 
+> ### Explanation:
+> 1. **HEAD Request**: `requests.head(pdf_url)` retrieves just the headers from the server without downloading the entire file. This is efficient for checking details like the content type.
+> 2. **Content-Type**: The content type is extracted from the response headers with `response.headers.get('Content-Type')`.
+> 3. **Conditional Logic**: The code checks whether the content type is `application/pdf` before proceeding with the download.
+> 
+> This method allows you to verify the content type before downloading the file, ensuring that you’re downloading the correct type of data. Let me know if you need further assistance!
+**user**:
+> And how can I impose a timeout?
+**assistant**:
+> You can impose a timeout in the `requests` library by setting the `timeout` parameter in your GET or HEAD requests. This parameter specifies how long to wait for a response before raising a timeout error.
+> 
+> Here's how you can modify the previous example to include a timeout:
+> 
+> ```python
+> import requests
+> 
+> def download_pdf(pdf_url, save_path, timeout=10):
+>     try:
+>         # Send a HEAD request to get the headers with a timeout
+>         response = requests.head(pdf_url, timeout=timeout)
+>         response.raise_for_status()  # Check for HTTP errors
+> 
+>         # Get the content type from headers
+>         content_type = response.headers.get('Content-Type')
+>         print(f'Content-Type: {content_type}')
+> 
+>         # If the content type is 'application/pdf', download the file
+>         if content_type == 'application/pdf':
+>             response = requests.get(pdf_url, stream=True, timeout=timeout)  # Download the PDF
+>             response.raise_for_status()  # Check for HTTP errors
+> 
+>             # Write the content to a file
+>             with open(save_path, 'wb') as file:
+>                 for chunk in response.iter_content(chunk_size=8192):
+>                     file.write(chunk)
+> 
+>             print(f"Downloaded PDF to: {save_path}")
+>         else:
+>             print(f"Expected application/pdf but got {content_type}.")
+> 
+>     except requests.exceptions.Timeout:
+>         print(f"Request timed out after {timeout} seconds.")
+>     except requests.exceptions.HTTPError as e:
+>         print(f"HTTP error: {e}")
+>     except Exception as e:
+>         print(f"Error: {e}")
+> 
+> # URL of the PDF file
+> pdf_url = 'https://journals.nasspublishing.com/index.php/rwae/article/download/1186/914'
+> 
+> # Path where the PDF will be saved
+> save_path = 'downloaded_file.pdf'
+> 
+> # Call the function with a specified timeout
+> download_pdf(pdf_url, save_path, timeout=10)
+> ```
+> 
+> ### Explanation:
+> - **Timeout Parameter**: You can set the `timeout` parameter in both the `requests.head()` and `requests.get()` functions. The value is the number of seconds to wait before the request times out.
+> - **Exception Handling**: I've added a catch for `requests.exceptions.Timeout` to handle timeout errors specifically, allowing you to see a user-friendly message.
+>   
+> You can adjust the `timeout` value as needed to suit your requirements. Let me know if you have any further questions!
+**user**:
+> What if I also want to limit the download size-- abort if it's greater than 10 MB, for example?
+**assistant**:
+> You can limit the download size by checking the content length in the response headers before initiating the download or by monitoring the size as you read the file in chunks while downloading. Here’s how you can implement both strategies:
+> 
+> ### Full Example with Size Limit
+> 
+> ```python
+> import requests
+> 
+> def download_pdf(pdf_url, save_path, timeout=10, size_limit_mb=10):
+>     size_limit_bytes = size_limit_mb * 1024 * 1024  # Convert MB to bytes
+> 
+>     try:
+>         # Send a HEAD request to get the headers with a timeout
+>         response = requests.head(pdf_url, timeout=timeout)
+>         response.raise_for_status()  # Check for HTTP errors
+> 
+>         # Get the content type from headers
+>         content_type = response.headers.get('Content-Type')
+>         content_length = response.headers.get('Content-Length')
+>         
+>         # Check if the content length is provided and convert it to an integer
+>         if content_length is not None:
+>             content_length = int(content_length)
+>             print(f'Content-Length: {content_length} bytes')
+> 
+>             # Check if the file size exceeds the limit
+>             if content_length > size_limit_bytes:
+>                 print(f"The file size exceeds {size_limit_mb} MB. Aborting the download.")
+>                 return
+>         
+>         print(f'Content-Type: {content_type}')
+> 
+>         # If the content type is 'application/pdf', download the file
+>         if content_type == 'application/pdf':
+>             response = requests.get(pdf_url, stream=True, timeout=timeout)  # Download the PDF
+>             response.raise_for_status()  # Check for HTTP errors
+> 
+>             # Initialize the total downloaded size
+>             total_downloaded = 0
+> 
+>             # Write the content to a file in chunks
+>             with open(save_path, 'wb') as file:
+>                 for chunk in response.iter_content(chunk_size=8192):
+>                     total_downloaded += len(chunk)
+>                     file.write(chunk)
+> 
+>                     # Abort if the total downloaded size exceeds the limit
+>                     if total_downloaded > size_limit_bytes:
+>                         print(f"Aborted download: size exceeded {size_limit_mb} MB.")
+>                         return
+> 
+>             print(f"Downloaded PDF to: {save_path}")
+>         else:
+>             print(f"Expected application/pdf but got {content_type}.")
+>     
+>     except requests.exceptions.Timeout:
+>         print(f"Request timed out after {timeout} seconds.")
+>     except requests.exceptions.HTTPError as e:
+>         print(f"HTTP error: {e}")
+>     except Exception as e:
+>         print(f"Error: {e}")
+> 
+> # URL of the PDF file
+> pdf_url = 'https://journals.nasspublishing.com/index.php/rwae/article/download/1186/914'
+> 
+> # Path where the PDF will be saved
+> save_path = 'downloaded_file.pdf'
+> 
+> # Call the function with a specified timeout and size limit
+> download_pdf(pdf_url, save_path, timeout=10, size_limit_mb=10)
+> ```
+> 
+> ### Key Changes:
+> 1. **Size Limit Calculation**: Convert the size limit from megabytes to bytes (`size_limit_bytes`).
+> 2. **Content Length Checking**: Fetch the `Content-Length` header using `requests.head()` and check against the size limit before downloading.
+> 3. **Monitoring Download Size**: While writing the chunks to the file, monitor the total downloaded size (`total_downloaded`). If it exceeds the specified limit, abort the download and notify the user.
+> 
+> This way, you can ensure that downloads are controlled and that you don’t exceed your set limits. Let me know if you need further modifications or have any questions!
+**user**:
+> I'd like to keep the file in memory rather than write it out, for this stage (I'll write out the PDF later). How can I do that?
+**assistant**:
+> To keep the PDF file entirely in memory rather than writing it out to disk, you can use the `io.BytesIO` module from Python's standard library. This allows you to create an in-memory byte stream that you can manipulate as if it were a file.
+> 
+> Here’s how to modify the previous example to store the PDF in memory:
+> 
+> ```python
+> import requests
+> import io
+> 
+> def download_pdf_to_memory(pdf_url, timeout=10, size_limit_mb=10):
+>     size_limit_bytes = size_limit_mb * 1024 * 1024  # Convert MB to bytes
+> 
+>     try:
+>         # Send a HEAD request to get the headers with a timeout
+>         response = requests.head(pdf_url, timeout=timeout)
+>         response.raise_for_status()  # Check for HTTP errors
+> 
+>         # Get the content type from headers
+>         content_type = response.headers.get('Content-Type')
+>         content_length = response.headers.get('Content-Length')
+>         
+>         # Check if the content length is provided and convert it to an integer
+>         if content_length is not None:
+>             content_length = int(content_length)
+>             print(f'Content-Length: {content_length} bytes')
+> 
+>             # Check if the file size exceeds the limit
+>             if content_length > size_limit_bytes:
+>                 print(f"The file size exceeds {size_limit_mb} MB. Aborting the download.")
+>                 return
+>         
+>         print(f'Content-Type: {content_type}')
+> 
+>         # If the content type is 'application/pdf', download the file
+>         if content_type == 'application/pdf':
+>             response = requests.get(pdf_url, stream=True, timeout=timeout)  # Download the PDF
+>             response.raise_for_status()  # Check for HTTP errors
+> 
+>             # Initialize a BytesIO object to hold the PDF in memory
+>             pdf_file = io.BytesIO()
+> 
+>             # Initialize the total downloaded size
+>             total_downloaded = 0
+> 
+>             # Write the content to the BytesIO object in chunks
+>             for chunk in response.iter_content(chunk_size=8192):
+>                 total_downloaded += len(chunk)
+>                 pdf_file.write(chunk)
+> 
+>                 # Abort if the total downloaded size exceeds the limit
+>                 if total_downloaded > size_limit_bytes:
+>                     print(f"Aborted download: size exceeded {size_limit_mb} MB.")
+>                     return
+> 
+>             print("Downloaded PDF to memory.")
+>             # Optionally, you can return the pdf_file object for further use
+>             # Reset the BytesIO object's cursor to the beginning
+>             pdf_file.seek(0)
+> 
+>             return pdf_file  # You can return this for further processing
+> 
+>         else:
+>             print(f"Expected application/pdf but got {content_type}.")
+>     
+>     except requests.exceptions.Timeout:
+>         print(f"Request timed out after {timeout} seconds.")
+>     except requests.exceptions.HTTPError as e:
+>         print(f"HTTP error: {e}")
+>     except Exception as e:
+>         print(f"Error: {e}")
+> 
+> # URL of the PDF file
+> pdf_url = 'https://journals.nasspublishing.com/index.php/rwae/article/download/1186/914'
+> 
+> # Call the function with a specified timeout and size limit
+> pdf_in_memory = download_pdf_to_memory(pdf_url, timeout=10, size_limit_mb=10)
+> 
+> # To demonstrate that the PDF is successfully stored in memory, do something with it
+> if pdf_in_memory:
+>     print("PDF is ready for further processing!")
+>     # Example of how you might save it later (commented out)
+>     # with open('saved_file.pdf', 'wb') as f:
+>     #     f.write(pdf_in_memory.getbuffer())
+> ```
+> 
+> ### Key Changes:
+> 1. **`io.BytesIO`**: This is used to create an in-memory stream for the PDF content.
+> 2. **Writing to Memory**: The PDF content is written to the `BytesIO` object instead of a file.
+> 3. **Returning the `BytesIO` Object**: You can return the `pdf_file` object, which can be used later for processing, saving, or any other operations.
+> 
+> With this setup, you can work with the PDF entirely in memory until you decide to save it or process it further. Let me know if you have any other questions or need further modifications!
+**user**:
+> What does this mean:
+> Exception ignored in: <_io.BytesIO object at 0x166357970>
+> Traceback (most recent call last):
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/urllib3/connection.py", line 223, in <genexpr>
+>     if not any(isinstance(v, str) and v == SKIP_HEADER for v in values):
+> BufferError: Existing exports of data: object cannot be re-sized
+**assistant**:
+> The error message you're seeing—`BufferError: Existing exports of data: object cannot be re-sized`—indicates that there's an issue related to how memory buffers are being handled. This typically occurs when a buffer (like the one used in `BytesIO`) is being manipulated in a way that violates its constraints, such as trying to resize it while exports are still active.
+> 
+> ### Possible Causes and Fixes:
+> 
+> 1. **Concurrent Access**: If the `BytesIO` object is being accessed or modified elsewhere in your code while another part of the code is trying to manipulate it, it can lead to this error. Ensure that the `BytesIO` object is not being shared or modified in multiple places simultaneously.
+> 
+> 2. **Not Closing Resources Properly**: If the `BytesIO` object is created and stored but not properly managed, it may lead to this warning during garbage collection. If you're passing it around, consider managing its lifecycle (e.g., by ensuring it's closed at the appropriate time if you're done with it).
+> 
+> 3. **Using the Object After Modification**: If you're trying to adjust the size or content of the `BytesIO` object after storing or processing it elsewhere, consider resetting its cursor to the beginning using `pdf_file.seek(0)` before performing any operations.
+> 
+> 4. **Environment Issues**: Sometimes, issues arise from the environment or library conflicts, especially if you're using packages that interact with buffers (like `requests`, `urllib3`, or `numpy`). Ensuring your packages are updated might help resolve unexpected behavior.
+> 
+> 5. **Memory Usage**: If your workflow is heavily relying on large data streaming or manipulation, consider profiling your memory usage. If you're working with particularly large files or in a constrained environment, optimize your memory usage patterns.
+> 
+> ### How to Handle:
+> 
+> To minimize the chances of running into this issue, make sure:
+> - You’re not trying to resize or modify the `BytesIO` stream when it’s being processed or already used in another context.
+> - Use the `BytesIO` object directly only in the context you need it, and ensure it’s not referenced elsewhere if you’re done with it.
+> 
+> Here's a safe use example:
+> 
+> ```python
+> import requests
+> import io
+> 
+> def download_pdf_to_memory(pdf_url, timeout=10, size_limit_mb=10):
+>     size_limit_bytes = size_limit_mb * 1024 * 1024  # Convert MB to bytes
+> 
+>     try:
+>         # Send a HEAD request to get the headers with a timeout
+>         response = requests.head(pdf_url, timeout=timeout)
+>         response.raise_for_status()
+> 
+>         # Handle content length and type...
+>         # (Existing logic)
+> 
+>         if content_type == 'application/pdf':
+>             response = requests.get(pdf_url, stream=True, timeout=timeout)
+>             response.raise_for_status()
+> 
+>             # Initialize a BytesIO object to hold the PDF in memory
+>             with io.BytesIO() as pdf_file:  # Use 'with' to manage the object
+>                 total_downloaded = 0
+>                 for chunk in response.iter_content(chunk_size=8192):
+>                     total_downloaded += len(chunk)
+>                     pdf_file.write(chunk)
+> 
+>                     if total_downloaded > size_limit_bytes:
+>                         print(f"Aborted download: size exceeded {size_limit_mb} MB.")
+>                         return
+>                 
+>                 # Reset cursor to the beginning
+>                 pdf_file.seek(0)
+>                 
+>                 # Return the BytesIO object for further use
+>                 return pdf_file.getvalue()  # Return as bytes instead of the object directly
+> 
+>     except requests.exceptions.Timeout:
+>         print(f"Request timed out after {timeout} seconds.")
+>     except requests.exceptions.HTTPError as e:
+>         print(f"HTTP error: {e}")
+>     except Exception as e:
+>         print(f"Error: {e}")
+> 
+> # Call the function as needed...
+> ```
+> 
+> In this case, using `with` for `BytesIO` ensures that it’s properly managed and cleaned up after use. If you’re still encountering issues, let me know, and we can further troubleshoot!

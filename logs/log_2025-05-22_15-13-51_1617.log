@@ -1,0 +1,184 @@
+**user**:
+> I am trying to use pypeteer, but after one attempt fails, when I try to do a second attempt, I get the error:
+> Exception ignored in atexit callback <function Launcher.launch.<locals>._close_process at 0x165b913a0>:
+> Traceback (most recent call last):
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/launcher.py", line 153, in _close_process
+>     self._loop.run_until_complete(self.killChrome())
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 700, in run_until_complete
+>     self._check_closed()
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+>     raise RuntimeError('Event loop is closed')
+> RuntimeError: Event loop is closed
+> <sys>:0: RuntimeWarning: coroutine 'Launcher.killChrome' was never awaited
+> RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+> Exception ignored in atexit callback <function Launcher.launch.<locals>._close_process at 0x164e9f100>:
+> Traceback (most recent call last):
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/launcher.py", line 153, in _close_process
+>     self._loop.run_until_complete(self.killChrome())
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 700, in run_until_complete
+>     self._check_closed()
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+>     raise RuntimeError('Event loop is closed')
+> RuntimeError: Event loop is closed
+> Exception ignored in atexit callback <function Launcher.launch.<locals>._close_process at 0x1649ce840>:
+> Traceback (most recent call last):
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/launcher.py", line 153, in _close_process
+>     self._loop.run_until_complete(self.killChrome())
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 700, in run_until_complete
+>     self._check_closed()
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+>     raise RuntimeError('Event loop is closed')
+> RuntimeError: Event loop is closed
+> 
+> I do this all from the call:
+> result = asyncio.run(finder.finder_pdf(row.DOI, targetpath, statuspath))
+> 
+> and the finder.finder_pdf function has a finally clause that should close the browser:
+> async def finder_pdf(document, targetpath, statuspath):
+>     browser, page = await open_browser()
+> 
+>     try:
+>         result = await finder_pdf_helper(document, page)
+>         try:
+>             os.remove("downloaded.html")
+>         except FileNotFoundError:
+>             pass
+>     
+>         if result == "found":
+>             os.rename("downloaded.pdf", targetpath)
+>         else:
+>             try:
+>                 os.remove("downloaded.pdf")
+>             except FileNotFoundError:
+>                 pass
+> 
+>         return result
+>     finally:
+>         await browser.close()
+**assistant**:
+> The error you're facing with Pyppeteer is a common situation when working with asynchronous code, particularly in Python's asyncio. This error often arises when the event loop is being closed before all async tasks (or callbacks) are properly awaited or finalized.
+> 
+> Here are a few suggestions to help resolve this error:
+> 
+> 1. **Ensure Browser Instance is Properly Closed**:
+>    In the `finally` clause, make sure the `await browser.close()` is effectively called even if other parts of `finder_pdf` raise exceptions. It looks like you've done this, so ensure an unfinished task isn't causing issues elsewhere.
+> 
+> 2. **Handle Exceptions**:
+>    Surround the `await finder_pdf_helper(document, page)` line with a try-except block to catch unexpected exceptions that might skip the `finally` clause.
+> 
+> 3. **Review Event Loop Usage**:
+>    When using `asyncio.run`, ensure you're strictly using it at the top level of your script to manage the event loop properly. Refrain from calling `asyncio.run()` from within an already running event loop. If you're debugging or developing in an environment like Jupyter Notebooks, this could be particularly important.
+> 
+> 4. **Verify Clean-up Behavior in atexit**:
+>    Since the error involves callbacks registered with `atexit`, verify if any resources need specific teardown logic beyond what `browser.close()` handles.
+> 
+> 5. **Consider `async with`**:
+>    Use the `async with` pattern if possible for the browser object to ensure proper management of asynchronous resources. This API improves safety by automating close calls:
+>    ```python
+>    async with open_browser() as browser:
+>        page = await browser.newPage()
+>        # Do your work with page here
+>    # The browser will be closed automatically at the end of the block
+>    ```
+> 
+> 6. **Python Environment Issue**:
+>    Ensure your Python environment and Pyppeteer installation are up-to-date, as there might be fixes in newer versions regarding the asyncio event loops handling.
+> 
+> If after these checks the issue persists, further analysis of your environment and broader context might be necessary to identify the nuances of your application.
+**user**:
+> I have other await lines elsewhere in the code that might fail, but they should all go through this try-finally block. Is there something I need to do with every await block to make sure it completes?
+**assistant**:
+> To ensure that every `await` block completes and that errors are properly handled in your asynchronous functions, you can follow these guidelines:
+> 
+> ### 1. **Wrap Each Await in Try-Except:**
+> You can wrap each `await` statement in its own try-except block. This allows you to catch exceptions specifically for each awaited operation without skipping the final cleanup.
+> 
+> ```python
+> async def finder_pdf(document, targetpath, statuspath):
+>     browser, page = await open_browser()
+> 
+>     try:
+>         try:
+>             result = await finder_pdf_helper(document, page)
+>         except Exception as e:
+>             print(f"Error in finder_pdf_helper: {e}")
+>             result = "error"  # Handle or set a default value
+>         
+>         try:
+>             os.remove("downloaded.html")
+>         except FileNotFoundError:
+>             pass
+> 
+>         if result == "found":
+>             os.rename("downloaded.pdf", targetpath)
+>         else:
+>             try:
+>                 os.remove("downloaded.pdf")
+>             except FileNotFoundError:
+>                 pass
+> 
+>         return result
+>     finally:
+>         await browser.close()
+> ```
+> 
+> ### 2. **Use Finalization Logic:**
+> You can establish a pattern where you keep track of whether an operation succeeds, which can allow you to better handle any errors that occur without skipping the overall cleanup. 
+> 
+> ### 3. **Combining Collectively with Aggregate Handling:**
+> If you have multiple async calls to organize, you might consider an aggregate exception handler:
+> 
+> ```python
+> async def finder_pdf(document, targetpath, statuspath):
+>     browser, page = await open_browser()
+> 
+>     exceptions = []
+> 
+>     try:
+>         try:
+>             result = await finder_pdf_helper(document, page)
+>         except Exception as e:
+>             exceptions.append(str(e))
+>         
+>         try:
+>             await some_other_async_function()  # Another await that might fail
+>         except Exception as e:
+>             exceptions.append(str(e))
+> 
+>         # Handle cleaning up files as before...
+> 
+>         return result
+>     finally:
+>         await browser.close()
+>     
+>     # Optionally: Raise the collected exceptions if any exist
+>     if exceptions:
+>         raise Exception(f"Encountered errors: {', '.join(exceptions)}")
+> ```
+> 
+> ### 4. **Use Logging**: 
+> Use logging to capture exceptions instead of printing them. This can help you debug issues later.
+> 
+> ### 5. **Consider a Task Management Approach**:
+> If `finder_pdf_helper` or other await statements yield multiple tasks, consider using `asyncio.gather()` or `asyncio.wait()`, wrapped in a try-except block, to manage a group of asynchronous tasks. 
+> 
+> ### Example with `asyncio.gather()`:
+> ```python
+> async def finder_pdf(document, targetpath, statuspath):
+>     browser, page = await open_browser()
+> 
+>     try:
+>         results = await asyncio.gather(
+>             finder_pdf_helper(document, page),
+>             cleanup_files(),  # Another async function, if applicable
+>             return_exceptions=True  # This will return exceptions in the results
+>         )
+>         # Handle results or exceptions in `results`
+>         
+>     finally:
+>         await browser.close()
+> 
+>     return results
+> ```
+> 
+> This approach should help you ensure that each asynchronous operation properly completes and that the final cleanup occurs regardless of any individual errors.

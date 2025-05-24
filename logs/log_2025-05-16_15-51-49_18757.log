@@ -1,0 +1,512 @@
+**assistant**:
+> The most relevant past conversation is **2023-07-18 22:49:21**:  James asked how to repeatedly call
+**user**:
+> I have the following pyppeteer function in my code:
+> async def open_browser():
+>     browser = await launch(headless=True)
+>     page = await browser.newPage()  # Create a new page
+> 
+>     # Check for response size limit
+>     max_size = 100 * 1024 * 1024
+> 
+>     async def intercept_response(response):
+>         try:
+>             # Get the response headers
+>             headers = await response.headers()
+>             # Check the 'content-length' header to determine the download size
+>             content_length = int(headers.get('content-length', '0'))
+>             if content_length > download_size_limit:
+>                 print(f"Download aborted: {response.url} exceeds size limit.")
+>                 await response.abort()
+>         except Exception as e:
+>             print(f"Error intercepting response: {e}")
+> 
+>     page.on('response', intercept_response)
+>     
+>     return browser, page
+> 
+> But when I try to use it with `browser, page = asyncio.run(open_browser())`, I get the error:
+> Traceback (most recent call last):
+>   File "/Users/admin/projects/aiiter/litreview3.py", line 12, in <module>
+>     result = finder.finder_pdf(row.DOI, targetpath)
+>   File "/Users/admin/projects/aiiter/logic/finder.py", line 96, in finder_pdf
+>     browser, page = asyncio.run(open_browser())
+>                     ~~~~~~~~~~~^^^^^^^^^^^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/runners.py", line 195, in run
+>     return runner.run(main)
+>            ~~~~~~~~~~^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/runners.py", line 118, in run
+>     return self._loop.run_until_complete(task)
+>            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 725, in run_until_complete
+>     return future.result()
+>            ~~~~~~~~~~~~~^^
+>   File "/Users/admin/projects/aiiter/logic/finder.py", line 25, in open_browser
+>     browser = await launch(headless=True)
+>               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/launcher.py", line 307, in launch
+>     return await Launcher(options, **kwargs).launch()
+>            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/launcher.py", line 168, in launch
+>     self.browserWSEndpoint = get_ws_endpoint(self.url)
+>                              ~~~~~~~~~~~~~~~^^^^^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/launcher.py", line 227, in get_ws_endpoint
+>     raise BrowserError('Browser closed unexpectedly:\n')
+> pyppeteer.errors.BrowserError: Browser closed unexpectedly:
+> 
+> Exception ignored in atexit callback <function Launcher.launch.<locals>._close_process at 0x1649227a0>:
+> Traceback (most recent call last):
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/launcher.py", line 153, in _close_process
+>     self._loop.run_until_complete(self.killChrome())
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 700, in run_until_complete
+>     self._check_closed()
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+>     raise RuntimeError('Event loop is closed')
+> RuntimeError: Event loop is closed
+> <sys>:0: RuntimeWarning: coroutine 'Launcher.killChrome' was never awaited
+> RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+**assistant**:
+> The error you're encountering (`Browser closed unexpectedly`) while running your Pyppeteer code might be related to a few common issues:
+> 
+> 1. **Chrome Installation**: Ensure that you have a compatible version of Chromium or Google Chrome installed. Sometimes Pyppeteer might not be able to find or run the browser if there's a compatibility issue or missing installation.
+> 
+> 2. **Dependencies and Environment**: Ensure that all required packages and dependencies are correctly installed and up to date. Particularly, ensure that the Pyppeteer package is compatible with your Python version.
+> 
+> 3. **Corrupted Cache**: It might be worth trying to clear the Pyppeteer cache. You can do this by deleting the Pyppeteer local cache directory. The directory is usually located at `~/.local/share/pyppeteer` on Unix-like systems.
+> 
+> 4. **Different Event Loop Policy on macOS**: If you're running this on macOS, you might encounter issues with the default asyncio event loop. Try explicitly setting the `EventLoopPolicy` at the start of your script:
+>     ```python
+>     import asyncio
+>     import platform
+> 
+>     if platform.system() == "Darwin":
+>         asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+>     ```
+> 
+> 5. **Adjust Timeouts and Headless Mode**: Sometimes, launching the browser in headless mode can cause unexpected issues, depending on the environment variables or permissions. You could try launching without `headless=True` to debug, or adjust launch options such as timeouts:
+> 
+>     ```python
+>     from pyppeteer import launch
+> 
+>     async def open_browser():
+>         browser = await launch(headless=False, args=['--no-sandbox'])
+>         page = await browser.newPage()
+>         
+>         # Check for response size limit
+>         max_size = 100 * 1024 * 1024
+> 
+>         async def intercept_response(response):
+>             try:
+>                 headers = await response.headers()
+>                 content_length = int(headers.get('content-length', '0'))
+>                 if content_length > max_size:
+>                     print(f"Download aborted: {response.url} exceeds size limit.")
+>                     await response.abort()
+>             except Exception as e:
+>                 print(f"Error intercepting response: {e}")
+> 
+>         page.on('response', intercept_response)
+>         
+>         return browser, page
+>     ```
+> 
+> 6. **Ensure Correct Content-Length Header Handling**: Ensure you're comparing with the intended variable `max_size`, not a potentially undefined `download_size_limit`.
+> 
+> After these checks, try running your code again. If you're still encountering issues, provide additional details about your development environment or any changes that might have led to this error.
+**user**:
+> The Darwin change seemed to help. Now, when I try to get pages I use:
+> async def fetch_url(page, url):
+>     response = await page.goto(url, {'timeout': 30000})
+>     content = await page.content()
+> 
+>     content_type = response.headers.get('content-type', '')
+> 
+>     return content, content_type
+> 
+> And call that from a synchronous function:
+> def finder_download(page, url, pathprefix):
+>     try:
+>         content, content_type = asyncio.run(fetch_url(page, url))
+>         
+>         # Determine content type and process accordingly
+>         if 'text/html' in content_type:
+>             with open(pathprefix + '.html', 'w') as fp:
+>                 fp.write(content.decode('utf-8'))
+>             return "finder_html"
+>         elif 'application/pdf' in content_type:
+>             with open(pathprefix + '.pdf', 'wb') as fp:
+>                 fp.write(content)
+>             return "finder_pdf"
+>         else:
+>             return "unsupported"
+>     except requests.exceptions.RequestException as e:
+>         return "error"
+> 
+> But I get an error here too:
+> Traceback (most recent call last):
+>   File "/Users/admin/projects/aiiter/litreview3.py", line 12, in <module>
+>     result = finder.finder_pdf(row.DOI, targetpath)
+>   File "/Users/admin/projects/aiiter/logic/finder.py", line 103, in finder_pdf
+>     result = finder_pdf_helper(document, page)
+>   File "/Users/admin/projects/aiiter/logic/finder.py", line 137, in finder_pdf_helper
+>     nextstep = finder_download(page, text, "downloaded")
+>   File "/Users/admin/projects/aiiter/logic/finder.py", line 70, in finder_download
+>     content, content_type = asyncio.run(fetch_url(page, url))
+>                             ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/runners.py", line 195, in run
+>     return runner.run(main)
+>            ~~~~~~~~~~^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/runners.py", line 118, in run
+>     return self._loop.run_until_complete(task)
+>            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 725, in run_until_complete
+>     return future.result()
+>            ~~~~~~~~~~~~~^^
+>   File "/Users/admin/projects/aiiter/logic/finder.py", line 21, in fetch_url
+>     response = await page.goto(url, {'timeout': 30000})
+>                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/page.py", line 828, in goto
+>     watcher = NavigatorWatcher(self._frameManager, mainFrame, timeout, options)
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/navigator_watcher.py", line 51, in __init__
+>     self._createTimeoutPromise(),
+>     ~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/navigator_watcher.py", line 99, in _createTimeoutPromise
+>     self._timeout_timer: Union[asyncio.Task, asyncio.Future] = self._loop.create_task(_timeout_func())  # noqa: E501
+>                                                                ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 466, in create_task
+>     self._check_closed()
+>     ~~~~~~~~~~~~~~~~~~^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+>     raise RuntimeError('Event loop is closed')
+> RuntimeError: Event loop is closed
+> <sys>:0: RuntimeWarning: coroutine 'NavigatorWatcher._createTimeoutPromise.<locals>._timeout_func' was never awaited
+**assistant**:
+> The error you're encountering (`Event loop is closed`) in this context arises because you are trying to run an `async` function (`fetch_url`) from within another synchronous function (`finder_download`) using `asyncio.run()`. This isn't permitted since `asyncio.run()` can only be called from the main thread, and it essentially closes the event loop when finished.
+> 
+> To address this, you need to restructure your synchronous function to accommodate `async` calls. Here’s how you can do that:
+> 
+> ### 1. Convert `finder_download` to an Async Function
+> 
+> By making `finder_download` an `async` function, you can directly call `fetch_url` without using `asyncio.run()`. Here's a revised version of your code:
+> 
+> ```python
+> async def fetch_url(page, url):
+>     response = await page.goto(url, {'timeout': 30000})
+>     content = await page.content()
+> 
+>     content_type = response.headers.get('content-type', '')
+> 
+>     return content, content_type
+> 
+> # Make `finder_download` async
+> async def finder_download(page, url, pathprefix):
+>     try:
+>         content, content_type = await fetch_url(page, url)
+>         
+>         # Determine content type and process accordingly
+>         if 'text/html' in content_type:
+>             with open(pathprefix + '.html', 'w') as fp:
+>                 fp.write(content)  # Note: content is already a string
+>             return "finder_html"
+>         elif 'application/pdf' in content_type:
+>             with open(pathprefix + '.pdf', 'wb') as fp:
+>                 fp.write(content)  # content should be bytes
+>             return "finder_pdf"
+>         else:
+>             return "unsupported"
+>     except Exception as e:
+>         print(f"Error fetching URL: {e}")
+>         return "error"
+> 
+> # Call the async function in an appropriate way from the synchronous context.
+> ```
+> 
+> ### 2. Calling `finder_download`
+> 
+> Instead of directly calling `finder_download` from a synchronous function, you'll need to run it within the event loop:
+> 
+> ```python
+> async def main(page, url, pathprefix):
+>     result = await finder_download(page, url, pathprefix)
+>     return result
+> 
+> # Modify your synchronous function to run the main async function
+> def some_sync_function(page, url, pathprefix):
+>     return asyncio.run(main(page, url, pathprefix))
+> ```
+> 
+> ### Summary
+> 
+> By restructuring your code to make `finder_download` an `async` function, you can conveniently call your `fetch_url` method without running into issues with closing the event loop. This approach embraces asyncio's design more naturally and avoids the complications that arise from mixing synchronous and asynchronous calls. 
+> 
+> Make sure to handle exceptions properly within your async functions to enhance robustness, especially during network calls or file operations.
+**user**:
+> Okay, I've done that now, but I get a new error:
+> connection unexpectedly closed
+> Task exception was never retrieved
+> future: <Task finished name='Task-48' coro=<Connection._async_send() done, defined at /Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/connection.py:69> exception=InvalidStateError('invalid state')>
+> Traceback (most recent call last):
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/websockets/legacy/protocol.py", line 968, in transfer_data
+>     message = await self.read_message()
+>               ^^^^^^^^^^^^^^^^^^^^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/websockets/legacy/protocol.py", line 1038, in read_message
+>     frame = await self.read_data_frame(max_size=self.max_size)
+>             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/websockets/legacy/protocol.py", line 1113, in read_data_frame
+>     frame = await self.read_frame(max_size)
+>             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/websockets/legacy/protocol.py", line 1170, in read_frame
+>     frame = await Frame.read(
+>             ^^^^^^^^^^^^^^^^^
+>     ...<4 lines>...
+>     )
+>     ^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/websockets/legacy/framing.py", line 69, in read
+>     data = await reader(2)
+>            ^^^^^^^^^^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/streams.py", line 758, in readexactly
+>     raise self._exception
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/selector_events.py", line 1005, in _read_ready__data_received
+>     data = self._sock.recv(self.max_size)
+> ConnectionResetError: [Errno 54] Connection reset by peer
+> 
+> The above exception was the direct cause of the following exception:
+> 
+> Traceback (most recent call last):
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/connection.py", line 73, in _async_send
+>     await self.connection.send(msg)
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/websockets/legacy/protocol.py", line 635, in send
+>     await self.ensure_open()
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/websockets/legacy/protocol.py", line 944, in ensure_open
+>     raise self.connection_closed_exc()
+> websockets.exceptions.ConnectionClosedError: no close frame received or sent
+> 
+> During handling of the above exception, another exception occurred:
+> 
+> Traceback (most recent call last):
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/connection.py", line 79, in _async_send
+>     await self.dispose()
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/connection.py", line 170, in dispose
+>     await self._on_close()
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/connection.py", line 151, in _on_close
+>     cb.set_exception(_rewriteError(
+>     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+>         cb.error,  # type: ignore
+>         ^^^^^^^^^^^^^^^^^^^^^^^^^
+>         f'Protocol error {cb.method}: Target closed.',  # type: ignore
+>         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>     ))
+>     ^^
+> asyncio.exceptions.InvalidStateError: invalid state
+**assistant**:
+> The error messages you're encountering (`Connection unexpectedly closed`, `ConnectionResetError`, `InvalidStateError`) typically arise from issues with the connection between your Pyppeteer script and the browser instance. Below are some steps and strategies you can try to troubleshoot and potentially resolve the issue:
+> 
+> ### 1. Update Pyppeteer
+> 
+> First, ensure that you're using the latest version of Pyppeteer (and its dependencies, like `websockets`). You can update it with:
+> 
+> ```bash
+> pip install --upgrade pyppeteer
+> ```
+> 
+> ### 2. Launch Options
+> 
+> Sometimes, specific launch options can help stabilize the browser connection. Try adjusting your launch parameters. For example, you can disable the `sandbox` mode, increase the `timeout`, or disable the GPU:
+> 
+> ```python
+> from pyppeteer import launch
+> 
+> async def open_browser():
+>     browser = await launch(
+>         headless=True,
+>         args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
+>         timeout=60000  # Increase timeout if needed
+>     )
+>     page = await browser.newPage()
+>     
+>     # ... rest of your code
+> ```
+> 
+> ### 3. Ensure Proper Shutdown
+> 
+> Make sure that you are correctly closing your Pyppeteer browser instances. When you're done with the browser, you should call `await browser.close()`. Failing to do so can leave dangling connections.
+> 
+> ### 4. Check for Synchronous Calls
+> 
+> If you've wrapped your async calls into synchronous functions, ensure that each async call is awaited appropriately. If you try to call async functions without awaiting them properly, it can lead to connection issues.
+> 
+> ### 5. Error Handling
+> 
+> Implement structured error handling to manage cases where the connection is closed unexpectedly:
+> 
+> ```python
+> async def fetch_url(page, url):
+>     try:
+>         response = await page.goto(url, {'timeout': 30000})
+>         content = await page.content()
+>         content_type = response.headers.get('content-type', '')
+>         return content, content_type
+>     except Exception as e:
+>         print(f"Error fetching URL: {e}")
+>         return None, None
+> ```
+> 
+> ### 6. Debugging Connection Issues
+> 
+> Consider testing your connection to see if it’s a more persistent problem. Try connecting to a simple URL like `http://example.com` to check if the problem lies with the URLs you're trying to access.
+> 
+> ### 7. Network Stability
+> 
+> Ensure that the network environment where your script is running is stable. Connection resets can occur due to network issues, especially if the browser server and your script are on different machines or containers.
+> 
+> ### 8. Use `asyncio.run()` Wisely
+> 
+> When using `asyncio.run()`, ensure that you are calling it only once in your entry point, and that no other asynchronous tasks are running concurrently unless appropriately managed with `asyncio`.
+> 
+> ### Example Wrapper for Complete Workflow
+> 
+> Here’s how you can structure your code for clarity:
+> 
+> ```python
+> import asyncio
+> from pyppeteer import launch
+> 
+> async def open_browser():
+>     browser = await launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
+>     page = await browser.newPage()
+>     return browser, page
+> 
+> async def fetch_url(page, url):
+>     try:
+>         response = await page.goto(url, {'timeout': 30000})
+>         content = await page.content()
+>         content_type = response.headers.get('content-type', '')
+>         return content, content_type
+>     except Exception as e:
+>         print(f"Error fetching URL: {e}")
+>         return None, None
+> 
+> async def finder_download(page, url, pathprefix):
+>     content, content_type = await fetch_url(page, url)
+>     # Add your content-type checks and file writing logic here...
+> 
+> async def main():
+>     browser, page = await open_browser()
+>     await finder_download(page, "http://example.com", "downloaded_example")
+>     await browser.close()
+> 
+> if __name__ == "__main__":
+>     asyncio.run(main())
+> ```
+> 
+> By restructuring your code in this way and ensuring that you follow these guidelines, you should be able to reduce the frequency of connection-related errors. If the issue persists, you may need to explore other factors such as the availability of the websites being accessed or specific network configurations.
+**user**:
+> Okay, that code worked, and I think the problem may have been from an unclosed Chromium browser. But now I run it and I get the error:
+> RuntimeWarning: coroutine 'open_browser.<locals>.intercept_response' was never awaited
+> 
+> But is added through page.on (`page.on('response', intercept_response)`), so how should I change that?
+**assistant**:
+> The warning you're seeing (`coroutine 'open_browser.<locals>.intercept_response' was never awaited`) occurs because the `intercept_response` function is an `async` coroutine, but it's being used as a callback in `page.on`, which doesn’t automatically await it.
+> 
+> To resolve this issue, you need to ensure that the callback function you provide to `page.on` is compatible with the event handling system. Pyppeteer expects a regular function (not an `async` function) for event listeners. To work around this, you can use an `async` function that runs the coroutine within it.
+> 
+> Here's how you can modify your code:
+> 
+> ### Update the Response Interceptor
+> 
+> Instead of directly passing the `intercept_response` coroutine to `page.on`, wrap it in a regular function that calls the coroutine:
+> 
+> ```python
+> async def intercept_response(response):
+>     try:
+>         headers = await response.headers()
+>         content_length = int(headers.get('content-length', '0'))
+>         if content_length > max_size:
+>             print(f"Download aborted: {response.url} exceeds size limit.")
+>             await response.abort()
+>     except Exception as e:
+>         print(f"Error intercepting response: {e}")
+> 
+> def handle_response(response):
+>     asyncio.create_task(intercept_response(response))
+> 
+> async def open_browser():
+>     browser = await launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
+>     page = await browser.newPage()
+>     
+>     # Set the maximum size limit for responses
+>     global max_size
+>     max_size = 100 * 1024 * 1024  # Example: 100 MB
+> 
+>     # Use the regular function for the event listener
+>     page.on('response', handle_response)
+>     
+>     return browser, page
+> ```
+> 
+> ### Explanation
+> 
+> 1. **Wrapping the Async Function**: The `handle_response` function is a standard Python function that wraps the asynchronous `intercept_response` function. Inside `handle_response`, we use `asyncio.create_task()` to create a new task that runs the coroutine without blocking the main event loop.
+> 
+> 2. **Global Variable**: The `max_size` variable is defined globally to make it accessible in the `intercept_response` function.
+> 
+> ### Benefit
+> 
+> This approach maintains the asynchronous nature of `intercept_response` while conforming to the event-driven model of Pyppeteer. With this change, you should no longer see the `RuntimeWarning` about the coroutine not being awaited.
+> 
+> ### Complete Example
+> 
+> Here’s the complete setup with the wrapper and interceptor in place:
+> 
+> ```python
+> import asyncio
+> from pyppeteer import launch
+> 
+> async def intercept_response(response):
+>     try:
+>         headers = await response.headers()
+>         content_length = int(headers.get('content-length', '0'))
+>         if content_length > max_size:
+>             print(f"Download aborted: {response.url} exceeds size limit.")
+>             await response.abort()
+>     except Exception as e:
+>         print(f"Error intercepting response: {e}")
+> 
+> def handle_response(response):
+>     asyncio.create_task(intercept_response(response))
+> 
+> async def open_browser():
+>     browser = await launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
+>     page = await browser.newPage()
+> 
+>     global max_size
+>     max_size = 100 * 1024 * 1024  # 100 MB size limit
+> 
+>     page.on('response', handle_response)
+>     
+>     return browser, page
+> 
+> async def fetch_url(page, url):
+>     try:
+>         response = await page.goto(url, {'timeout': 30000})
+>         content = await page.content()
+>         content_type = response.headers.get('content-type', '')
+>         return content, content_type
+>     except Exception as e:
+>         print(f"Error fetching URL: {e}")
+>         return None, None
+> 
+> async def finder_download(page, url, pathprefix):
+>     content, content_type = await fetch_url(page, url)
+>     # Add your content-type checks and file writing logic here...
+> 
+> async def main():
+>     browser, page = await open_browser()
+>     await finder_download(page, "http://example.com", "downloaded_example")
+>     await browser.close()
+> 
+> if __name__ == "__main__":
+>     asyncio.run(main())
+> ```
+> 
+> With this setup, you should no longer encounter the `RuntimeWarning`, and your interceptor logic will work as intended.
