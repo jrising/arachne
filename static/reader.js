@@ -32,7 +32,7 @@ function populateVoiceList($select) {
     }
 }
 
-function speak_ui(text, $select, pitch, rate) {
+function speak_ui(text, $select, pitch, rate, onend) {
     if (window.speechSynthesis.speaking) {
 	console.error("speechSynthesis.speaking");
 	return;
@@ -44,6 +44,8 @@ function speak_ui(text, $select, pitch, rate) {
     utterThis.voice = voice;
     utterThis.pitch = pitch;
     utterThis.rate = rate;
+
+    utterThis.onend = onend;
 
     window.speechSynthesis.speak(utterThis);
 }
@@ -115,13 +117,9 @@ async function speakStream($render, reader, voice, pitch, rate) {
     }
 
     if (speaking) {
-	lastutterance.onend = function(ev) {
-	    speechRecognition.start();
-	    $('#status').text("Listening.");
-	}
+	lastutterance.onend = startListening;
     } else {
-	speechRecognition.start();
-	$('#status').text("Listening.");
+	startListening();
     }
 }
 
@@ -169,6 +167,11 @@ async function respond(text) {
     speakStream($render, reader, voice, $('#pitch').val(), $('#rate').val());
 }
 
+function startListening() {
+    speechRecognition.start();
+    $('#status').text("Listening.");
+}
+
 if ("webkitSpeechRecognition" in window) {
     $(function() {
 	// Setup for note-taking
@@ -184,8 +187,13 @@ if ("webkitSpeechRecognition" in window) {
 	    window.speechSynthesis.cancel();
 	    fetch('/stop-stream', { method: 'POST' }).then((response) =>
 		{});
-	    speechRecognition.start();
-	    $('#status').text("Listening.");
+	    startListening();
+	}
+
+	function resetListening() {
+	    final_transcript = "";
+	    $("#final").html("");
+	    $("#interim").html("");
 	}
 
 	document.body.onkeydown = function(e) {
@@ -201,8 +209,7 @@ if ("webkitSpeechRecognition" in window) {
 
 	document.body.onclick = () => {
 	    if ($('#status').text() == "Waiting.") {
-		speechRecognition.start();
-		$('#status').text("Listening.");
+		startListening();
 	    } else {
 		stopSpeaking();
 	    }
@@ -217,8 +224,7 @@ if ("webkitSpeechRecognition" in window) {
 	speechRecognition.onend = () => {
 	    console.log("onend");
 	    if (final_transcript == "") {
-		speechRecognition.start();
-		$('#status').text("Listening.");
+		startListening();
 		return;
 	    }
 
@@ -239,7 +245,7 @@ if ("webkitSpeechRecognition" in window) {
 		if (final_transcript == "document") {
 		    $.getJSON('/reader_document', {log_filename: $('#log_filename').val(),
 						   document: $('#document').val()}, function(json) {
-			speak_ui(`The document has {json.total} pages and the next page is {json.nextpage}.`, $('#voice'), $('#pitch').val(), $('#rate').val());
+						       speak_ui(`The document has ${json.total} pages and the next page is ${json.nextpage}.`, $('#voice'), $('#pitch').val(), $('#rate').val(), startListening);
 		    });
 		} else {
 		    fetch('/reader_note', {
@@ -247,24 +253,20 @@ if ("webkitSpeechRecognition" in window) {
 			body: formData
 		    });
 		}
-		    
-		final_transcript = "";
-		$("#final").html("");
-		$("#interim").html("");
-		speechRecognition.start();
-		$('#status').text("Listening.");
+
+		resetListening();
+		startListening();
 		return;
 	    } else if (/^(next\s)?page(\splease)?$/.test(final_transcript) ||
 		       /^summarize$/.test(final_transcript) ||
 		       /^page\s+\d+(\splease)?$/.test(final_transcript)) {
 		respond(final_transcript).then(textout => {
-		    final_transcript = "";
-		    $("#final").html("");
-		    $("#interim").html("");
+		    resetListening();
 		    $('#status').text("Responding.");
 		}).catch(error => console.error(error));
 	    } else {
-		speak_ui("I didn't catch that.", $('#voice'), $('#pitch').val(), $('#rate').val());
+		speak_ui("I didn't catch that.", $('#voice'), $('#pitch').val(), $('#rate').val(), startListening);
+		resetListening();
 		return;
 	    }
 
