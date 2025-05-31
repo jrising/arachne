@@ -343,63 +343,75 @@ def load_reader_metadata(document, default_log_filename):
 @app.route('/completion_reader', methods=['GET', 'POST'])
 def completion_reader():
     if request.method == "POST":
-        data = request.form
+        try:
+            data = request.form
 
-        metadata = load_reader_metadata(data['document'], data['log_filename'])
-        metadatapath = data['document'].replace('.pdf', '.json')
+            metadata = load_reader_metadata(data['document'], data['log_filename'])
+            metadatapath = data['document'].replace('.pdf', '.json')
 
-        if 'page' in data:
-            nextpage = int(data['page'])
-        else:
-            nextpage = metadata.get('next-page', 0) + 1
-        metadata['next-page'] = nextpage
-        with open(metadatapath, 'w') as fp:
-            json.dump(metadata, fp, indent=4)
-            
-        reader = PdfReader(data['document'])
-
-        page = reader.pages[nextpage - 1]
-
-        ## Process images
-        imagetexts = []
-        for count, image_file_object in enumerate(page.images):
-            if len(image_file_object.data) > 1024 * 1024 * 4:
-                detail = "low"
+            if 'page' in data:
+                nextpage = int(data['page'])
             else:
-                detail = "high"
-            encoded = base64.b64encode(image_file_object.data).decode("utf-8")
-
-            completion = openai.ChatCompletion.create(
-                model="gpt-4o",
-                messages=[
-                    { "role": "user",
-                      "content": [
-                          { "type": "text", "text": "Please describe this image in detail." },
-                          { "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{encoded}",
-                                "detail": detail
-                            }}]}])
-
-            imagetexts.append(completion.choices[0].message.content)
+                nextpage = metadata.get('next-page', 0) + 1
+            metadata['next-page'] = nextpage
+            with open(metadatapath, 'w') as fp:
+                json.dump(metadata, fp, indent=4)
+        except:
+            return "Cannot load metadata."
             
-        text = page.extract_text(extraction_mode="layout", layout_mode_space_vertically=False, layout_mode_strip_rotated=False)
-        if nextpage == 1:
-            prompt = "Here is the first page of a PDF, in a text-based layout:\n===\n" + text + "\n===\n"
-        else:
-            prompt = f"Here is page {nextpage} of a PDF, in a text-based layout:\n===\n" + text + "\n===\n"
-        if len(imagetexts) > 0:
-            prompt += "In addition, the page has the following images, as described below:\n===\n" + "\n===\n".join(imagetexts) + "\n===\n"
+        try:
+            reader = PdfReader(data['document'])
 
-        if os.path.exists(os.path.join("logs", metadata['log-filename'])):
-            messages = chatlog.load_log(utils.get_default_system_message(), os.path.join("logs", metadata['log-filename']))
-            history = messages[-2:]
-        else:
-            history = []
+            page = reader.pages[nextpage - 1]
+            text = page.extract_text(extraction_mode="layout", layout_mode_space_vertically=False, layout_mode_strip_rotated=False)
+        except:
+            return "Cannot read PDF."
             
-        strm = stream(prompt + "Please write this in a stream appropriate for a text-to-speech reader which does not handle symbols well (it names each one). Use only the provided text, and include everything except background images unless there are number-heavy tables, which you can summarize. Incorporate abbreviated footnote material into the text stream and specify references as Name et al. YYYY (for academic papers) or Report Title YYYY (for institution reports).", history, None, on_stream_end=lambda response: log_summary(prompt, response, metadata['log-filename']))
+        try:
+            ## Process images
+            imagetexts = []
+            for count, image_file_object in enumerate(page.images):
+                if len(image_file_object.data) > 1024 * 1024 * 4:
+                    detail = "low"
+                else:
+                    detail = "high"
+                encoded = base64.b64encode(image_file_object.data).decode("utf-8")
 
-        return Response(strm, mimetype='text/event-stream')
+                completion = openai.ChatCompletion.create(
+                    model="gpt-4o",
+                    messages=[
+                        { "role": "user",
+                          "content": [
+                              { "type": "text", "text": "Please describe this image in detail." },
+                              { "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{encoded}",
+                                    "detail": detail
+                                }}]}])
+
+                imagetexts.append(completion.choices[0].message.content)
+        except:
+            return "Cannot process images."
+
+        try:
+            if nextpage == 1:
+                prompt = "Here is the first page of a PDF, in a text-based layout:\n===\n" + text + "\n===\n"
+            else:
+                prompt = f"Here is page {nextpage} of a PDF, in a text-based layout:\n===\n" + text + "\n===\n"
+            if len(imagetexts) > 0:
+                prompt += "In addition, the page has the following images, as described below:\n===\n" + "\n===\n".join(imagetexts) + "\n===\n"
+
+            if os.path.exists(os.path.join("logs", metadata['log-filename'])):
+                messages = chatlog.load_log(utils.get_default_system_message(), os.path.join("logs", metadata['log-filename']))
+                history = messages[-2:]
+            else:
+                history = []
+            
+            strm = stream(prompt + "Please write this in a stream appropriate for a text-to-speech reader which does not handle symbols well (it names each one). Use only the provided text, and include everything except background images unless there are number-heavy tables, which you can summarize. Incorporate abbreviated footnote material into the text stream and specify references as Name et al. YYYY (for academic papers) or Report Title YYYY (for institution reports).", history, None, on_stream_end=lambda response: log_summary(prompt, response, metadata['log-filename']))
+
+            return Response(strm, mimetype='text/event-stream')
+        except:
+            return "Cannot create translation."
     else:
         return completion()
 
