@@ -265,8 +265,8 @@ if ("webkitSpeechRecognition" in window) {
 		    $('#status').text("Responding.");
 		}).catch(error => console.error(error));
 	    } else {
-		speak_ui("I didn't catch that.", $('#voice'), $('#pitch').val(), $('#rate').val(), startListening);
 		resetListening();
+		speak_ui("I didn't catch that.", $('#voice'), $('#pitch').val(), $('#rate').val(), startListening);
 		return;
 	    }
 
@@ -303,4 +303,28 @@ if ("webkitSpeechRecognition" in window) {
 } else {
     $("#status").text("Speech Recognition Not Available");
     upgrade();
+}
+
+if ('mediaSession' in navigator) {
+    navigator.mediaSession.setActionHandler('play', function() {
+	respond("NEXT").then(textout => {
+	    resetListening();
+	    $('#status').text("Responding.");
+	}).catch(error => console.error(error));
+    });
+
+    navigator.mediaSession.setActionHandler('pause', function() {
+	speak_ui("I don't know how to go to pause yet.", $('#voice'), $('#pitch').val(), $('#rate').val(), startListening);
+    });
+    navigator.mediaSession.setActionHandler('previoustrack', function() {
+	speak_ui("I don't know how to go to the previous page yet.", $('#voice'), $('#pitch').val(), $('#rate').val(), startListening);
+    });
+    
+    navigator.mediaSession.setActionHandler('nexttrack', function() {
+	stopSpeaking();
+	respond("NEXT").then(textout => {
+	    resetListening();
+	    $('#status').text("Responding.");
+	}).catch(error => console.error(error));
+    });
 }
