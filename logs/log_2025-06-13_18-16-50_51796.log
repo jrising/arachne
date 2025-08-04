@@ -1,0 +1,157 @@
+**user**:
+> The following is an email or email thread that I would like to respond
+> to:
+> Conversation opened. 5 messages. All messages read.
+> 
+> Skip to content
+> Using Gmail with screen readers
+> 
+> 39 of 408
+> Questions about optimizing with OptiMimi
+> Inbox
+> 
+> 温心 <wenxin2001m@stu.pku.edu.cn>
+> Tue, Jun 3, 4:26 AM (10 days ago)
+> to jrising
+> 
+> Hello Dr. Rising:
+> 
+> Thank you for taking the time to read this email. I'm a PhD student majoring in environmental science. Recently, I'm working on the MimiFUND/DICE model and trying to optimize it with the temperature constraint (for example, limiting the temperature before 2100 to 1.5 degree). I found that the optimizing time is too long and noticed your reply on Mimi forum to parameterize the MIU as "alpha +beta*t", which can shorten the total time. However, As a beginner of Julia language, when I set the path of MIU in this way, I encountered the problem of having difficulty finding the initial point. When I removed the constraints, I found that the solution time did not shorten either.
+> 
+> My code is as follows:
+> α = 0.
+> β = 0.005
+> function objective(model::Model)
+>     model[:welfare, :CUMCEMUTOTPER][100]
+> end
+> 
+> constraint = convert(Vector{Function}, [model -> (model[:climatedynamics, :TATM][100] - 4)])
+> 
+> optprob = problem(m, [:emissions], [:MIU], [0., 0.], [1., 1.], objective, constraints=constraint)
+> 
+> (maxf, maxx) = solution(optprob, () -> [α+β*i for i in 1:100])
+> 
+> print(maxf)
+> print(maxx)
+> 
+> I would be most grateful if I could receive your help on this issue.
+> 
+> Sincerely,
+> Xin Wen
+> 
+> 
+> James Rising <jrising@udel.edu>
+> Fri, Jun 6, 8:00 AM (7 days ago)
+> to 温心
+> 
+> Hi Xin Wen,
+> 
+> Thanks for your question. OptiMimi takes the dimensions of the parameters that it is asked to optimize from the component definitions, so when you setup your problem to modify the MIU parameter of the emissions component, you are trying to solve a problem with 60 scalar parameters (since it tries to find a different MIU value for each time period).
+> 
+> One way you can fix this is to make a new component. This component would define α and β as its parameters, and within its run_timestep function it would fill in the values of an MIU variable, which would then be connected to the emissions component.
+> 
+> The last time I optimized DICE, I used the "paramtrans" option in problem, like this:
+>     optprob = problem(model, [:emissions], [:MIU], zeros(3), 0.99 * ones(3), objective,
+>                       paramtrans=convert(Vector{Function}, [(params) -> [0; params; params[3] * ones(96)]]))
+> 
+> James Rising
+> School of Marine Science & Policy, UDel
+> http://existencia.org/pro, +1 202 657 2377
+> 
+> 
+> 温心
+> Sat, Jun 7, 10:09 PM (6 days ago)
+> to James
+> 
+> Hello Dr. Rising,
+> 
+> Thanks for your reply! Your suggestion helps me a lot. However, I have another problem. When I set the constraint that the temperature rise in 2100 should not exceed 1.5 degrees Celsius, I found that the model encountered the problem of not being able to find the initial solution. I have tried the methods of relaxing the constraints and modifying the initial point, but none of them worked. However, when my constraint is that the emission reduction rate does not exceed 100%, the model can be solved normally. I want to know what causes this problem? Is this related to the difference in constraints?
+> 
+> Sincerely,
+> Xin Wen
+> 
+> 
+> 发件人：James Rising <jrising@udel.edu>
+> 发送日期：2025-06-06 20:00:00
+> 收件人："温心" <wenxin2001m@stu.pku.edu.cn>
+> 主题：Re: Questions about optimizing with OptiMimi
+> 
+> 
+> James Rising <jrising@udel.edu>
+> Mon, Jun 9, 3:47 PM (4 days ago)
+> to 温心
+> 
+> Hi Xin Wien,
+> 
+> Optimizers can fail for a lot of different reasons. The easiest solution in your case is to start by finding one set of parameters that satisfies the constraint by hand. Then you can provide these as an initial starting point to the optimizer, so that it can explore the parameter space without the constraint failing.
+> 
+> James Rising
+> School of Marine Science & Policy, UDel
+> http://existencia.org/pro, +1 202 657 2377
+> 
+> 
+> 温心
+> Jun 12, 2025, 7:19 AM (1 day ago)
+> to James
+> 
+> Hello Dr. Rising,
+> 
+> Recently, I have been modifying my constraints based on your suggestions. However, when I take the temperature rise result of the unconstrained optimization as the constraint and the optimized carbon tax as the initial point for solution, I still cannot find the initial solution, which confuses me very much.
+> 
+> Furthermore, I have discovered a problem. Looser constraints can solve it, but stricter constraints make it difficult to find the initial solution. For instance, under unconstrained optimization, the optimal carbon tax for the 100th period is $40 per ton. If I constrain the carbon tax for the 100th period to be no more than $30 per ton, the optimization result can be obtained. However, if I constrain the carbon tax for the 100th period to be no less than $50 per ton, the model encounters the problem of being unable to obtain the initial solution. It is not surprising that when I was conducting the temperature rise constraint before, I also found that the stricter temperature rise constraint was difficult to obtain the initial solution, while the looser constraint did not affect the optimization result.
+> 
+> My codes are as follows:
+> m = MimiDICE2016R2.get_model()
+> function objective(model::Model)
+>     model[:welfare, :CUMCEMUTOTPER][100]
+> end
+> constraint = convert(Vector{Function}, [model -> (model[:climatedynamics, :TATM][50] - 10)])
+> optprob = problem(m, [:emissions], [:MIU], zeros(3), 0.99 * ones(3), objective;
+>                     constraints = constraint, paramtrans = convert(Vector{Function}, [(params) -> [0; params; params[3] * ones(96)]]))
+> (maxf, maxx) = solution(optprob, () -> zeros(3))
+> run(m)
+> print(maxf)
+> print(maxx)
+> 
+> As a beginner in the Julia language, I still have many problems in constrained optimization. I hope to receive your further reply!
+> 
+> Sincerely,
+> Xin Wen
+> 
+> tahmid@udel.edu
+> Displaying Nature Paper - R1 - Referee Responses.docx. Page 1 of 15
+> 
+> Please draft for me an email response to the following email or email
+> thread. The email will come from me. Please keep the text
+> professional, dispassionate, and to-the-point.
+> 
+> If a time to chat by zoom is in order, ask the person to find a time
+> at https://zcal.co/i/SoJjSjU0.
+> 
+> Below is very brief notes on what should be included in the response.
+> Suggest using the solution found under a $40 constraint for the $50 and above constraint, by replacing "() -> zeros(3)".
+**assistant**:
+> Certainly! Here's a draft for your email response:
+> 
+> ---
+> 
+> Subject: Re: Questions about optimizing with OptiMimi
+> 
+> Hi Xin Wen,
+> 
+> Thank you for sharing your progress and insights on the optimization challenges you're facing. It seems like you're dealing with some typical issues that arise with tight constraints in optimization problems.
+> 
+> For the specific issue of setting an initial solution when the constraint is tight, I recommend using the solution you found under the $40 constraint as the starting point for your $50 and above constraint. This means updating your call to the `solution` function to replace `() -> zeros(3)` with the parameters from the $40 solution, which might provide a feasible initial point for the stricter constraint.
+> 
+> If you'd like to discuss this further with a bit more interactivity, feel free to schedule a Zoom meeting with me using this link: https://zcal.co/i/SoJjSjU0.
+> 
+> Best regards,
+> 
+> James Rising  
+> School of Marine Science & Policy, UDel  
+> http://existencia.org/pro  
+> +1 202 657 2377
+> 
+> --- 
+> 
+> Feel free to adjust any details if needed.

@@ -1,0 +1,42 @@
+**assistant**:
+> The most relevant past discussion is from **2025-02-05 10:19:37**, where James consolidated multiple
+**user**:
+> I am adding to a CSV file in python with:
+> ```
+> done = pd.read_csv(summary_file)
+> ...
+> done = pd.concat([done, pd.DataFrame(results)], ignore_index=True)
+> ```
+> But I keep seeing additional columns added with names of the form "Unnamed: 0.##", in addition to my normal columns. How can I stop this from happening?
+**assistant**:
+> The "Unnamed" columns you're seeing typically appear when you accidentally include an index column from a DataFrame that is saved and then read back. In your case, it seems the issue may arise from how the CSV is initially read or how DataFrames are concatenated and saved. Here's how you can address this issue:
+> 
+> 1. **Ensure the CSV does not save index columns:**
+> 
+>    When you save a DataFrame to a CSV file, set the `index=False` parameter to avoid saving the index as a separate column. For example:
+> 
+>    ```python
+>    done.to_csv(summary_file, index=False)
+>    ```
+> 
+> 2. **Be careful during concatenation:**
+> 
+>    When using `pd.concat()`, make sure that the DataFrames being concatenated have consistent columns. Before concatenating, inspect the `results` DataFrame to ensure it doesn't have an extra index or additional columns that cause alignment issues.
+> 
+> 3. **Verify the reading process:**
+> 
+>    When reading the CSV file, ensure that you're not setting an unnecessary index that might clash with the DataFrame structure:
+> 
+>    ```python
+>    done = pd.read_csv(summary_file)
+>    ```
+> 
+> 4. **Drop unwanted columns:**
+> 
+>    If "Unnamed" columns still appear after following the above steps, you can programmatically drop them as a last resort:
+> 
+>    ```python
+>    done = done.loc[:, ~done.columns.str.startswith('Unnamed')]
+>    ```
+> 
+> By addressing these points, you should be able to prevent unwanted "Unnamed" columns from appearing in your DataFrame.

@@ -49,10 +49,10 @@ def converse(messages, assistant_response, user_response, max_tokens):
 def make_log(log_filename, ixwriter):
     filenameparts = log_filename[4:-4].split('_')
     messages = [{"role": "system", "content": "You are a helpful, super-intelligent AI assistant, called \"Arachne\" (she/her), for James Rising, an interdisciplinary modeler and father of two boys. You support James in pursuing global sustainability and a vibrant, enlightened life. You are creative, knowledgeable, and friendly, and not afraid to express opinions based on your technophilic, humanist good will for James and the future.\n\nAnswer as directly as possible, or ask for clarification. Your answer will be rendered as Markdown. Log time: " + filenameparts[0] + " " + filenameparts[1].replace('-', ':')}]
-
+    
     prompt1 = open('prompts/makelog1.md', 'r').read()
     content = open('logs/' + log_filename, 'r').read()
-
+    
     tokenlen = num_tokens_from_string(content)
     if tokenlen > 4097 - 500 - 350: # error of 350 observed
         messages = chatlog.load_log('', 'logs/' + log_filename)
@@ -67,9 +67,9 @@ def make_log(log_filename, ixwriter):
             else:
                 content += message['content'][:allowedlen] + "..."
     
-    extra = "\n\nPlease respond in the following template:\n\nSynopsis: [SYNOPSIS]\n"
+    extra = "\nPlease respond in the following template:\n\nSynopsis: [SYNOPSIS]\n"
     
-    messages.append({"role": "user", "content": prompt1 + "\n" + content + extra})
+    messages.append({"role": "user", "content": prompt1 + "\n===\n" + content + "\n===\n" + extra})
     completion = openai.ChatCompletion.create(model="gpt-4o-mini", messages=messages,
                                               max_tokens=500, temperature=1)
     response1 = completion['choices'][0]['message']['content']
@@ -84,11 +84,11 @@ def make_log(log_filename, ixwriter):
     if not valid_synopsis(content, synopsis):
         print("Invalid synopsis: " + response1)
         return False
-
+    
     prompt2 = open('prompts/makelog2.md', 'r').read()
     response2 = converse(messages, response1, prompt2, 50)
     response2 = response2.lstrip("#* \t\n")
-
+    
     allowed_attempts = 3
     logline = None
     while allowed_attempts > 0:
@@ -102,21 +102,21 @@ def make_log(log_filename, ixwriter):
         if len(logline) > 200:
             response2 = converse(messages, response2, "This response was significantly longer than the log entry I want to use. Can you try a short phrase for each digest? Again, use the template:\n\nLog: [Digest James]; [Digest Arachne]\n", 50)
             continue
-            
+        
         if len(logline.split('; ')) == 1:
             response2 = converse(messages, response2, "This response did not exactly follow the template, due to the lack of a semicolon between the digests. Please use the template:\n\nLog: [Digest James]; [Digest Arachne]\n", 50)
             continue
-
+        
         if len(logline.split('; ')) > 2:
             response2 = converse(messages, response2, "This response did not exactly follow the template, due to multiple semicolons when there needs to be only one. Summarize all of James's comments together and all of your comments together. Please use the template:\n\nLog: [Digest James]; [Digest Arachne]\n", 50)
             continue
-
+        
         break
     
     if not valid_logline(content, synopsis, logline):
         print("Invalid logline: " + response2)
         return False
-
+    
     prompt3 = open('prompts/makelog3.md', 'r').read()
     response3 = converse(messages, response2, prompt3, 50)
     response3 = response3.lstrip("#* \t\n")
@@ -133,13 +133,13 @@ def make_log(log_filename, ixwriter):
             titles[log_filename[4:14] + ' ' + log_filename[15:23].replace('-', ':')] = title
             with open("database/logs/titles.pkl", 'wb') as fp:
                 pickle.dump(titles, fp)
-
+                
     with open("database/logs/running.log", 'a+') as fp:
         fp.write(log_filename[4:14] + ' ' + log_filename[15:23].replace('-', ':') + ': ' + logline + "\n")
     with open("database/logs/" + log_filename, 'w') as fp:
         fp.write(synopsis + "\n")
     ixwriter.add_document(path="logs/" + log_filename, line=logline, content=synopsis)
-        
+    
     return True
     
 if __name__ == '__main__':

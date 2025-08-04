@@ -1,0 +1,51 @@
+**assistant**:
+> The most relevant past discussion is the one from **2025-06-11 10:33:33**.  This conversation detail
+**user**:
+> Is there an easy way to label a log axis (in this case, representing GBP pounds, ranging from 1e6 to 1e10) in ggplot so that it looks better than "1e+07" etc.?
+**assistant**:
+> Definitely! You can use the `scales` package in ggplot2 to format your axis labels in a more readable way. For a log axis representing GBP in this range, you might want to display the labels as "1M", "10M", "100M", "1B", etc. Here's how you can do that:
+> 
+> ```r
+> library(ggplot2)
+> library(scales)
+> 
+> # Sample data
+> data <- data.frame(x = c(1, 2, 3), y = c(1e6, 1e8, 1e10))
+> 
+> # Plot with custom labeling using scales::label_number_si()
+> ggplot(data, aes(x, y)) +
+>   geom_point() +
+>   scale_y_continuous(trans = "log10", labels = label_number_si()) +
+>   labs(y = "Amount in GBP")
+> ```
+> 
+> In this example, `label_number_si()` from the `scales` package handles scientific notation robustly, converting large numbers into a readable format like "1M" and "1B". You can also customize the labels further by using `label_format()` if you have specific formatting needs.
+**user**:
+> I get an error: Error:
+> ! `label_number_si()` was deprecated in scales 1.2.0 and is now defunct.
+> ℹ Please use the `scale_cut` argument of `label_number()` instead.
+**assistant**:
+> You're right! Since `label_number_si()` has been deprecated, you can use the `scale_cut` argument in `label_number()` to achieve similar functionality. Here’s how you can adjust your ggplot code to format the y-axis labels accordingly:
+> 
+> ```r
+> library(ggplot2)
+> library(scales)
+> 
+> # Sample data
+> data <- data.frame(x = c(1, 2, 3), y = c(1e6, 1e8, 1e10))
+> 
+> # Define custom breaks for your log scale
+> breaks <- c(1e6, 1e7, 1e8, 1e9, 1e10)
+> 
+> # Plot with custom labeling using label_number with scale_cut
+> ggplot(data, aes(x, y)) +
+>   geom_point() +
+>   scale_y_continuous(
+>     trans = "log10", 
+>     breaks = breaks,
+>     labels = label_number(suffix = " GBP", scale_cut = cut_short_scale())  # Using cut_short_scale
+>   ) +
+>   labs(y = "Amount in GBP")
+> ```
+> 
+> In this example, `label_number()` now uses the `cut_short_scale()` function, which formats numbers in a more readable way, e.g., "1M", "10M", "100M", and "1B", while appending " GBP" for currency clarity. Adjust the breaks as per your requirements if you want to customize further!

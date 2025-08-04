@@ -1,0 +1,56 @@
+**user**:
+> I am using `asyncio.run` in python, but today that just stalls. When I interrupt it with control-C, I see:
+> ```
+> ^CTraceback (most recent call last):
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/runners.py", line 118, in run
+>     return self._loop.run_until_complete(task)
+>            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 725, in run_until_complete
+>     return future.result()
+>            ~~~~~~~~~~~~~^^
+> asyncio.exceptions.CancelledError
+> 
+> During handling of the above exception, another exception occurred:
+> 
+> Traceback (most recent call last):
+>   File "/Users/admin/projects/ailit/src/step4-finder.py", line 47, in <module>
+>     count -= asyncio.run(main())
+>              ~~~~~~~~~~~^^^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/runners.py", line 195, in run
+>     return runner.run(main)
+>            ~~~~~~~~~~^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/runners.py", line 123, in run
+>     raise KeyboardInterrupt()
+> KeyboardInterrupt
+> ```
+> What can I do to fix this?
+**assistant**:
+> The issue you're experiencing seems to be related to the `asyncio` event loop stalling or hanging, which can occur for various reasons depending on how your asynchronous code is structured. Here are some suggestions to help you troubleshoot and fix the problem:
+> 
+> 1. **Review Awaited Coroutines**: Make sure all awaited coroutines in your `main()` function and any other async functions it calls are truly asynchronous. If there's any I/O or long-running computation that is not asynchronous, it can block the event loop.
+> 
+> 2. **Check for Deadlocks**: Ensure that there are no circular waits or deadlocks occurring within your coroutines. This can happen, for example, if two coroutines are each waiting for the other to finish.
+> 
+> 3. **Add Logging**: Insert logging statements before and after key asynchronous calls in your `main()` function and its dependencies. This may help you identify where the code is getting stuck.
+> 
+> 4. **Timeouts**: If possible, add timeouts to your asynchronous operations to detect when something is taking too long. You can use `asyncio.wait_for()` to wrap a coroutine with a timeout.
+> 
+>    ```python
+>    async def main():
+>        try:
+>            await asyncio.wait_for(async_function(), timeout=10)  # Replace async_function with your coroutine
+>        except asyncio.TimeoutError:
+>            print("Operation timed out")
+>    ```
+> 
+> 5. **Debugging Tools**: Use debugging tools such as `pdb` or `ipdb` to step through your code and inspect variables live to determine precisely where the issue occurs.
+> 
+> 6. **Check for Infinite Loops**: Verify that there are no unintentional infinite loops within your async functions. A common mistake can be inadvertently creating a while loop that never satisfies its exit condition.
+> 
+> 7. **Simplify Code Structure**: If possible, try to create a minimal version of your code that isolates the problem. This could make it easier to identify where the issue resides.
+> 
+> 8. **Concurrency and Threads**: Ensure that your code doesn't improperly mix use of threads and asyncio, which can sometimes cause unexpected behavior if not handled correctly.
+> 
+> 9. **Environment and Dependencies**: Ensure that your Python environment and library versions are up to date and consistent. There might be differences in behavior between Python versions or `asyncio` library updates.
+> 
+> Once you've attempted these suggestions, try running your code again to see if the issue persists. If it does, providing additional context or a simplified version of your code might help in pinpointing the problem further.

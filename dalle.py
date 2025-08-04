@@ -9,8 +9,7 @@ client = OpenAI()
 
 response = client.images.generate(
   model="dall-e-3",
-    prompt="A teenage Puritan girl in a cloak follows a trail into the woods at dusk. Further along the trail, firelight a visible but mostly hidden behind trees. As a colorful, detailed crayon drawing.",
-#"A lego version of the Greek goddess Artemis, with a bow and a crescent moon headband, against a white background.",
+    prompt="A caucasian man in a t-shirt with dark brown hair sitting on a couch with a laptop on his lap. A thin 5-year-old boy with brown hair and a dinosaur shirt is climbing on top of the couch onto his shoulders. A stocky 3-year-old boy with dirty blonde hair with a train on his shirt is next to the man, reaching out to the keys on the keyboard. As a colorful, detailed crayon drawing.",
   size="1024x1024",
   quality="standard",
   n=1,

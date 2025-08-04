@@ -1,0 +1,307 @@
+**user**:
+> I'm getting the error:
+> ```
+> Exception ignored in atexit callback <function Launcher.launch.<locals>._close_process at 0x16899aac0>:
+> Traceback (most recent call last):
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/launcher.py", line 153, in _close_process
+>     self._loop.run_until_complete(self.killChrome())
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 700, in run_until_complete
+>     self._check_closed()
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+>     raise RuntimeError('Event loop is closed')
+> RuntimeError: Event loop is closed
+> <sys>:0: RuntimeWarning: coroutine 'Launcher.killChrome' was never awaited
+> RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+> ```
+> erratically when I use pyppeteer. How can I handle that?
+**assistant**:
+> It looks like you're experiencing an error related to the closing of the event loop when using Pyppeteer, which is a common issue in asynchronous programming with Python. This error typically happens when the program tries to perform asynchronous actions (like closing processes) after the event loop has already been closed.
+> 
+> Here are a few steps you could take to handle this:
+> 
+> 1. **Ensure Proper Shutdown:** Make sure that your program completes all the required tasks with Pyppeteer before the event loop is closed. This often involves ensuring all coroutines are awaited and tasks are finished before the loop shutdown.
+> 
+> 2. **Explicit Close Handling:** Explicitly handle the shutdown of Pyppeteer and the closing of the event loop. You can do this by wrapping your main function in a `try...finally` block to ensure proper cleanup:
+>    ```python
+>    import asyncio
+>    from pyppeteer import launch
+> 
+>    async def main():
+>        browser = await launch()
+>        # Your code here...
+>        await browser.close()
+> 
+>    if __name__ == '__main__':
+>        loop = asyncio.get_event_loop()
+>        try:
+>            loop.run_until_complete(main())
+>        finally:
+>            loop.run_until_complete(loop.shutdown_asyncgens())
+>            loop.close()
+>    ```
+> 
+> 3. **Check Event Loop Status:** Before calling any async action during shutdown, check if the event loop is still running:
+>    ```python
+>    if loop.is_closed():
+>        # Handle or log the situation
+>        pass
+>    else:
+>        loop.run_until_complete(async_action())
+>    ```
+> 
+> 4. **Handle Atexit Callbacks:** Use a boolean flag to skip the `atexit` callback if the event loop is already closed, check this during cleanup tasks.
+> 
+> 5. **Update Pyppeteer:** Ensure you're using the latest version of Pyppeteer, as this could be a known issue resolved in a later release.
+> 
+> 6. **Alternative Async Wrapper:** Consider using `asyncio.run()` if you're using Python 3.7+, as it takes care of setting up and tearing down the event loop, which might handle the lifecycle more gracefully:
+>    ```python
+>    import asyncio
+>    from pyppeteer import launch
+> 
+>    async def main():
+>        browser = await launch()
+>        # Your code here...
+>        await browser.close()
+> 
+>    if __name__ == '__main__':
+>        asyncio.run(main())
+>    ```
+> 
+> These steps should help manage the event loop more effectively and prevent the issue you're encountering. Let me know if you need further assistance!
+**user**:
+> Here's my setup, which I think matches what you describe:
+> My outer loop, where I run a browser multiple times:
+> ```
+> if platform.system() == "Darwin":
+>     asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+> 
+> for index, row in verdicts.iterrows():
+>         print(row.DOI)
+>         result = asyncio.run(finder.finder_pdf(row.DOI))
+>         print(result)
+>         if result == 'break':
+>             break
+> ```
+> 
+> And my top-level processing function:
+> ```
+> async def finder_pdf(document):
+>     browser, page = await open_browser()
+> 
+>     try:
+>         result = await finder_pdf_helper(document, page)
+>         return result
+>     finally:
+>         await browser.close()
+> ```
+> 
+> Now, my error occurs when "break" is returned from `finder_pdf_helper`. I see "break" printed, and then the exception happens after that (so, fully outside of my top-level code. But I use the `finally` block to try to make sure that `browser.close()` is always called. 
+> 
+> Here's the full exception from my most recent test:
+> ```
+> break
+> Exception ignored in atexit callback <function Launcher.launch.<locals>._close_process at 0x1662e2980>:
+> Traceback (most recent call last):
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/launcher.py", line 153, in _close_process
+>     self._loop.run_until_complete(self.killChrome())
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 700, in run_until_complete
+>     self._check_closed()
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+>     raise RuntimeError('Event loop is closed')
+> RuntimeError: Event loop is closed
+> <sys>:0: RuntimeWarning: coroutine 'Launcher.killChrome' was never awaited
+> RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+> Exception ignored in atexit callback <function Launcher.launch.<locals>._close_process at 0x164458180>:
+> Traceback (most recent call last):
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/launcher.py", line 153, in _close_process
+>     self._loop.run_until_complete(self.killChrome())
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 700, in run_until_complete
+>     self._check_closed()
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+>     raise RuntimeError('Event loop is closed')
+> RuntimeError: Event loop is closed
+> Exception ignored in atexit callback <function Launcher.launch.<locals>._close_process at 0x1640faac0>:
+> Traceback (most recent call last):
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/launcher.py", line 153, in _close_process
+>     self._loop.run_until_complete(self.killChrome())
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 700, in run_until_complete
+>     self._check_closed()
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+>     raise RuntimeError('Event loop is closed')
+> RuntimeError: Event loop is closed
+> ```
+**assistant**:
+> The issue you're encountering seems to stem from the fact that the asynchronous cleanup (specifically `browser.close()`) is not being awaited before the program exits, leading to the error about the event loop being closed. Since Python’s `asyncio` does not interleave invocations of `asyncio.run()`, it is crucial to ensure that all asynchronous tasks finish before exiting the loop.
+> 
+> Here's how you can update your code to handle this correctly:
+> 
+> 1. **Use a Single Event Loop**: Instead of calling `asyncio.run()` multiple times within a loop, consider using a single event loop for the entire process.
+> 
+> 2. **Manage the Browser Instance**: Open the browser outside the for loop and reuse it, closing it only after all iterations are complete.
+> 
+> Here's a modified version of your code:
+> 
+> ```python
+> import asyncio
+> import platform
+> from pyppeteer import launch
+> 
+> async def open_browser():
+>     browser = await launch()
+>     page = await browser.newPage()
+>     return browser, page
+> 
+> async def finder_pdf_helper(document, page):
+>     # Your implementation of this function
+>     pass
+> 
+> async def finder_pdf(document, browser):
+>     page = await browser.newPage()
+>     
+>     try:
+>         result = await finder_pdf_helper(document, page)
+>         return result
+>     finally:
+>         await page.close()  # Close the page, not the browser
+> 
+> async def main():
+>     if platform.system() == "Darwin":
+>         asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+> 
+>     browser, _ = await open_browser()
+> 
+>     try:
+>         for index, row in verdicts.iterrows():
+>             print(row.DOI)
+>             result = await finder_pdf(row.DOI, browser)
+>             print(result)
+>             if result == 'break':
+>                 break
+>     finally:
+>         await browser.close()  # Close the browser once after the loop is finished
+> 
+> if __name__ == '__main__':
+>     asyncio.run(main())
+> ```
+> 
+> ### Key Changes:
+> - **Reusing the Browser**: The browser instance is opened once before the loop and closed after all operations.
+> - **Closing the Page**: Each time a new page is opened for processing, it is closed after use, rather than the entire browser.
+> - **Unified Event Loop**: By using a single `asyncio.run(main())`, you ensure that the event loop is properly managed throughout the script's execution.
+> 
+> ### Benefits:
+> - This implementation avoids reinitializing the browser multiple times, which can lead to overhead and potential resource leaks.
+> - You ensure that all necessary cleanup occurs without prematurely closing the event loop.
+> 
+> Run your code with these changes, and it should resolve the exception you're encountering. Let me know if you need further assistance!
+**user**:
+> Okay, I've reorganized this way, but I get a new error:
+> ```
+> Traceback (most recent call last):
+>   File "/Users/admin/projects/aiiter/litreview3.py", line 37, in <module>
+>     asyncio.run(main())
+>     ~~~~~~~~~~~^^^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/runners.py", line 195, in run
+>     return runner.run(main)
+>            ~~~~~~~~~~^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/runners.py", line 118, in run
+>     return self._loop.run_until_complete(task)
+>            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 725, in run_until_complete
+>     return future.result()
+>            ~~~~~~~~~~~~~^^
+>   File "/Users/admin/projects/aiiter/litreview3.py", line 27, in main
+>     result = await finder.finder_pdf(row.DOI, browser, targetpath, statuspath)
+>              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>   File "/Users/admin/projects/aiiter/logic/finder.py", line 170, in finder_pdf
+>     await page.close()
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/page.py", line 1432, in close
+>     raise PageError('Protocol Error: Connection Closed. ' 'Most likely the page has been closed.')
+> pyppeteer.errors.PageError: Protocol Error: Connection Closed. Most likely the page has been closed.
+> Exception ignored in atexit callback <function Launcher.launch.<locals>._close_process at 0x1668e2a20>:
+> Traceback (most recent call last):
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/site-packages/pyppeteer/launcher.py", line 153, in _close_process
+>     self._loop.run_until_complete(self.killChrome())
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 700, in run_until_complete
+>     self._check_closed()
+>   File "/Users/admin/opt/anaconda3/envs/aiiter/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+>     raise RuntimeError('Event loop is closed')
+> RuntimeError: Event loop is closed
+> <sys>:0: RuntimeWarning: coroutine 'Launcher.killChrome' was never awaited
+> RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+> Exception ignored in: <_io.BytesIO object at 0x16686f880>
+> BufferError: Existing exports of data: object cannot be re-sized
+> ```
+**assistant**:
+> The new error you're encountering, specifically `PageError: Protocol Error: Connection Closed. Most likely the page has been closed`, typically indicates that you're trying to access or close a page that has already been closed. This can occur due to several reasons, particularly when handling asynchronous tasks and closures.
+> 
+> Here’s how to resolve this issue:
+> 
+> ### 1. Avoid Closing the Page Multiple Times:
+> 
+> Make sure you are not attempting to close a page that's already been closed or that you have not inadvertently shared a page instance across asynchronous tasks.
+> 
+> ### Updated Code Example
+> 
+> Here is a revised version of your code that considers proper handling of pages, along with a way to check if the page is closed before attempting to close it:
+> 
+> ```python
+> import asyncio
+> import platform
+> from pyppeteer import launch
+> from pyppeteer.errors import PageError
+> 
+> async def open_browser():
+>     browser = await launch()
+>     return browser
+> 
+> async def finder_pdf_helper(document, page):
+>     # Implementation of your logic here
+>     return "result"
+> 
+> async def finder_pdf(document, browser):
+>     page = await browser.newPage()
+>     try:
+>         result = await finder_pdf_helper(document, page)
+>         return result
+>     except PageError as e:
+>         print(f"Page error: {e}")
+>         return None
+>     finally:
+>         # Ensure the page can be closed only if it's still active
+>         if page.isClosed() is False:
+>             await page.close()
+> 
+> async def main():
+>     if platform.system() == "Darwin":
+>         asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+> 
+>     browser = await open_browser()
+>     
+>     try:
+>         for index, row in verdicts.iterrows():
+>             print(row.DOI)
+>             result = await finder_pdf(row.DOI, browser)
+>             print(result)
+>             if result == 'break':
+>                 break
+>     finally:
+>         await browser.close()
+> 
+> if __name__ == '__main__':
+>     asyncio.run(main())
+> ```
+> 
+> ### Key Changes:
+> 1. **Error Handling for Page Closure**: 
+>    - The `finder_pdf` function now includes a check if the page is closed before trying to close it. This ensures that you're not trying to operate on a closed page.
+>    - Added exception handling specifically for `PageError` which can help in debugging and gracefully handling issues related to page states.
+> 
+> 2. **No Redundant Page Closing**: 
+>    - Pages are created and closed within the scope of each function call, preventing any accidental reuse paths or double closures.
+> 
+> ### Additional Points:
+> - **Debugging**: If you continue to see issues, implement more detailed logging around page operations to understand exactly when pages are being closed and how.
+> - **Consider using `try-except`**: Include debugging print statements in your `catch` blocks to log the state of your pages if you encounter further issues.
+> 
+> Implement these changes, and this should help you avoid the errors regarding closed pages. If problems persist, further examination of the flow in `finder_pdf_helper` might be necessary to ensure it doesn’t inadvertently close or manipulate the page. Let me know how it goes!

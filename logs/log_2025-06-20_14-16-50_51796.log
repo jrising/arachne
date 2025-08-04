@@ -1,0 +1,241 @@
+**user**:
+> The following is a Mimi component to implement Capital feedback effects in a integrated assessment model:
+> ```
+> ## Constructs a new GDP value for use in all following components
+> ## Informed by last period's remaining GDP after impacts
+> 
+> capitalparams = CSV.read(pagedata("other/capital.csv"), DataFrame)
+> 
+> @defcomp Capital begin
+>     country = Index()
+> 
+>     model = Parameter{Model}()
+>     capital_draw = Parameter{Int64}(default=-1)
+> 
+>     save_savingsrate = Parameter(index=[country], unit="%")
+>     depreciationrate = Variable(index=[country])
+>     capitalshare = Variable(index=[country])
+>     capital0 = Variable(index=[country], unit="\$M")
+> 
+>     gdp0_initgdp = Parameter(index=[country], unit="\$M")
+>     gdp_baseline = Parameter(index=[time, country], unit="\$M")
+>     rgdp_percap_impacts = Parameter(index=[time, country], unit="\$/person")
+>     pop_population = Parameter(index=[time, country], unit="million person")
+> 
+>     fracloss = Variable(index=[time, country])
+>     capital_baseline = Variable(index=[time, country], unit="\$M")
+>     capital = Variable(index=[time, country], unit="\$M")
+> 
+>     gdp_capital = Variable(index=[time, country], unit="\$M")
+>     gdp_capital_region = Variable(index=[time, region], unit="\$M")
+>     cons_capital_consumption = Variable(index=[time, country], unit="\$million")
+>     cons_percap_capital_consumption = Variable(index=[time, country], unit="\$/person")
+> 
+>     function init(pp, vv, dd)
+>         mc = pp.capital_draw == -1 ? nothing : pp.capital_draw
+>         vv.depreciationrate[:] = readcountrydata_im(pp.model, capitalparams, :ISO, :mc, mc, "deprrate")
+>         vv.capitalshare[:] = readcountrydata_im(pp.model, capitalparams, :ISO, :mc, mc, "capshare")
+> 
+>         ## For missing countries, set capital0 to the stable level
+>         capital0 = readcountrydata_im(pp.model, capitalparams, :ISO, :mc, mc, "procap0", sum; allowmissing=true)
+>         capital0_stable = (pp.save_savingsrate ./ 100) .* pp.gdp0_initgdp ./ vv.depreciationrate
+>         capital0[ismissing.(capital0)] = capital0_stable[ismissing.(capital0)]
+>         vv.capital0[:] = capital0
+>     end
+> 
+>     function run_timestep(pp, vv, dd, tt)
+>         for cc in dd.country
+>             if is_first(tt)
+>                 vv.capital_baseline[tt, cc] = (pp.save_savingsrate[cc] / 100) * pp.gdp0_initgdp[cc] + (1 - vv.depreciationrate[cc]) * vv.capital0[cc]
+>                 vv.capital[tt, cc] = vv.capital_baseline[tt, cc]
+>                 vv.fracloss[tt, cc] = 0.
+>                 vv.gdp_capital[tt, cc] = pp.gdp_baseline[tt, cc]
+>             else
+>                 vv.capital_baseline[tt, cc] = (pp.save_savingsrate[cc] / 100) * pp.gdp_baseline[tt-1, cc] + (1 - vv.depreciationrate[cc]) * vv.capital_baseline[tt-1, cc]
+>                 rgdp_impacts = pp.rgdp_percap_impacts[tt-1, cc] * pp.pop_population[tt-1, cc]
+>                 if rgdp_impacts < 0
+>                     vv.capital[tt, cc] = (1 - vv.depreciationrate[cc]) * vv.capital[tt-1, cc]
+>                 else
+>                     vv.capital[tt, cc] = (pp.save_savingsrate[cc] / 100) * rgdp_impacts + (1 - vv.depreciationrate[cc]) * vv.capital[tt-1, cc]
+>                 end
+> 
+>                 vv.fracloss[tt, cc] = 1 - (vv.capital[tt, cc] / vv.capital_baseline[tt, cc])^vv.capitalshare[cc]
+>                 vv.gdp_capital[tt, cc] = (1 - vv.fracloss[tt, cc]) * pp.gdp_baseline[tt, cc]
+>             end
+>         end
+> 
+>         vv.cons_capital_consumption[tt, :] = vv.gdp_capital[tt, :] .* (1 .- pp.save_savingsrate[:] ./ 100)
+>         vv.cons_percap_capital_consumption[tt, :] = vv.cons_capital_consumption[tt, :] ./ pp.pop_population[tt, :]
+>         vv.gdp_capital_region[tt, :] = countrytoregion(pp.model, sum, vv.gdp_capital[tt, :])
+>     end
+> end
+> 
+> function addcapital(model::Model)
+>     capital = add_comp!(model, Capital)
+> 
+>     capital[:model] = model
+>     capital[:capital_draw] = -1
+> 
+>     return capital
+> end
+> ```
+> Can you provide LaTeX documentation of this component? The documentation should not refer to the code, but should describe what it does.
+**assistant**:
+> Certainly! Here's a LaTeX representation of what this component does within an integrated assessment model:
+> 
+> ```latex
+> \section{Capital Feedback Effects}
+> 
+> \subsection{Overview}
+> 
+> The Capital component models the feedback effects of capital on economic growth over time for various countries. It accounts for the initial capital setup, depreciation, savings rates, population impacts, and regional aggregations. The model adjusts GDP based on these dynamics, reflecting the influence of capital constraints.
+> 
+> \subsection{Model Description}
+> 
+> \subsubsection{Parameters}
+> 
+> \begin{itemize}
+>     \item \textbf{Savings Rate (\(\text{save\_savingsrate}\))}: Represents the portion of GDP saved by each country, expressed as a percentage.
+>     \item \textbf{Depreciation Rate (\(\text{depreciationrate}\))}: The rate at which capital depreciates over time.
+>     \item \textbf{Capital Share (\(\text{capitalshare}\))}: Determines the sensitivity of economic output to capital losses.
+>     \item \textbf{Initial Capital (\(\text{capital0}\))}: The baseline level of capital at the model start, adjusted based on national savings and depreciation.
+>     \item \textbf{Initial GDP (\(\text{gdp0\_initgdp}\))}: The initial GDP values for countries, serving as a baseline for future calculations.
+>     \item \textbf{Baseline GDP (\(\text{gdp\_baseline}\))}: Predetermined GDP estimates over time in the absence of capital impacts.
+>     \item \textbf{Real GDP per Capita Impacts (\(\text{rgdp\_percap\_impacts}\))}: The changes in real GDP per capita due to model impacts.
+>     \item \textbf{Population (\(\text{pop\_population}\))}: The population size for each country.
+> \end{itemize}
+> 
+> \subsubsection{Variables}
+> 
+> \begin{itemize}
+>     \item \textbf{Fraction of Loss (\(\text{fracloss}\))}: Reflects the proportion of GDP lost due to deviations from baseline capital.
+>     \item \textbf{Capital Baseline (\(\text{capital\_baseline}\))}: The expected level of capital absent any shocks.
+>     \item \textbf{Adjusted Capital (\(\text{capital}\))}: The capital level accounting for depreciation and economic impacts.
+>     \item \textbf{GDP Adjusted for Capital (\(\text{gdp\_capital}\))}: The GDP value considering capital constraints.
+>     \item \textbf{Regional GDP (\(\text{gdp\_capital\_region}\))}: Aggregated GDP across regions considering capital effects.
+>     \item \textbf{Consumption (\(\text{cons\_capital\_consumption}\))}: The consumption expenditure adjusted for capital.
+>     \item \textbf{Per Capita Consumption (\(\text{cons\_percap\_capital\_consumption}\))}: Consumption on a per capita basis.
+> \end{itemize}
+> 
+> \subsection{Model Dynamics}
+> 
+> The model operates by initializing capital based on long-term stable levels that align with national savings and depreciation rates. During each timestep, it updates capital levels by accounting for savings on GDP, depreciation, and capital impacts from changes in real GDP per capita. Loss of capital results in GDP reduction proportional to the sensitivity captured by \textit{capitalshare}.
+> 
+> The component calculates domestic consumption by deducting savings from GDP and then adjusts it on a per capita basis, using population data. Finally, it aggregates GDP across regions to inform regional level analyses.
+> 
+> This approach ensures that the model captures critical feedback loops between capital stocks and economic growth, both of which are essential for understanding the broader impacts of sustainability and economic resilience.
+> ```
+> 
+> This document attempts to provide a comprehensive description of how the Capital component functions conceptually within a model.
+**user**:
+> Rather than reporting the parameters and variables as the fundamental elements, please write out the key equations, and for each key question describe any newly introduced parameters.
+**assistant**:
+> Certainly! Below is the LaTeX documentation that focuses on the key equations used in the Capital component, along with descriptions of any newly introduced parameters:
+> 
+> ```latex
+> \section{Capital Feedback Effects}
+> 
+> \subsection{Overview}
+> 
+> This section describes the key equations and relationships used to model the feedback effects of capital on economic growth in an integrated assessment model. The model considers various parameters and variables to evaluate changes in GDP based on capital accumulation and depreciation.
+> 
+> \subsection{Key Equations}
+> 
+> \subsubsection{Initial Capital Calculation}
+> 
+> The initial capital (\(K_0\)) is determined by:
+> 
+> \begin{equation}
+> K_0 = \text{max} \left( \frac{S \cdot GDP_0}{D}, \text{stable\_level} \right)
+> \end{equation}
+> 
+> Where:
+> - \(S\) is the savings rate, defined as the percentage of GDP saved.
+> - \(GDP_0\) is the initial GDP.
+> - \(D\) is the depreciation rate (the fraction of capital lost each period).
+> - \text{stable\_level} denotes a stable capital level for countries with missing data.
+> 
+> \subsubsection{Capital Baseline Update}
+> 
+> The capital baseline (\(K_{\text{baseline}}\)) is updated at each timestep as follows:
+> 
+> \begin{equation}
+> K_{\text{baseline}}(t) = \frac{S}{100} \cdot GDP_{\text{baseline}}(t-1) + (1 - D) \cdot K_{\text{baseline}}(t-1)
+> \end{equation}
+> 
+> Where:
+> - \(t\) represents the current timestep.
+> 
+> \subsubsection{Capital Level Adjustment}
+> 
+> The capital level (\(K\)) for the current timestep is adjusted based on last year's capital and GDP impacts:
+> 
+> \begin{equation}
+> K(t) = \begin{cases} 
+> (1 - D) \cdot K(t-1) & \text{if } \text{rgdp\_impacts}(t-1) < 0 \\
+> \frac{S}{100} \cdot \text{rgdp\_impacts}(t-1) + (1 - D) \cdot K(t-1) & \text{otherwise} 
+> \end{cases}
+> \end{equation}
+> 
+> Where:
+> - \(\text{rgdp\_impacts}(t-1)\) represents the impacts on real GDP per capita resulting from various factors.
+> 
+> \subsubsection{Fraction of Loss Calculation}
+> 
+> The fraction of capital loss (\(L\)) is defined as:
+> 
+> \begin{equation}
+> L(t) = 1 - \left( \frac{K(t)}{K_{\text{baseline}}(t)} \right)^{\text{capitalshare}}
+> \end{equation}
+> 
+> Where:
+> - \(\text{capitalshare}\) indicates how sensitive the capital is to the GDP drop.
+> 
+> \subsubsection{Adjusted GDP Calculation}
+> 
+> The adjusted GDP considering capital constraints (\(GDP_{\text{capital}}\)) is calculated as:
+> 
+> \begin{equation}
+> GDP_{\text{capital}}(t) = (1 - L(t)) \cdot GDP_{\text{baseline}}(t)
+> \end{equation}
+> 
+> \subsubsection{Consumption Calculation}
+> 
+> The total consumption based on the adjusted GDP is given by:
+> 
+> \begin{equation}
+> C_{\text{capital}}(t) = GDP_{\text{capital}}(t) \cdot \left(1 - \frac{S}{100}\right)
+> \end{equation}
+> 
+> The per capita consumption (\(C_{\text{percap}}\)) is:
+> 
+> \begin{equation}
+> C_{\text{percap}}(t) = \frac{C_{\text{capital}}(t)}{P(t)}
+> \end{equation}
+> 
+> Where:
+> - \(P(t)\) is the population at time \(t\).
+> 
+> \subsubsection{Regional Aggregation of GDP}
+> 
+> The regional GDP based on the adjustments is aggregated as:
+> 
+> \begin{equation}
+> GDP_{\text{capital, region}}(t) = \sum_{c} GDP_{\text{capital}}(t) \text{ for all countries } c \text{ in region}
+> \end{equation}
+> 
+> \subsection{Parameters Introduced}
+> 
+> \begin{itemize}
+>     \item \(S\): Savings rate expressed as a percentage of GDP.
+>     \item \(D\): Depreciation rate, reflecting the loss of capital over time.
+>     \item \(\text{capitalshare}\): Indicates the responsiveness of economic output to capital constraints.
+>     \item \(GDP_{\text{baseline}}(t)\): GDP values for countries without the effects of capital reductions.
+>     \item \(\text{rgdp\_impacts}(t)\): Change in real GDP per capita affecting capital calculations.
+>     \item \(P(t)\): Population at the current timestep, used for per capita calculations.
+> \end{itemize}
+> 
+> This documentation outlines the mathematical framework behind the Capital component, enabling deeper insights into its functioning and impacts on economic sustainability.
+> ``` 
+> 
+> This LaTeX document summarizes the equations used in the Capital component, providing clarity on how each is derived and the purpose of newly introduced parameters.
