@@ -1,0 +1,48 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> I have some code in R:
+> ```
+>     sumbyeconomy <- sumbymc3 %>% filter(!is.na(POP_EST)) %>% group_by(ECONOMY) %>% dplyr::summarize(totimpact.median=wtd.median(totimpact, weights=POP_EST, normwt=T), tradeimpact.median=wtd.median(tradeimpact, weights=POP_EST, normwt=T), slrimpact.median=wtd.median(slrimpact, weights=POP_EST, normwt=T), total25=my.wtd.quantile(total, .25, weights=POP_EST, normwt=T), total75=my.wtd.quantile(total, .75, weights=POP_EST, normwt=T), total=wtd.median(total, weights=POP_EST, normwt=T))
+>     sumbyincgrp <- sumbymc3 %>% filter(!is.na(POP_EST)) %>% group_by(MY_INCOME_GRP) %>% dplyr::summarize(totimpact.median=wtd.median(totimpact, weights=POP_EST, normwt=T), tradeimpact.median=wtd.median(tradeimpact, weights=POP_EST, normwt=T), slrimpact.median=wtd.median(slrimpact, weights=POP_EST, normwt=T), total25=my.wtd.quantile(total, .25, weights=POP_EST, normwt=T), total75=my.wtd.quantile(total, .75, weights=POP_EST, normwt=T), total=wtd.median(total, weights=POP_EST, normwt=T))
+>     sumbycontinent <- sumbymc3 %>% filter(!is.na(POP_EST)) %>% group_by(CONTINENT) %>% dplyr::summarize(totimpact.median=wtd.median(totimpact, weights=POP_EST, normwt=T), tradeimpact.median=wtd.median(tradeimpact, weights=POP_EST, normwt=T), slrimpact.median=wtd.median(slrimpact, weights=POP_EST, normwt=T), total25=my.wtd.quantile(total, .25, weights=POP_EST, normwt=T), total75=my.wtd.quantile(total, .75, weights=POP_EST, normwt=T), total=wtd.median(total, weights=POP_EST, normwt=T))
+>     sumbysubreg <- sumbymc3 %>% filter(!is.na(POP_EST)) %>% group_by(SUBREGION) %>% dplyr::summarize(totimpact.median=wtd.median(totimpact, weights=POP_EST, normwt=T), tradeimpact.median=wtd.median(tradeimpact, weights=POP_EST, normwt=T), slrimpact.median=wtd.median(slrimpact, weights=POP_EST, normwt=T), total25=my.wtd.quantile(total, .25, weights=POP_EST, normwt=T), total75=my.wtd.quantile(total, .75, weights=POP_EST, normwt=T), total=wtd.median(total, weights=POP_EST, normwt=T))
+> ```
+> 
+> I would like to turn the summarize call into a function, so I can write these just as:
+> ```
+>     sumbyeconomy <- sumbymc3 %>% filter(!is.na(POP_EST)) %>% group_by(ECONOMY) %>% stdsummarize()
+>     sumbyincgrp <- sumbymc3 %>% filter(!is.na(POP_EST)) %>% group_by(MY_INCOME_GRP) %>% stdsummarize()
+>     sumbycontinent <- sumbymc3 %>% filter(!is.na(POP_EST)) %>% group_by(CONTINENT) %>% stdsummarize()
+>     sumbysubreg <- sumbymc3 %>% filter(!is.na(POP_EST)) %>% group_by(SUBREGION) %>% stdsummarize()
+> ```
+> 
+> How can I write a function like stdsummarize()?
+**assistant**:
+> You can create a function `stdsummarize()` to encapsulate the common summarization logic by leveraging R's tidy evaluation using the `{{` and `enquo()` functions from the `rlang` package to capture and evaluate group variables. Here's how you can define such a function:
+> 
+> ```r
+> library(dplyr)
+> library(Hmisc) # Assuming wtd.median and my.wtd.quantile are from Hmisc or a similar package
+> library(rlang)
+> 
+> stdsummarize <- function(data) {
+>   data %>%
+>     dplyr::summarize(
+>       totimpact.median = wtd.median(totimpact, weights = POP_EST, normwt = TRUE),
+>       tradeimpact.median = wtd.median(tradeimpact, weights = POP_EST, normwt = TRUE),
+>       slrimpact.median = wtd.median(slrimpact, weights = POP_EST, normwt = TRUE),
+>       total25 = my.wtd.quantile(total, .25, weights = POP_EST, normwt = TRUE),
+>       total75 = my.wtd.quantile(total, .75, weights = POP_EST, normwt = TRUE),
+>       total = wtd.median(total, weights = POP_EST, normwt = TRUE)
+>     )
+> }
+> 
+> # Now you can use the new function
+> sumbyeconomy <- sumbymc3 %>% filter(!is.na(POP_EST)) %>% group_by(ECONOMY) %>% stdsummarize()
+> sumbyincgrp <- sumbymc3 %>% filter(!is.na(POP_EST)) %>% group_by(MY_INCOME_GRP) %>% stdsummarize()
+> sumbycontinent <- sumbymc3 %>% filter(!is.na(POP_EST)) %>% group_by(CONTINENT) %>% stdsummarize()
+> sumbysubreg <- sumbymc3 %>% filter(!is.na(POP_EST)) %>% group_by(SUBREGION) %>% stdsummarize()
+> ```
+> 
+> This `stdsummarize()` function will work with the grouped data passed to it in the pipeline. It assumes that your columns like `totimpact`, `tradeimpact`, `slrimpact`, and `total` are present in the grouped data. If any are optional, you'll need conditional logic to handle their absence.

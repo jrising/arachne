@@ -1,0 +1,72 @@
+**assistant**:
+> The query concerns a force push to a Git repository's `master` branch and the resulting log entry.
+**user**:
+> I made a commit to a git repo on github, but I would like to instead have this commit on a new separate branch and have the branch (master) point to the previous commit. How can I do this?
+**assistant**:
+> To move the commit you made on the `master` branch to a new branch and reset `master` to the previous commit, you can follow these steps using Git:
+> 
+> 1. **Create a new branch from the current commit on `master`:**
+> 
+>    First, create and switch to the new branch. You can give your new branch a relevant name.
+> 
+>    ```bash
+>    git checkout -b new-branch
+>    ```
+> 
+>    This puts your commit on the `new-branch` and preserves your recent work.
+> 
+> 2. **Switch back to the `master` branch:**
+> 
+>    ```bash
+>    git checkout master
+>    ```
+> 
+> 3. **Reset the `master` branch to the previous commit:**
+> 
+>    To move `master` back to the previous commit, use a soft reset if you haven't pushed the commit yet. If you have pushed, use a hard reset, but be cautious as this rewrites history and can affect collaborators.
+> 
+>    If you haven't pushed the changes yet:
+> 
+>    ```bash
+>    git reset --soft HEAD~1
+>    ```
+> 
+>    If you have already pushed and are working alone or with the consensus of collaborators, use:
+> 
+>    ```bash
+>    git reset --hard HEAD~1
+>    ```
+> 
+> 4. **Force push the updated `master` branch if you have already pushed the wrong commit:**
+> 
+>    If the incorrect commit has already been pushed to a remote, you'll need to force push the changes to update the remote `master`:
+> 
+>    ```bash
+>    git push origin master --force
+>    ```
+> 
+> 5. **Push the new branch to the remote repository:**
+> 
+>    If you want to share your new branch, push it to GitHub:
+> 
+>    ```bash
+>    git push -u origin new-branch
+>    ```
+> 
+> By following these steps, you move your recent commit to the `new-branch` and reset `master` to its previous state. If you have any collaborators, inform them of this history rewrite as it can affect their repositories.
+**user**:
+> On github, when I do this, I see the force push entered as a distinct log item on master, labeled "Force Push". I thought my old commit would just disappear from the master log.
+**assistant**:
+> When you perform a force push on GitHub after resetting a branch, you might see a distinct log entry labeled "Force Push" in the commit history. This happens because Git tracks changes to the branch references, including forced updates. 
+> 
+> Here’s a bit more about why this happens:
+> 
+> 1. **Non-linear History:** The "Force Push" log entry indicates that the commit history was rewritten. Git retains a record of this operation, showing that the branch was adjusted in an unusual manner, which might help in understanding branch changes over time.
+> 
+> 2. **Visibility of Old Commits:** The old commit you reset (moved away from) doesn’t completely disappear. It remains in the repository’s history unless it’s garbage collected (which usually happens after a certain period and if there are no references to it, like tags or other branches). This allows for recovery of lost commits if needed.
+> 
+> 3. **Safety Feature:** Git maintains this history to prevent accidental loss of work and to ensure that any collaborators are aware of significant changes made to the repository.
+> 
+> If you want to remove the "Force Push" entry from the log entirely, it’s not possible with conventional Git functionality since it's part of maintaining a non-linear history. However, you can continue with your workflow, knowing that the log entry serves as a record of the change.
+> 
+> If you're looking to obscure the history (e.g., for cleaner logs), you might consider approaches like rebasing or squashing commits, but be mindful of the implications of such actions, especially in shared repositories.

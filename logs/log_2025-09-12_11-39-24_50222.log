@@ -1,0 +1,1423 @@
+**user**:
+> I have been given some branding guidelines which I would like to implement in a set of ggplot figures. Here is a sample command:
+> ```
+> gp <- ggplot(subset(allsumsxyear, panel == 'Economy'), aes(Group, fill=factor(year))) +
+>     geom_col(aes(y=total), position='dodge') +
+>     geom_errorbar(aes(ymin=total25, ymax=total75), position=position_dodge(width=0.9), width=.5) +
+>     scale_y_continuous(labels=scales::percent) + scale_fill_manual("Year: ", breaks=years, values=c('#fff7bc', '#fec44f', '#d95f0e')) +
+>     ylab("Change in GDP from Climate Change (%)") + xlab(NULL) + theme_bw() +
+>     theme(plot.margin=unit(c(5.5, 5.5, 5.5, 25), "pt"), legend.position="bottom", axis.text.x=element_text(angle=45, hjust=1))
+> ```
+> 
+> Now, I would like to use the designated color scheme, which relies on three primary colors: "night" (#2E3152), "molten" (#ED3D48), and "ice" (#FFFFFF), and suggests that gradients should go from night to ice or molten to ice.
+> 
+> And I would also like to use the branded typography, for which I have a TTF files. It's called LL Brown, and they want "BrownTT-Bold.ttf" to be used for headlines, "BrownTT-Light.ttf" for body copy, and "BrownTT-Regular.ttf" for captions and footnotes.
+> 
+> Is it possible to turn this into something that I can just "add" to my existing ggplot commands to get the new branding?
+**assistant**:
+> Absolutely! You can create a custom theme and color scale that can be easily applied to your ggplot figures to integrate the branding guidelines. Here's how you could structure your code:
+> 
+> 1. **Import the Font:** First, you need to make sure the "LL Brown" fonts are installed for use in R, which you can do using the `extrafont` or `showtext` package.
+> 
+> 2. **Create a Custom Theme and Color Scale:** Define a ggplot theme and a color scale that aligns with your branding guidelines.
+> 
+> Here's an example implementation:
+> 
+> ```r
+> # Load necessary packages
+> library(ggplot2)
+> library(extrafont)  # or showtext package for easier font usage
+> library(grid)       # For unit function
+> 
+> # Load the TTF fonts
+> # Load all fonts
+> # font_import() # Use this once, to register all fonts from your system
+> loadfonts(device = "pdf") # Registers fonts for PDF outputs
+> 
+> # Custom theme
+> custom_theme <- theme_bw() +
+>   theme(
+>     text = element_text(family = "BrownTT-Light"),
+>     plot.title = element_text(family = "BrownTT-Bold", size = 14), # Adjust size as needed
+>     axis.title = element_text(size = 12),
+>     axis.text = element_text(size = 10),
+>     legend.text = element_text(family = "BrownTT-Regular", size = 10),
+>     legend.title = element_text(family = "BrownTT-Bold", size = 11),
+>     plot.margin = unit(c(5.5, 5.5, 5.5, 25), "pt"),
+>     legend.position = "bottom",
+>     axis.text.x = element_text(angle = 45, hjust = 1)
+>   )
+> 
+> # Custom color scale
+> custom_scale <- scale_fill_manual(
+>   "Year: ",
+>   values = c('night' = '#2E3152', 'molten' = '#ED3D48', 'ice' = '#FFFFFF')
+> )
+> 
+> # Modify color scale for gradients (e.g., night to ice)
+> custom_gradient_scale <- scale_fill_gradient(
+>   low = "#2E3152", high = "#FFFFFF"
+> )
+> 
+> # Applying the custom theme and scale
+> gp <- ggplot(subset(allsumsxyear, panel == 'Economy'), aes(Group, fill=factor(year))) +
+>   geom_col(aes(y=total), position='dodge') +
+>   geom_errorbar(aes(ymin=total25, ymax=total75), position=position_dodge(width=0.9), width=.5) +
+>   scale_y_continuous(labels=scales::percent) +
+>   custom_scale +  # or custom_gradient_scale
+>   ylab("Change in GDP from Climate Change (%)") +
+>   xlab(NULL) +
+>   custom_theme
+> ```
+> 
+> This setup allows you to easily apply the branding scheme to any ggplot object by adding the `custom_theme` and `custom_scale`. You can modify this as needed to better fit different contexts or preferences. If you're working with many plots, wrapping this in a function for easier reuse might also be beneficial.
+**user**:
+> Great! Questions:
+>  - The TTF files are in a folder "share/Brown fonts for staff". Here's the full list of files in there: BrownTT-Bold.ttf
+> BrownTT-BoldItalic.ttf
+> BrownTT-Italic.ttf
+> BrownTT-Light.ttf
+> BrownTT-LightItalic.ttf
+> BrownTT-Regular.ttf
+> Can you specify exactly how to load them?
+> 
+> Second, for that particular graph, I need 3 colors, and I don't think one of them should be white. So I think I should do three versions of the night color-- maybe 50% transparent, 25% transparent, 0% transparent?
+**assistant**:
+> Sure! Here’s how you can load the custom TTF fonts from your specified folder and adjust your color scheme to include three different transparency levels for the "night" color.
+> 
+> ### Step 1: Load Custom Fonts
+> 
+> First, install the `extrafont` package if you haven't already. Then, use the `font_import()` function to load the TTF files from your specified directory. Here’s how you could do it:
+> 
+> ```r
+> # Install extrafont if you haven't
+> # install.packages("extrafont")
+> 
+> library(extrafont)
+> 
+> # Import fonts from the specified directory
+> font_import(path = "share/Brown fonts for staff", prompt = FALSE)
+> 
+> # Load fonts into the R session
+> loadfonts(device = "win")  # Use "pdf" or "postscript" if you're working with those formats
+> ```
+> 
+> Make sure the directory is correctly specified relative to your working directory. You can check your working directory with `getwd()`.
+> 
+> ### Step 2: Update Color Scheme
+> 
+> For the colors, you can create versions of the night color with different levels of transparency. You can do this using `scales::alpha()` to adjust transparency levels. Here’s how to modify your ggplot code:
+> 
+> ```r
+> # Define transparent versions of the 'night' color
+> night_colors <- c(
+>   scales::alpha('#2E3152', 0.5),  # 50% transparent
+>   scales::alpha('#2E3152', 0.25), # 25% transparent
+>   '#2E3152'                      # 0% transparent (full color)
+> )
+> 
+> # Custom color scale using night colors
+> custom_scale <- scale_fill_manual(
+>   "Year: ",
+>   values = night_colors
+> )
+> 
+> # Modify the ggplot command to use the updated color scale
+> gp <- ggplot(subset(allsumsxyear, panel == 'Economy'), aes(Group, fill=factor(year))) +
+>   geom_col(aes(y=total), position='dodge') +
+>   geom_errorbar(aes(ymin=total25, ymax=total75), position=position_dodge(width=0.9), width=.5) +
+>   scale_y_continuous(labels=scales::percent) + 
+>   custom_scale +  
+>   ylab("Change in GDP from Climate Change (%)") +
+>   xlab(NULL) +
+>   custom_theme
+> ```
+> 
+> ### Summary
+> 
+> 1. Import the fonts from the specified folder using `font_import()`.
+> 2. Define the transparent colors based on the "night" color using `scales::alpha()`.
+> 3. Update your custom scale to use these colors.
+> 
+> With these changes, you'll successfully implement the branding guidelines in your ggplot visualizations!
+**user**:
+> Perfect. Finally, here is the full text of the branding document:
+> ===
+> Grantham Research Institute
+> on Climate Change
+> and the Environment
+> Brand guidelines (version 1)
+> Contents
+> 1
+> Introduction
+> Our brand
+> Our mission statement
+> Our strapline
+> 2
+> Brand elements
+> Using the correct logo
+> Co-branding
+> Exclusion zone
+> Colour palette
+> Typography
+> 5
+> 3
+> Please don’t...
+> What not to do
+> with our logo Appendix
+> GRI logos
+> LSE co-branding logos
+> CCCEP co-branding logos
+> Who to speak to
+> Imagery
+> Overview
+> Illustrations
+> Monochrome photography
+> How to create our own
+> monochrome photography
+> Combination
+> Brand
+> applications
+> Stationery
+> Policy report covers
+> Policy report spreads
+> Figures, tables
+> and infographics
+> Working papers
+> Policy papers
+> PowerPoint presentations
+> Logo animation
+> Newsletters and mailshots
+> Website logo usage
+> Website photography
+> Website icons
+> Social media overview
+> Events overview
+> Banners
+> 2 / 43
+> Introduction
+> Introduction
+> Our brand
+> The Grantham Research Institute on Climate Change
+> and the Environment brand was developed to give
+> the Institute a strong visual identity and greater
+> recognition amongst our target audiences.
+> The brand distinguishes us from our peers and enables
+> us to communicate our work more effectively.
+> Our brand is not just our logo but our entire visual
+> identity, which includes colour palettes, fonts and
+> imagery style. This relates to all of our key external
+> communication channels such as printed publications
+> and stationery, websites and e-newsletters, social
+> media and event banners.
+> This document is a guide for using the various brand
+> elements consistently and effectively.
+> 4 / 43
+> Introduction
+> Our mission statement
+> A world in which climate change and
+> other global environmental challenges
+> are managed effectively to promote
+> prosperity and well-being.
+> 5/ 43
+> Introduction
+> Our strapline
+> Academic rigour and independence from sponsors,
+> supporters or ideology are central to our principles.
+> They are at the core of everything we do, so we made
+> ‘Rigour and independence’ our strapline.
+> The strapline is generally used in combination with
+> branded illustrative work as a way of reinforcing our
+> identity. At present the strapline is used on social
+> media channels, event banners and compliments slips.
+> 6 / 43
+> Brand elements
+> 2
+> We have a suite of logos to ensure that our brand
+> remains optimised wherever it appears. We have a
+> version of our logo where the text and graphic
+> elements of the logo are separated. This should only
+> large use logo with our name running over both three
+> and four lines. We have a small use logo for both four
+> line and three line versions, for use in small spaces.
+> There are black and white variants of the small use
+> logos. These should only be used when printing a
+> document in black and white. There is a ‘specials’
+> be used for formats such as banners where the symbol
+> might need to appear very large and separated from
+> our name. Please do not use this version of our logo on
+> any standard print such as reports and policy papers.
+> We have created a calibrated version of our symbol
+> bespoke for social media and on screen.
+> 4 line logo (large use)
+> 4 line logo (small use) 3 line logo (large use)
+> Specials (large use only): symbol Brand elements
+> Using the correct logo
+> 3 line logo (small use)
+> Specials (large use only): logotype Social media
+> 8 / 43
+> Brand elements
+> Co-branding
+> We have two versions of our logo for co-branding
+> purposes to ensure that our brand balances and
+> coexists neatly with our partners. Please use the four
+> line version of our logo alongside the LSE logo. This
+> applies for the full written out version of the LSE logo
+> and the symbol only version too. The three line version
+> of the logo is for use with the CCCEP symbol.
+> LSE logo + GRI logo (4 line): large use LSE logo + GRI logo (4 line): small use
+> LSE logo (no type) + GRI logo (4 line): large use LSE logo (no type) + GRI logo (4 line): small use
+> CCCEP logo + GRI logo (3 line): large use CCCEP logo + GRI logo (3 line): small use
+> 9 / 43
+> Brand elements
+> Exclusion zone
+> It is important that our logo has breathing space so
+> that it can stand out, be easily read and identified.
+> Regardless of logo size always allow white space to the
+> value of the ‘Gra’ the whole way around our logo. This
+> rule applies to the four line and three line versions.
+> 4 line logo
+> 3 line logo
+> 10 / 43
+> Brand elements
+> Colour palette
+> We have three core colours to our brand; Night Blue,
+> Molten Red and Ice White.
+> We use Night Blue in imagery and as our text colour
+> and Ice White is often used for backgrounds or for text
+> over images and block colours.
+> Molten Red is our accent colour and is only used to pull
+> out key details and information. Please do not cover
+> whole pages in this colour, this should be used sparingly
+> as a highlight only.
+> Our core colours are supported by tints of Night Blue.
+> The tints can be used in graphics, graphs and charts
+> where a number of elements need to be distinguished.
+> Primary colour palette
+> Night
+> Molten
+> Ice
+> R/46 G/49 B/82
+> R/237 G/61 B/72
+> R/237 G/61 B/72
+> C/90 M/81 Y/38 K/37
+> C/0 M/86 Y/64 K/0
+> C/0 M/0 Y/0 K/0
+> HEX: #2E3152
+> HEX: #ED3D48 HEX: #FFFFFF
+> Seconary colour palette (% of Night Blue)
+> 10% 20% 30% 40% 50% 60% 70% 80% 90%
+> 11 / 43
+> Brand elements
+> Typography
+> Our primary brand typeface is LL Brown. This is
+> the typeface we use on our website, newsletter,
+> e-invitations and emailshots, and in our policy reports.
+> We use three weights of our typeface. LL Brown Bold is
+> for headlines and when you want to pull out text.
+> LL Brown Light is used for body copy whilst the Regular
+> weight should only be used for captions and footnotes.
+> LL Brown Italic is used sparingly and only for quotations
+> within body copy.
+> Primary brand typeface
+> LL Brown Bold
+> abcdefghijklmnopqrstuvwxyz
+> 1234567890
+> !@£$%^&*?_+~<>\({”:.,;’})
+> Support typefaces
+> LL Brown Regular
+> abcdefghijklmnopqrstuvwxyz
+> 1234567890
+> !@£$%^&*?_+~<>\({”:.,;’})
+> LL Brown Light
+> abcdefghijklmnopqrstuvwxyz
+> 1234567890
+> !@£$%^&*?_+~<>\({”:.,;’})
+> 12 / 43
+> The true type font most similar to LL Brown is Century
+> Gothic. Please use this font for MS Word documents
+> and PowerPoint presentations. Some computers will
+> default to this font when opening our Word templates
+> and PowerPoint presentation templates.
+> True type font for MS Word and PowerPoint documents
+> Century Gothic Bold
+> abcdefghijklmnopqrstuvwxyz
+> 1234567890
+> !@£$%^&*?_+~<>\({”:.,;’})
+> Century Gothic Regular
+> abcdefghijklmnopqrstuvwxyz
+> 1234567890
+> !@£$%^&*?_+~<>\({”:.,;’})
+> Headlines and quotes Body copy
+> LL Brown Bold works
+> LL Brown light is ideal for body copy. Please
+> use italics to highlight body copy quotations
+> or names.
+> best for all headlines,
+> quotes and highlights.
+> Lowercase is preferred
+> rather than all caps.
+> Captions and footers
+> LL Brown Regular is perfect for small text that needs to stand out such as
+> captions and report footers.
+> 13 / 43
+> Imagery
+> 3
+> Imagery
+> Overview
+> Illustrations
+> Our imagery is an important part of our brand. It helps
+> communicate who we are and the work we do.
+> It is important that our imagery is distinctive
+> from others in our field, helps us to stand out and to
+> have impact.
+> To keep our brand engaging and dynamic we have
+> three imagery styles, which will be explained in more
+> detail in the following pages.
+> Our imagery styles are; illustration, monotone
+> photography and a combination of both illustration
+> and photography.
+> Monotone photography Combination
+> 15 / 43
+> Imagery
+> Illustrations
+> Green growth/ growth and economy Low-carbon growth in China
+> We have created a suite of eight bespoke illustrations
+> to communicate some of our key research themes.
+> Our illustrations are unique to us so use them wherever
+> possible. Illustration is especially useful when
+> you need to communicate a complicated or abstract
+> subject matter. Make sure the subject matter of your
+> presentation or your title complements the illustration
+> you have chosen. Please don’t amend our illustrations.
+> If you are commissioning an illustrator to create images
+> please ensure that they are simple and have duality.
+> Night Blue should be the most dominant colour whilst
+> Molten Red should be used sparingly as an accent. As a
+> nod to our symbol our illustrations feature Moten Red
+> dots in the line work.
+> Climate change adaptation
+> Economic growth and declining emissions
+> Carbon capture and storage/decarbonising industry
+> 16 / 43
+> Imagery
+> Monochrome
+> photography
+> We often need to use photography to illustrate key
+> themes and topics in our research. When selecting
+> photography make sure that it conveys your message
+> and isn’t a generic or clichéd climate change image
+> (no polar bears please!). When choosing a photograph
+> please look for an image that has a strong focal point
+> and which isn’t busy or cluttered. We use photography
+> from the iStock library.
+> Please contact Admin (gri@lse.ac.uk) if you need
+> any help with purchasing or downloading iStock
+> photography. Please ensure all imagery is high
+> resolution at 1920 pixels wide for onscreen (TV,
+> projector, mobile etc) and 300 dpi for print. To align
+> the photography we use with our brand colour palette
+> we apply a Night Blue monochrome wash to all our
+> pictures. The following page explains how to do this.
+> Clean energy Carbon emmissions
+> Growth and economy
+> Climate change adaptation
+> Drought
+> Climate science
+> 17 / 43
+> Imagery
+> How to create our own
+> monochrome photography
+> Follow these simple steps below to create our
+> monochrome imagery in Adobe Photoshop.
+> 1. Image > Mode > Grayscale 2. Image > Mode > Duotone
+> 3. Type > Monotone
+> 4. Insert values for Night blue 5. File > Export > Export As 6. Set format to JPG and export
+> 18 / 43
+> Imagery
+> Combination
+> For special applications where you need to create some
+> distinction from our other materials you can use our
+> combination imagery style that marries photography
+> with illustration. Please use this imagery approach
+> sparingly, for example on report front covers or for
+> posters or banners.
+> To create combination images always ensure that the
+> monochrome photograph is in the centre and extend
+> the image with line graphics on either side. Use Molten
+> Red dots as highlights on the lines as a visual link to
+> our symbol.
+> Economy Ecosystems, resources and the natural environment
+> Title goes here
+> Political economy
+> of climate finance
+> Second line goes here
+> This is widely, and rightly, seen as a
+> positive development and an important
+> element of the international climate
+> change architecture. There is a growing
+> normative debate on how these flows
+> should be originated, governed, man-
+> aged and monitored.
+> International commitments on climate
+> finance raise the prospect of substan
+> tial new capital flows to developing
+> countries.
+> Low-carbon innovation
+> 19 / 43
+> Brand applications
+> 4
+> Brand applications
+> Stationery
+> GRI LSE letterhead Name goes here
+> First line of address block goes here
+> Second line gore here
+> Third line goes here
+> Forth line goes here and here
+> Fifth line here
+> LSE
+> Houghton Street
+> London WC2A 2AE
+> Lamus nonseditio. Seditatem nissitatqui ipis ipis apienita quibus modicte voluptam, nobis pores
+> dolendae qui officit velignis iderepedit landae eumquam eseque vidust laut maione nonecabor ra
+> vollorit atem. Name la nihit aut rehendi gendips untium, sum netur sus.
+> Agniat es sa cum solenis aut aut exerum ent vendit quid molor sincipsam ut isitios amenis velendi
+> +44 (0)20 7107 5027
+> +44 (0)20 7107 5440
+> autas autet et alitati occaecus vide odio quamusam, odi officimaxim ius, occumquis as es iliquiscidel
+> es aut verchiciis cullo tota doluptas incil ipsandu cienimp oribus dolutatio qui voluptatus apernam, odis
+> Lamus nonseditio. Seditatem nissitatqui ipis ipis apienita quibus modicte voluptam, nobis pores
+> gri@lse.ac.uk
+> enihilles nis pernam consedit plab iust, officatur simagnam voloris molupie nienimp erferchit omnis
+> dolendae qui officit velignis iderepedit landae eumquam eseque vidust laut maione nonecabor ra
+> sit autempo rruntia qui nossitat.
+> vollorit atem. Name la nihit aut rehendi gendips untium, sum netur sus.
+> lse.ac.uk/
+> granthaminstitute
+> Expe officipite doluptatem doluptatem quidesequi core vollestem necto vendae etus dolor modi core
+> Agniat es sa cum solenis aut aut exerum ent vendit quid molor sincipsam ut isitios amenis velendi
+> nullatius minist mi, velectus que comni dolorum, cum qui berum lautemporem et ellaut que dit exces
+> Chair:
+> autas autet et alitati occaecus vide odio quamusam, odi officimaxim ius, occumquis as es iliquiscidel
+> ut aut esed mi, ipsam a quam incta cor ma volore asitas veres sequae es eatur? Quis essit ium solese-
+> Professor Lord Stern
+> es aut verchiciis cullo tota doluptas incil ipsandu cienimp oribus dolutatio qui voluptatus apernam, odis
+> quia quas reicil iumquae dende odisinv endusanda voluptas none vello ea cus doluptaquis des venescit
+> of Brentford
+> enihilles nis pernam consedit plab iust, officatur simagnam voloris molupie nienimp erferchit omnis
+> aut latur aut remporemodit lam volupis ciumeni stibus doluptam audae lab incil maximilitis volenim
+> sit autempo rruntia qui nossitat.
+> hillore enis delitate sum vellate maximus repe sitibusdam facestrumqui cuptatur mint.
+> Expe officipite doluptatem doluptatem quidesequi core vollestem necto vendae etus dolor modi core
+> Duciam simaionsequi tem harum archilique ditibus tiisimo deliquae id earchillupta cum rem sendis
+> nullatius minist mi, velectus que comni dolorum, cum qui berum lautemporem et ellaut que dit exces
+> auda perunti siminve nimaio. Quist id quam fugitatia dolorio rumetur? Ut omnitint platur sitate ipicto
+> ut aut esed mi, ipsam a quam incta cor ma volore asitas veres sequae es eatur? Quis essit ium solese-
+> ius, sum sequis sita volupta tincien daniatus. Ximin el is moloratiat dolo magniet, imporro ent et dolest
+> quia quas reicil iumquae dende odisinv endusanda voluptas none vello ea cus doluptaquis des venescit
+> verat quiant am faccaep ratemporum quamend ucipiet quidis dolupta tiisitate liquo ipid magnatenihil
+> aut latur aut remporemodit lam volupis ciumeni stibus doluptam audae lab incil maximilitis volenim
+> ipsam is unt fugit quam enienis pore nias aperrov iderum repedis sae rerferrum imolum int eum
+> hillore enis delitate sum vellate maximus repe sitibusdam facestrumqui cuptatur mint.
+> atempor emquias ex eumquas dignimo inim ero voluptatur arciumquatur ant.
+> Duciam simaionsequi tem harum archilique ditibus tiisimo deliquae id earchillupta cum rem sendis
+> Ullupta quatur si que re porit ut omniti omnim que sit, id exerum aute modit que pore vendita tempori
+> auda perunti siminve nimaio. Quist id quam fugitatia dolorio rumetur? Ut omnitint platur sitate ipicto
+> busam, cone consecte sit endebisit volenist am, audae velest, con restiatis num qui in cullacil maiorem
+> ius, sum sequis sita volupta tincien daniatus. Ximin el is moloratiat dolo magniet, imporro ent et dolest
+> labora vita veliquam dolorerspid et mo entinci voluptatur? Unt voluptio. Ape nis rerumet dolesto tasite
+> verat quiant am faccaep ratemporum quamend ucipiet quidis dolupta tiisitate liquo ipid magnatenihil
+> simus dolor ariatat. Cidebisim fugia nihicipides doluptat ut et modipsam quibusam, vellesciis molup-
+> ipsam is unt fugit quam enienis pore nias aperrov iderum repedis sae rerferrum imolum int eum
+> tatur, con rem soluptio con non por apietur?
+> atempor emquias ex eumquas dignimo inim ero voluptatur arciumquatur ant.
+> Iciatem poremquis dent odipsa cum nobit volendamenis estotatquist libus doles idit, sin coritiost
+> estiost litestiis ut erumqui conet derorehendit aute venem quunto odit quamTiae vidus, sumquodios
+> Ullupta quatur si que re porit ut omniti omnim que sit, id exerum aute modit que pore vendita tempori
+> is earchilibus remporem doluptibus quia id es busam, cone consecte sit endebisit volenist am, audae velest, con restiatis num qui in cullacil maiorem
+> magnimi, volenit volorem ullesequis et et est, nis sit
+> idest occulpa volo berum quamusd aepudant accatur repuda dolo con endanim ilibus excepe laut
+> labora vita veliquam dolorerspid et mo entinci voluptatur? Unt voluptio. Ape nis rerumet dolesto tasite
+> simus dolor ariatat. Cidebisim fugia nihicipides doluptat ut et modipsam quibusam, vellesciis molup-
+> tatur, con rem soluptio con non por apietur?
+> Iciatem poremquis dent odipsa cum nobit volendamenis estotatquist libus doles idit, sin coritiost estiost
+> litestiis ut erumqui conet derorehendit aute venem quunto odit quamTiae vidus, sumquodios is earchil-
+> ibus remporem doluptibus quia id es magnimi, volenit volorem ullesequis et et est, nis sit idest occulpa
+> volo berum quamusd aepudant accatur repuda dolo con endanim ilibus excepe laut eos quid mollece
+> pratus aditio culluptatur ad quunt et faccus. Dellenditia dit, corerci debist offici consendel etur raepera
+> aciendis sapicid ellabor repel inis dolorem quibus adit, et pre etureiu sdanisquia doluptinis quia alit mi,
+> quam earunt, vellaccum culparc hilliquost, non nesequam, cuscimustium as endae magnatas voluptiis
+> ipsandit, quo omnit rerupta temque sam veribus cillanis reperumquos se nonsenditium quia voles
+> pliaturibus que alia a volore num facerioris de nem repre et laborrovit, con plab invernatur?
+> Lamus nonseditio. Seditatem nissitatqui ipis ipis apienita quibus modicte voluptam, nobis pores do-
+> lendae qui officit velignis iderepedit landae eumquam eseque vidust laut maione nonecabor ra vollorit
+> atem. Name la nihit aut rehendi gendips untium, sum netur sus. Agniat es sa cum solenis aut aut
+> exerum ent vendit quid molor sincipsam ut isitios amenis velendi autas autet et alitati occaecus vide
+> odio quamusam, odi officimaxim ius, occumquis as es iliquiscidel es aut verchiciis cullo tota doluptas
+> incil ipsandu cienimp oribus dolutatio qui voluptatus apernam, odis enihilles nis pernam consedit plab
+> iust, officatur simagnam voloris molupie nienimp erferchit omnis sit autempo rruntia qui nossitat.
+> We have branded letterheads and compliments slips. Please
+> make sure you use these when you are sending out any
+> correspondence in writing. We have two letterheads; one
+> that features the four line version of our logo in conjunction
+> with the LSE logo. The second features the three line version
+> of our logo alongside the CCCEP logo. All other logos appear
+> in the bottom right hand column.
+> Please make sure you enter the addressee in the address
+> block on the top left hand side of the letterhead.
+> Our compliments slip features our four line version of the logo
+> and the LSE logo. We can hand write or type our letters or
+> compliments slips.
+> GRI CCCEP letterhead GRI LSE comp slip
+> Name goes here
+> First line of address block goes here
+> Second line gore here
+> Third line goes here
+> Forth line goes here and here
+> Fifth line here
+> LSE
+> Houghton Street
+> London WC2A 2AE
+> Lamus nonseditio. Seditatem nissitatqui ipis ipis apienita quibus modicte voluptam, nobis pores
+> dolendae qui officit velignis iderepedit landae eumquam eseque vidust laut maione nonecabor ra
+> vollorit atem. Name la nihit aut rehendi gendips untium, sum netur sus.
+> Agniat es sa cum solenis aut aut exerum ent vendit quid molor sincipsam ut isitios amenis velendi
+> +44 (0)20 7107 5027
+> +44 (0)20 7107 5440
+> autas autet et alitati occaecus vide odio quamusam, odi officimaxim ius, occumquis as es iliquiscidel
+> es aut verchiciis cullo tota doluptas incil ipsandu cienimp oribus dolutatio qui voluptatus apernam, odis
+> Lamus nonseditio. Seditatem nissitatqui ipis ipis apienita quibus modicte voluptam, nobis pores
+> gri@lse.ac.uk
+> enihilles nis pernam consedit plab iust, officatur simagnam voloris molupie nienimp erferchit omnis
+> dolendae qui officit velignis iderepedit landae eumquam eseque vidust laut maione nonecabor ra
+> sit autempo rruntia qui nossitat.
+> vollorit atem. Name la nihit aut rehendi gendips untium, sum netur sus.
+> lse.ac.uk/
+> granthaminstitute
+> Expe officipite doluptatem doluptatem quidesequi core vollestem necto vendae etus dolor modi core
+> Agniat es sa cum solenis aut aut exerum ent vendit quid molor sincipsam ut isitios amenis velendi
+> nullatius minist mi, velectus que comni dolorum, cum qui berum lautemporem et ellaut que dit exces
+> autas autet et alitati occaecus vide odio quamusam, odi officimaxim ius, occumquis as es iliquiscidel
+> ut aut esed mi, ipsam a quam incta cor ma volore asitas veres sequae es eatur? Quis essit ium solese-
+> es aut verchiciis cullo tota doluptas incil ipsandu cienimp oribus dolutatio qui voluptatus apernam, odis
+> quia quas reicil iumquae dende odisinv endusanda voluptas none vello ea cus doluptaquis des venescit
+> enihilles nis pernam consedit plab iust, officatur simagnam voloris molupie nienimp erferchit omnis
+> aut latur aut remporemodit lam volupis ciumeni stibus doluptam audae lab incil maximilitis volenim
+> sit autempo rruntia qui nossitat.
+> hillore enis delitate sum vellate maximus repe sitibusdam facestrumqui cuptatur mint.
+> Expe officipite doluptatem doluptatem quidesequi core vollestem necto vendae etus dolor modi core
+> Duciam simaionsequi tem harum archilique ditibus tiisimo deliquae id earchillupta cum rem sendis
+> nullatius minist mi, velectus que comni dolorum, cum qui berum lautemporem et ellaut que dit exces
+> auda perunti siminve nimaio. Quist id quam fugitatia dolorio rumetur? Ut omnitint platur sitate ipicto
+> ut aut esed mi, ipsam a quam incta cor ma volore asitas veres sequae es eatur? Quis essit ium solese-
+> ius, sum sequis sita volupta tincien daniatus. Ximin el is moloratiat dolo magniet, imporro ent et dolest
+> quia quas reicil iumquae dende odisinv endusanda voluptas none vello ea cus doluptaquis des venescit
+> verat quiant am faccaep ratemporum quamend ucipiet quidis dolupta tiisitate liquo ipid magnatenihil
+> aut latur aut remporemodit lam volupis ciumeni stibus doluptam audae lab incil maximilitis volenim
+> ipsam is unt fugit quam enienis pore nias aperrov iderum repedis sae rerferrum imolum int eum
+> hillore enis delitate sum vellate maximus repe sitibusdam facestrumqui cuptatur mint.
+> atempor emquias ex eumquas dignimo inim ero voluptatur arciumquatur ant.
+> Duciam simaionsequi tem harum archilique ditibus tiisimo deliquae id earchillupta cum rem sendis
+> Ullupta quatur si que re porit ut omniti omnim que sit, id exerum aute modit que pore vendita tempori
+> auda perunti siminve nimaio. Quist id quam fugitatia dolorio rumetur? Ut omnitint platur sitate ipicto
+> busam, cone consecte sit endebisit volenist am, audae velest, con restiatis num qui in cullacil maiorem
+> ius, sum sequis sita volupta tincien daniatus. Ximin el is moloratiat dolo magniet, imporro ent et dolest
+> labora vita veliquam dolorerspid et mo entinci voluptatur? Unt voluptio. Ape nis rerumet dolesto tasite
+> verat quiant am faccaep ratemporum quamend ucipiet quidis dolupta tiisitate liquo ipid magnatenihil
+> simus dolor ariatat. Cidebisim fugia nihicipides doluptat ut et modipsam quibusam, vellesciis molup-
+> ipsam is unt fugit quam enienis pore nias aperrov iderum repedis sae rerferrum imolum int eum
+> tatur, con rem soluptio con non por apietur?
+> atempor emquias ex eumquas dignimo inim ero voluptatur arciumquatur ant.
+> Iciatem poremquis dent odipsa cum nobit volendamenis estotatquist libus doles idit, sin coritiost
+> Ullupta quatur si que re porit ut omniti omnim que sit, id exerum aute modit que pore vendita tempori
+> estiost litestiis ut erumqui conet derorehendit aute venem quunto odit quamTiae vidus, sumquodios
+> busam, cone consecte sit endebisit volenist am, audae velest, con restiatis num qui in cullacil maiorem
+> is earchilibus remporem doluptibus quia id es magnimi, volenit volorem ullesequis et et est, nis
+> labora vita veliquam dolorerspid et mo entinci voluptatur? Unt voluptio. Ape nis rerumet dolesto tasite
+> sit idest occulpa volo berum quamusd aepudant accatur repuda dolo con endanim ilibus excepe
+> simus dolor ariatat. Cidebisim fugia nihicipides doluptat ut et modipsam quibusam, vellesciis molup-
+> tatur, con rem soluptio con non por apietur?
+> Iciatem poremquis dent odipsa cum nobit volendamenis estotatquist libus doles idit, sin coritiost estiost
+> litestiis ut erumqui conet derorehendit aute venem quunto odit quamTiae vidus, sumquodios is earchil-
+> ibus remporem doluptibus quia id es magnimi, volenit volorem ullesequis et et est, nis sit idest occulpa
+> volo berum quamusd aepudant accatur repuda dolo con endanim ilibus excepe laut eos quid mollece
+> pratus aditio culluptatur ad quunt et faccus. Dellenditia dit, corerci debist offici consendel etur raepera
+> aciendis sapicid ellabor repel inis dolorem quibus adit, et pre etureiu sdanisquia doluptinis quia alit mi,
+> quam earunt, vellaccum culparc hilliquost, non nesequam, cuscimustium as endae magnatas voluptiis
+> ipsandit, quo omnit rerupta temque sam veribus cillanis reperumquos se nonsenditium quia voles
+> pliaturibus que alia a volore num facerioris de nem repre et laborrovit, con plab invernatur?
+> Lamus nonseditio. Seditatem nissitatqui ipis ipis apienita quibus modicte voluptam, nobis pores do-
+> lendae qui officit velignis iderepedit landae eumquam eseque vidust laut maione nonecabor ra vollorit
+> atem. Name la nihit aut rehendi gendips untium, sum netur sus. Agniat es sa cum solenis aut aut
+> exerum ent vendit quid molor sincipsam ut isitios amenis velendi autas autet et alitati occaecus vide
+> odio quamusam, odi officimaxim ius, occumquis as es iliquiscidel es aut verchiciis cullo tota doluptas
+> incil ipsandu cienimp oribus dolutatio qui voluptatus apernam, odis enihilles nis pernam consedit plab
+> iust, officatur simagnam voloris molupie nienimp erferchit omnis sit autempo rruntia qui nossitat.
+> 21 / 43
+> Brand applications
+> Policy report covers
+> For consistency our report covers all follow the same
+> template and format. The title text always appears in the top
+> left hand corner with the main title in Molten Red and the
+> secondary title in Ice White or Night Blue. This creates a clear
+> hierarchy of messaging. Please do not amend the type sizes
+> in the templates provided. We have the flexibility to chose
+> whichever imagery style best fits the subject of our report.
+> Bold, striking crops work best on report covers to grab
+> attention. The image should be full bleed to the edge of the
+> page. If you chose to use illustration you can either have a
+> Night Blue background or an Ice White background. Our logo
+> and the CCCEP logo appear in the bottom bar on the page.
+> Cover with illustration (on white) Cover with illustration (on Night Blue) Cover with monochrome photography
+> First line of the title
+> second line goes here
+> third line goes here
+> First line of the title
+> second line goes here
+> third line goes here
+> First line of the title
+> second line goes here
+> third line goes here
+> Author’s name(s) goes here
+> Author’s name(s) goes here
+> Author’s name(s) goes here
+> 22 / 43
+> Brand applications
+> Policy report spreads
+> To keep messaging clear and consistent we use colour
+> sparingly on the inside pages of our reports. Headline and
+> title text appears in Molten Red and body copy is in Night
+> Blue. Our report spreads follow a three column grid with our
+> body copy being left aligned. Charts and graphs are in tints
+> of Night Blue. Key numbers and statistics can be pulled out in
+> Molten Red.
+> Double page spread example
+> 23 / 43
+> Brand applications
+> Figures, tables
+> and infographics
+> Our infographics are clean and simple. Use tints of Night Blue
+> to pull out different elements and segments of information.
+> Molten Red should be used as a highlight colour only for
+> numbers and titles.
+> Table example
+> Pie chart example
+> Graph example
+> 100,000
+> 100,000
+> 75,000
+> 50,000
+> World map example
+> 25,000
+> 10,000
+> 3. Russia
+> 17,639
+> million tons
+> 7. Canada
+> 17,639
+> million tons
+> 15,000
+> 8. UK
+> 17,639
+> million tons
+> 6. Germany
+> 17,639
+> million tons
+> 2. China
+> 45,301
+> million tons
+> 1. US
+> 64,166
+> million tons
+> 4. Japan
+> 17,639
+> million tons
+> 10,000
+> 5. India
+> 17,639
+> million tons
+> 2001
+> 2002
+> 2003
+> 2004
+> 2005
+> 2005
+> 2006
+> 2007
+> 2008
+> 2009
+> 2010
+> 2011
+> 2012
+> 2013
+> 2014
+> 2015
+> 2016
+> Category type Category type Category type
+> 24 / 43
+> Brand applications
+> Working papers
+> Our working paper covers all follow the same template and
+> format. The title text always appears in the top left hand
+> corner with the main title in Night Blue. Please do not amend
+> the type size in the templates provided.
+> Our working papers feature a line graphic on the front cover
+> to tie in with our symbol.
+> Working papers feature the three line version of our logo and
+> the CCCEP symbol across the top of the cover.
+> All other logos appear at the bottom of the page under the
+> bar graphic.
+> CCCEP Major CCCEP Minor PRISE Grantham Research Institute only
+> Title of working paper goes
+> here second line goes here
+> third line goes here and here
+> forth line goes here
+> and fifth line goes here
+> Authors name(s) goes here
+> Title of working paper goes
+> here second line goes here
+> third line goes here and here
+> forth line goes here
+> and fifth line goes here
+> Authors name(s) goes here
+> Title of working paper goes
+> here second line goes here
+> third line goes here and here
+> forth line goes here
+> and fifth line goes here
+> Authors name(s) goes here
+> Title of working paper goes
+> here second line goes here
+> third line goes here and here
+> forth line goes here
+> and fifth line goes here
+> Authors name(s) goes here
+> Centre for Climate Change Economics and Policy
+> Working Paper No. 215
+> Grantham Research Institute on Climate Change
+> and the Environment
+> Working Paper No. 190
+> Centre for Climate Change Economics and
+> Policy Working Paper No. 215
+> Grantham Research Institute on Climate
+> Change and the Environment
+> Working Paper No. 190
+> Centre for Climate Change Economics and
+> Policy Working Paper No. 215
+> Grantham Research Institute on Climate
+> Change and the Environment
+> Working Paper No. 190
+> Grantham Research Institute on Climate
+> Change and the Environment
+> Working Paper No. 190
+> 25 / 43
+> Brand applications
+> Policy papers
+> Grantham Research Institute & CCCEP co-branded Title of policy paper goes here
+> second line goes here
+> third line goes here and here
+> forth line goes here
+> and fifth line goes here
+> Authors name(s) goes here
+> Policy paper (Month Year)
+> In collaboration with xxxx’
+> [insert logo]
+> Our policy paper covers all follow the same template and
+> format as working papers. The title text always appears in
+> the top left hand corner with the main title in Night Blue.
+> Please do not amend the type size in the templates provided.
+> Our policy papers feature a line graphic on the front cover to
+> tie in with our symbol.
+> Policy papers feature the three line version of our logo and
+> the CCCEP symbol across the top of the cover.
+> All other logos appear at the bottom of the page under the
+> bar graphic.
+> Grantham Research Institute only Inside pages examples
+> Title of policy paper goes here
+> second line goes here
+> third line goes here and here
+> forth line goes here
+> and fifth line goes here
+> Key 1 goes here
+> Key 2 goes here
+> Key 3 goes here
+> Key 4 goes here
+> Key 5 goes here
+> Key 6 goes here
+> Authors name(s) goes here
+> Policy paper (Month Year)
+> In collaboration with xxxx’
+> [insert logo]
+> 26 / 43
+> Brand applications
+> PowerPoint
+> presentations
+> For presentations we use monochrome photography on the
+> front cover slide. We use the three line version of our logo
+> alongside the CCCEP logo, which appear in the bar at the
+> bottom of the slide. We have three alternative slide styles for
+> internal pages. All text is left aligned to aide readability.
+> When you need to breakdown information please use the
+> bullet point slide template. For times when you need to pull
+> out a quote very large or highlight an important piece of
+> information please use the quote slide template.
+> Night Blue should only be used as a background colour on
+> quote slides and not on other slide templates.
+> PowerPoint presentation
+> Title of presentation
+> second line here and
+> third line goes here
+> Name of presenter goes here
+> Header goes here
+> Lamus nonseditio. Seditatem nissitatqui ipis ipis
+> apienita quibus modicte voluptam, nobis pores
+> dolendae qui officit velignis iderepedit landae
+> eumquam eseque vidust laut maione nonecabor
+> ra vollorit atem. Name la nihit aut rehendi gendips
+> untium, sum netur sus.
+> Agniat es sa cum solenis aut aut exerum ent
+> vendit quid molor sincipsam ut isitios amenis
+> velendi autas autet et alitati occaecus vide odio
+> quamusam, odi officimaxim ius, occumquis as
+> es iliquiscidel es aut verchiciis cullo tota doluptas
+> incil ipsandu cienimp oribus dolutatio
+> xx
+> “Pull out quotes will look like
+> this. Second line goes here.
+> Third line goes here. Fourth
+> line goes here and fifth line
+> goes here.”
+> Name goes here
+> xx
+> 27 / 43
+> Brand applications
+> Logo animation
+> We have created a brand animation that can be used at
+> the start of presentations, videos, social media and
+> as a holding slide at event. The animation shows our logo
+> forming and building. There are two versions of our animation
+> available; a single play-through and a looping version.
+> Brand animation storyboard
+> 28 / 43
+> Brand applications
+> Newsletters
+> and mailshots
+> We have three templates; a standard newsletter, a event
+> e-invitation and an emailshot, which is mostly used to
+> promote new publications. We use monochrome photography
+> on our newsletters and Molten Red is used for headline text
+> and rule dividers. Night Blue is used for body copy.
+> Emailshots tend to be more text heavy so please make
+> sure information is broken down as much as possible using
+> numbers or bullet points.
+> Standard newsletter example Event e-invitation example Emailshot example
+> We’ll always have Paris:
+> COP21 and the new political
+> economy of climate change
+> Newsletter
+> 6th July 2016
+> How will Brexit affect climate
+> change policy?
+> Bob Ward, policy and communications director at the Institute,
+> explores the potential impact of the UK vote to leave the EU for
+> climate change policy.
+> News
+> Strengthening the UK’s flood insurance partnership in the face of
+> rising risks: what role for property developers?
+> Florence Crick and Swenja Surminski outline ways in which
+> property developers could help reduce flood insurance
+> premiums.
+> Speaker:
+> Michael Jacobs
+> Chair:
+> Prof. Samuel Fankhauser
+> Time & Date:
+> 6.30pm - 8pm, Thursday, 18 February 2016
+> Venue:
+> London School of Economics and Political Science, Old Theatre, Old Building,
+> Houghton Street, London, WC2A 2AE
+> To register for this event, please click here
+> Lord Stern comments on the publication of the proposed Fifth
+> Carbon Budget
+> Lord Stern comments on the decision by the UK Government to
+> accept the advice of the expert and independent Committee on
+> Climate Change to set the Fifth Carbon Budget.
+> The lecture will be followed by a question & answer session with contributions
+> from Dr Robert Falkner and Dr Alina Averchenkova.
+> Lord Stern responds to speech by Amber Rudd
+> Response from Lord Stern to a speech by Amber Rudd, the UK
+> Secretary of State for Energy and Climate Change, in which she
+> reaffirmed the Government’s long term climate change goals in
+> the light of the recent vote by the UK to leave the EU.
+> The Paris Climate Change Agreement, achieved at the UN COP21 Conference
+> in December, is the first legally-binding agreement on climate change since
+> the Kyoto Protocol in 1997. Michael Jacobs worked closely with the French
+> Government and various international organisations in the political process
+> leading up to the conference, having previously been adviser to UK Prime
+> Minister Gordon Brown at the failed UN conference in Copenhagen in 2009.
+> Tse-Ling Teh awarded prestigious Ernst Meyer Prize
+> Tse-Ling Teh, a Research Officer at the Grantham Research
+> Institute has been awarded the prestigious Ernst Meyer Prize for her
+> In this lecture he will explore both the causes and the consequences of the
+> Paris Agreement. Why and how was it achieved, where Copenhagen failed?
+> What does the Agreement actually mean? And will it work? Examining the
+> 29 / 43
+> 6 / 40
+> relationships between the economics of action on climate change, the
+> politics of climate in Europe, the US, China and elsewhere, and the complex
+> Brand applications
+> Website logo usage
+> We use the four line version of our logo alongside the full LSE
+> logo on our website. This ensures that our logo is balanced
+> with the LSE branding.
+> Website branding
+> About Research programmes News & commentaries Publications Events Pe
+> 6 / 40
+> 30 / 43
+> Brand applications
+> Website photography
+> To ensure our imagery is consistent with our brand we use
+> monochrome photography throughout our website. This helps
+> to make us distinct and to reinforce our brand.
+> Our photography is strong and clear. Remember to avoid
+> environmental clichés. Please refer to page 17 on the best way
+> to select a strong brand image.
+> Website branding
+> About
+> Research programmes News & commentaries Publications Events People Learn
+> Global climate legislation study
+> World’s financial assets at risk
+> UK climate change policy & competitiveness
+> Climate policy, innnovation & growth
+> End of DECC could be good news
+> Resilience in semi-arid economies
+> Our latest work Hot topics
+> Research
+> Policy News Events
+> 31 / 43
+> Brand applications
+> Website icons
+> Our website features bespoke symbols which illustrate our
+> research programmes. These are made up of dots and lines to
+> reflect our brand. Our symbols always appear on a Night Blue
+> background.
+> Research programmes icons
+> Icons on our website
+> About About
+> Research programmes Research programmes News & commentaries Publications Events People Learn
+> News & commentaries Publications Events People Learn
+> Home > Research programmes
+> Research programmes
+> Find out more about our research programmes, including latest news, publications and
+> events, plus our researchers, students and associates.
+> Global climate legislation study
+> World’s financial assets at risk
+> UK climate change policy & competitivene
+> Adaptation & development
+> Carbon trading & finance
+> Ecosystems, resources & the natural envir
+> Climate policy, innnovation & growth
+> End of DECC could be good news
+> Resilience in semi-arid economies
+> Our latest work Hot topics
+> Research
+> Policy News Events
+> Energy, technology & trade
+> Future generations & social justice
+> Growth & the economy
+> 32 / 43
+> Brand applications
+> Social media overview
+> We have a special social media use version of our logo.
+> This has been optimised to work well in small formats and
+> on screen.
+> We confidently use our symbol alone as our Twitter
+> and Facebook avatar. This follows the trend of most
+> brands worldwide.
+> We have eight research topic animations available to use on
+> social media. Our brand animation can also be used in social
+> media. This is a good tool for Tweets or posts that don’t have
+> an obvious image or video.
+> Twitter Animations
+> Rigour &
+> independence
+> Facebook
+> Rigour &
+> independence
+> 33 / 43
+> Brand applications
+> Events overview
+> Our events are a good opportunity to showcase our
+> brand. Our brand adds professionalism and presence to a
+> physical space.
+> We have a suite of assets for use at events. Our table cloth
+> features the line graphic and the four line version of our logo
+> large alongside the LSE logo.
+> There are two sizes of table cloth available depending on
+> table size. Our lanyards also feature the line graphic as
+> well as space for the attendees name and our logo with the
+> LSE mark.
+> Badges and note paper designs are included here for
+> inspiration.
+> Holding slide animation
+> Banners
+> Badges
+> Logo board and table cloth
+> Note pad Lanyards
+> 34 / 43
+> Brand applications
+> Banners
+> We have two banner designs available for events. These
+> include our strap line ‘Rigour & independence’ and can be
+> used at any event.
+> One of the banners is on an Ice White background and
+> features our symbol large with the LSE logo in the top right,
+> while the other banner is on Night Blue with our logo smaller
+> and the LSE logo on the bottom right. If it is only possible to
+> use one banner at an event please consider the nature of the
+> venue beforehand. Example 1 is more suitable for large venues
+> for legibility reasons.
+> Example 1 Example 2
+> 35 / 43
+> Please don’t...
+> 5
+> Please don’t
+> What not to do with
+> our logo
+> A lot of love and craft has gone into our brand so please
+> don’t amend or manipulate our logo in any way. Please do
+> not stretch it, change the typeface or add in any colour to
+> our symbol. Do not reconfigure the elements in any way and
+> only use the versions of the logo that have been supplied.
+> Stretch/squash the logo
+> Use the large use logo small
+> Change the typeface
+> Flip the logo
+> Change the colours of the logo
+> Change the positioning of the text
+> 37 / 43
+> Appendix
+> 6
+> Appendix
+> GRI logos
+> Please use this page to locate the brand asset
+> file you require.
+> 4 line logo 3 line logo Symbol Logotype
+> Large use:
+> For print
+> GRI_4line_logo_B+R_lge_CMYK.eps
+> GRI_4line_logo_B+R_lge_CMYK.tif
+> GRI_4line_logo_W+B+R_block_lge_CMYK.eps
+> GRI_4line_logo_W+B+R_block_lge_CMYK.tif
+> GRI_4line_logo_W+B+R_lge_CMYK.eps
+> GRI_4line_logo_W+R_lge_CMYK.eps
+> Small use:
+> Large use:
+> Small use:
+> For print
+> GRI_4line_logo_B+R_sml_CMYK.eps
+> GRI_4line_logo_B+R_sml_CMYK.tif
+> GRI_4line_logo_K_sml_CMYK.eps
+> GRI_4line_logo_K_sml_CMYK.tif
+> GRI_4line_logo_K+W_sml_CMYK.eps
+> GRI_4line_logo_K+W_sml_CMYK.tif
+> GRI_4line_logo_W+B+R_block_sml_CMYK.eps
+> GRI_4line_logo_W+B+R_block_sml_CMYK.tif
+> GRI_4line_logo_W+B+R_sml_CMYK.eps
+> GRI_4line_logo_W+R_sml_CMYK.eps
+> For print
+> GRI_3line_logo_B+R_lge_CMYK.eps
+> GRI_3line_logo_B+R_lge_CMYK.tif
+> For print
+> GRI_3line_logo_B_sml_CMYK.eps
+> GRI_3line_logo_B_sml_CMYK.tif
+> GRI_3line_logo_B+R_sml_CMYK.eps
+> GRI_3line_logo_B+R_sml_CMYK.tif
+> For screen
+> GRI_3line_logo_B+R_lge_RGB.eps
+> For screen
+> GRI_3line_logo_B+R_sml_RGB.eps
+> Large use:
+> Large use:
+> For print
+> For print
+> GRI_symbol_B+R_lge_CMYK.eps
+> GRI_logotype_B_lge_CMYK.eps
+> GRI_symbol_B+R_lge_CMYK.eps
+> GRI_logotype_R_lge_CMYK.eps
+> GRI_logotype_W_lge_CMYK.eps
+> For screen
+> GRI_symbol_B+R_lge_RGB.eps
+> For screen
+> GRI_symbol_B+W+R_lge_RGB.eps
+> GRI_logotype_B_lge_RGB.eps
+> GRI_logotype_R_lge_RGB.eps
+> For screen
+> GRI_4line_logo_B+R_lge_RGB.eps
+> GRI_4line_logo_B+R_lge_RGB.jpg
+> GRI_4line_logo_W+B+R_block_lge_RGB.eps
+> GRI_4line_logo_W+B+R_block_lge_RGB.jpg
+> GRI_4line_logo_W+B+R_lge_RGB.eps
+> GRI_4line_logo_W+R_lge_RGB.eps
+> GRI_logotype_W_lge_RGB.eps
+> For screen
+> GRI_4line_logo_B+R_sml_RGB.eps
+> GRI_4line_logo_B+R_sml_RGB.jpg
+> GRI_4line_logo_W+B+R_block_sml_RGB.eps
+> GRI_4line_logo_W+B+R_block_sml_RGB.jpg
+> GRI_4line_logo_W+B+R_sml_RGB.eps
+> GRI_4line_logo_W+R_sml_RGB.eps
+> 39 / 43
+> Appendix
+> LSE co-branding logos
+> LSE (with type) + Grantham Research Institute logos Large use:
+> Small use:
+> For print
+> LSE+type_GRI_lockup_B+R_lge_CMYK.eps
+> LSE+type_GRI_lockup_B+R_lge_CMYK.tif
+> For print
+> LSE+type_GRI_lockup_B+R_sml_CMYK.eps
+> LSE+type_GRI_lockup_B+R_sml_CMYK.tif
+> For screen
+> LSE+type_GRI_lockup_B+R_lge_RGB.eps
+> LSE+type_GRI_lockup_B+R_lge_RGB.jpg
+> For screen
+> LSE+type_GRI_lockup_B+R_sml_RGB.eps
+> LSE+type_GRI_lockup_B+R_sml_RGB.jpg
+> Please use this page to locate the brand asset
+> file you require.
+> LSE (without type) + Grantham Research Institute logos
+> Large use:
+> Small use:
+> For print
+> LSE-type_GRI_lockup_B+R_lge_CMYK.eps
+> LSE-type_GRI_lockup_B+R_lge_CMYK.tif
+> LSE-type_GRI_lockup_B+R+W_block_lge_CMYK.eps
+> LSE-type_GRI_lockup_B+R+W_block_lge_CMYK.tif
+> LSE-type_GRI_lockup_B+R+W_blocks_lge_CMYK.eps
+> LSE-type_GRI_lockup_B+R+W_blocks_lge_CMYK.tif
+> LSE-type_GRI_lockup_B+R+W_lge_CMYK.eps
+> For screen
+> LSE-type_GRI_lockup_B+R_lge_RGB.eps
+> LSE-type_GRI_lockup_B+R_lge_RGB.jpg
+> LSE-type_GRI_lockup_B+R+W_block_lge_RGB.eps
+> LSE-type_GRI_lockup_B+R+W_block_lge_RGB.jpg
+> LSE-type_GRI_lockup_B+R+W_blocks_lge_RGB.eps
+> LSE-type_GRI_lockup_B+R+W_blocks_lge_RGB.jpg
+> LSE-type_GRI_lockup_B+R+W_lge_RGB.eps
+> For print
+> LSE-type_GRI_lockup_B+R_sml_CMYK.eps
+> LSE-type_GRI_lockup_B+R_sml_CMYK.tif
+> LSE-type_GRI_lockup_B+R+W_block_sml_CMYK.eps
+> LSE-type_GRI_lockup_B+R+W_block_sml_CMYK.tif
+> LSE-type_GRI_lockup_K_block_sml_CMYK.eps
+> LSE-type_GRI_lockup_K_block_sml_CMYK.tif
+> LSE-type_GRI_lockup_K_sml_CMYK.eps
+> LSE-type_GRI_lockup_K_sml_CMYK.tif
+> LSE-type_GRI_lockup_W+K_block_sml_CMYK.eps
+> LSE-type_GRI_lockup_W+K_block_sml_CMYK.tif
+> For screen
+> LSE-type_GRI_lockup_B+R_sml_RGB.eps
+> LSE-type_GRI_lockup_B+R_sml_RGB.jpg
+> LSE-type_GRI_lockup_B+R+W_block_sml_RGB.eps
+> LSE-type_GRI_lockup_B+R+W_block_sml_RGB.jpg
+> LSE-type_GRI_lockup_B+R+W_sml_RGB.eps
+> LSE+type_GRI_lockup_B+R_sml_RGB.eps
+> LSE+type_GRI_lockup_B+R_sml_RGB.jpg
+> 40/ 43
+> Appendix
+> CCCEP
+> co-branding logos
+> Please use this page to locate the brand asset
+> file you require.
+> CCCEP + Grantham Research Institute logos
+> Large use:
+> Small use:
+> For print
+> CCCEP_GRI_lockup_B+R_lge_CMYK.eps
+> CCCEP_GRI_lockup_B+R_lge_CMYK.tif
+> For print
+> CCCEP_GRI_lockup_B+R_sml_CMYK.eps
+> CCCEP_GRI_lockup_B+R_sml_CMYK.tif
+> For screen
+> CCCEP_GRI_lockup_B+R_lge_RGB.eps
+> CCCEP_GRI_lockup_B+R_lge_RGB.jpg
+> For screen
+> CCCEP_GRI_lockup_R+B_sml_RGB.eps
+> CCCEP_GRI_lockup_R+B_sml_RGB.jpg
+> 41 / 43
+> Contact
+> Who to speak to
+> If you have any questions at all about our brand and how
+> to use it please contact GRI Admin (gri@lse.ac.uk).
+> They will be able to help you with any queries regarding
+> imagery, templates and social media assets.
+> 42 / 43
+> lse.ac.uk/granthaminstitute/ @GRI_LSE
+> Design: TEMPLO
+> ===
+> 
+> Is there anything else there that we should include in this GRI-ggplot customization?
+**assistant**:
+> Based on the branding document you provided, here are additional elements you can incorporate into your ggplot customizations to ensure alignment with the Grantham Research Institute's (GRI) branding guidelines:
+> 
+> ### 1. Color Palette
+> You’re already utilizing the primary colors (Night, Molten, Ice). However, it might be beneficial to include notes about how to use the colors based on their recommendations. For example:
+> 
+> - **Principal Usage**: Use Night for text, Ice for backgrounds, and Molten sparingly for highlights.
+> - **Tints of Night Blue**: You can create tints using transparency for various elements (e.g., bars in charts).
+> 
+> ### 2. Typography
+> You have already set the fonts, but make sure to apply them as follows based on their guidance:
+> 
+> - **Headlines**: `LL Brown Bold` for all main titles and key sections.
+> - **Body**: `LL Brown Light` for the majority of the textual content.
+> - **Captions and Footnotes**: Use `LL Brown Regular` for supporting information, including captions on figures.
+> 
+> ### 3. Consistency in Infographics
+> For figures and charts, the branding document emphasizes clarity and simplicity:
+> 
+> - Ensure that your infographics (like the ggplot figures) are clean and straightforward. Limit the number of colors to maintain a cohesive look throughout the report and avoid clutter.
+> 
+> ### 4. Avoid Environmental Clichés
+> This might be more relevant to images or photographs, but when creating infographics or thematic presentations, avoid common climate change imagery (like polar bears) if applicable.
+> 
+> ### 5. Graph Design Recommendations
+> For figures, the document mentions that charts and graphs should be in tints of Night Blue. You can consider creating a function that automatically applies these tints when plotting.
+> 
+> ### Putting It All Together
+> Here's a modified version of your ggplot custom theme that aligns with the branding guidelines:
+> 
+> ```r
+> # Load necessary packages
+> library(ggplot2)
+> library(extrafont)
+> library(scales)
+> library(grid)
+> 
+> # Load fonts
+> font_import(path = "share/Brown fonts for staff", prompt = FALSE)
+> loadfonts(device = "win")
+> 
+> # Custom color palette
+> night_colors <- c(
+>   scales::alpha('#2E3152', 0.5),  # 50% transparent
+>   scales::alpha('#2E3152', 0.25), # 25% transparent
+>   '#2E3152'                      # 0% transparent (full color)
+> )
+> 
+> # Custom theme
+> custom_theme <- theme_bw() +
+>   theme(
+>     text = element_text(family = "BrownTT-Light"),
+>     plot.title = element_text(family = "BrownTT-Bold", size = 14),
+>     axis.title = element_text(size = 12),
+>     axis.text = element_text(size = 10),
+>     legend.text = element_text(family = "BrownTT-Regular", size = 10),
+>     legend.title = element_text(family = "BrownTT-Bold", size = 11),
+>     plot.margin = unit(c(5.5, 5.5, 5.5, 25), "pt"),
+>     legend.position = "bottom",
+>     axis.text.x = element_text(angle = 45, hjust = 1)
+>   )
+> 
+> # Custom scale
+> custom_scale <- scale_fill_manual("Year: ", values = night_colors)
+> 
+> # Example ggplot with all elements considered
+> gp <- ggplot(subset(allsumsxyear, panel == 'Economy'), aes(Group, fill=factor(year))) +
+>   geom_col(aes(y=total), position='dodge') +
+>   geom_errorbar(aes(ymin=total25, ymax=total75), position=position_dodge(width=0.9), width=.5) +
+>   scale_y_continuous(labels=scales::percent) + 
+>   custom_scale +  
+>   ylab("Change in GDP from Climate Change (%)") +
+>   xlab(NULL) +
+>   custom_theme
+> ```
+> 
+> ### Additional Notes
+> - Always ensure that the figures are visually effective and directly reinforce your message without overwhelming the viewer.
+> - Consider using clear, bold titles in the specified fonts to enhance readability and engagement.
+> 
+> By incorporating these additional elements, your ggplot visualizations will conform more closely to the branding standards outlined in the document, further enhancing the professional presentation of your work.
+**user**:
+> How do I make the text elements use the Night color?
+**assistant**:
+> To apply the "Night Blue" color (`#2E3152`) to text elements in your ggplot, you can modify the text-related theme settings to specify this color. Specifically, you will set the `color` argument for `element_text` in various theme components such as `plot.title`, `axis.title`, `axis.text`, etc.
+> 
+> Here's how you can incorporate the "Night" color into your custom theme:
+> 
+> ```r
+> # Custom theme with Night color for text
+> custom_theme <- theme_bw() +
+>   theme(
+>     text = element_text(family = "BrownTT-Light", color = "#2E3152"), # Using Night Blue for general text elements
+>     plot.title = element_text(family = "BrownTT-Bold", size = 14, color = "#2E3152"), # Title in Night color
+>     axis.title = element_text(size = 12, color = "#2E3152"), # Axis titles in Night color
+>     axis.text = element_text(size = 10, color = "#2E3152"), # Axis text in Night color
+>     legend.text = element_text(family = "BrownTT-Regular", size = 10, color = "#2E3152"), # Legend text in Night color
+>     legend.title = element_text(family = "BrownTT-Bold", size = 11, color = "#2E3152"), # Legend title in Night color
+>     plot.margin = unit(c(5.5, 5.5, 5.5, 25), "pt"),
+>     legend.position = "bottom",
+>     axis.text.x = element_text(angle = 45, hjust = 1, color = "#2E3152") # Ensure x-axis text is also in Night color
+>   )
+> 
+> # Example ggplot using the updated theme
+> gp <- ggplot(subset(allsumsxyear, panel == 'Economy'), aes(Group, fill=factor(year))) +
+>   geom_col(aes(y=total), position='dodge') +
+>   geom_errorbar(aes(ymin=total25, ymax=total75), position=position_dodge(width=0.9), width=.5) +
+>   scale_y_continuous(labels=scales::percent) + 
+>   custom_scale +  
+>   ylab("Change in GDP from Climate Change (%)") +
+>   xlab(NULL) +
+>   custom_theme
+> ```
+> 
+> ### Key Points:
+> - **`text`**: Sets the default font family and color for all text elements.
+> - **`plot.title`**, **`axis.title`**, **`axis.text`**: Specifically define the color to "Night Blue" to ensure consistency.
+> - **`legend.text`**, **`legend.title`**: Ensure legend text and titles are also using "Night Blue."
+> 
+> By setting the color for text elements to `#2E3152`, you align with the Grantham Research Institute's branding color scheme throughout your ggplot visualizations.
+**user**:
+> Is there a way to add the custom theme after I've already set the "plot.margin", "legend.position", and "axis.text.x" items in the theme, and not have these be dropped? I want to create the ggplot object and then add on just the branding elements, and leave those alone.
+**assistant**:
+> Yes, you can apply a custom theme to a ggplot object without overwriting previously set theme elements by using the `theme_update()` function. This function updates the existing theme elements rather than replacing them entirely. However, `theme_update()` is not directly used with specific ggplot objects; it's more useful for updating global theme settings.
+> 
+> For individual plots, you can use a technique where you explicitly add new theme elements without affecting the ones you've already set. This involves using the `+` operator to add multiple theme layers to your plot.
+> 
+> Here's how you can apply branding elements selectively without changing the other specified elements:
+> 
+> ```r
+> # Define the branding elements as a separate theme
+> branding_theme <- theme(
+>     text = element_text(family = "BrownTT-Light", color = "#2E3152"),
+>     plot.title = element_text(family = "BrownTT-Bold", size = 14, color = "#2E3152"),
+>     axis.title = element_text(size = 12, color = "#2E3152"),
+>     axis.text = element_text(size = 10, color = "#2E3152"),
+>     legend.text = element_text(family = "BrownTT-Regular", size = 10, color = "#2E3152"),
+>     legend.title = element_text(family = "BrownTT-Bold", size = 11, color = "#2E3152")
+> )
+> 
+> # Create the ggplot object with specific elements set
+> gp <- ggplot(subset(allsumsxyear, panel == 'Economy'), aes(Group, fill=factor(year))) +
+>   geom_col(aes(y=total), position='dodge') +
+>   geom_errorbar(aes(ymin=total25, ymax=total75), position=position_dodge(width=0.9), width=.5) +
+>   scale_y_continuous(labels=scales::percent) + 
+>   custom_scale +  
+>   ylab("Change in GDP from Climate Change (%)") +
+>   xlab(NULL) +
+>   theme_bw() +
+>   theme(plot.margin=unit(c(5.5, 5.5, 5.5, 25), "pt"),
+>         legend.position="bottom",
+>         axis.text.x=element_text(angle=45, hjust=1))
+> 
+> # Add the branding theme without affecting existing settings
+> gp <- gp + branding_theme
+> ```
+> 
+> ### Key Points:
+> - **Separate Branding Theme**: The `branding_theme` contains only the elements related to font family, color, and any global aesthetic related to text.
+> - **Add Instead of Replace**: When you add `branding_theme` to your ggplot object with `+`, the existing plot settings for margins, legend position, and axis text angle are preserved.
+> - **Hierarchical Application**: By adding your branding theme last, you ensure text formats and colors are applied on top of your existing setup, but do not replace settings like `plot.margin`, `legend.position`, and `axis.text.x`. 
+> 
+> This approach provides flexibility in customizing specific aspects of your plots while preserving other carefully configured details.
