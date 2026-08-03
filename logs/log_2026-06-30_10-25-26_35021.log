@@ -1,0 +1,224 @@
+**user**:
+> Why doesn't the argument to digits in xtable work for me here:
+> ```
+> > print(xtable(tbl, digits=c(0, 2, 2, 2, 2, 2, 2, 0, 2, 0, 2)))
+> % latex table generated in R 4.4.2 by xtable 1.8-4 package
+> % Tue Jun 30 10:24:47 2026
+> \begin{table}[ht]
+> \centering
+> \begin{tabular}{rllllllllll}
+>   \hline
+>  & persist & 0\% & 5\% & 50\% & 95\% & 100\% & miniso & frac.miniso & maxiso & frac.maxiso \\ 
+>   \hline
+> 1 & 0 & -14.565260342583 & -2.43522013955961 & 0 & 1.76922375676716 & 12.7445650357702 & NER & 17.2305409394077 & NOR & 42.521328226079 \\ 
+>   2 & 0.36 & -1.64014626580553 & -0.381707222319636 & 0 & 0.336604150716205 & 1.46438630763934 & SDN & 17.6210203071342 & NOR & 43.8725970620935 \\ 
+>   3 & 0.6 & -0.998501076700697 & -0.235435446833324 & 0 & 0.213900089927183 & 0.910298913089249 & NER & 17.8658742794326 & NOR & 46.5232559879375 \\ 
+>   4 & 0.78 & -0.77236816959998 & -0.182785255266193 & 0 & 0.166228263964575 & 0.715774218975526 & NER & 18.0469162640826 & NOR & 46.6828440794703 \\ 
+>   5 & 1 & -0.608655611277915 & -0.144104109628255 & 0 & 0.131483477514629 & 0.563436832554793 & NER & 18.0438051223157 & NOR & 46.8819874206802 \\ 
+>    \hline
+> \end{tabular}
+> \end{table}
+> ```
+**assistant**:
+> `xtable`’s `digits` argument controls *numeric formatting only*. It does **not** round or format character columns, and it also won’t work if the length or structure of `digits` doesn’t match what `xtable` expects.
+> 
+> From your output, a few things stand out:
+> 
+> 1. **Your `digits` vector has length 11**  
+>    ```r
+>    digits = c(0, 2, 2, 2, 2, 2, 2, 0, 2, 0, 2)  # length 11
+>    ```
+>    But the printed table has:
+> 
+>    - 1 (implicit) row-number column
+>    - 10 data columns:
+> 
+>      ```text
+>      persist, 0%, 5%, 50%, 95%, 100%, miniso, frac.miniso, maxiso, frac.maxiso
+>      ```
+> 
+>    So there are **1 + 10 = 11 columns** in the LaTeX table (including the row-number column). That means `digits` must have **length 11**, which you do have. So the length itself is fine.
+> 
+> 2. **Some of your columns are character, not numeric**  
+>    In the table body:
+> 
+>    ```text
+>    ... 12.7445650357702 & NER & 17.2305409394077 & NOR & 42.521328226079
+>    ```
+> 
+>    - `miniso` looks like `"NER"`, `"SDN"`, etc. → **character**
+>    - `maxiso` looks like `"NOR"` → **character**
+>    - The rest (e.g., `-14.565260342583`, `17.2305409394077`, `42.521328226079`) are numeric.
+> 
+>    `xtable`’s `digits` only applies to numeric columns. Character columns are printed as-is, unaffected by `digits`.
+> 
+> 3. **Why are the numeric columns still showing many decimals?**  
+>    By default, `print.xtable()` *should* respect the `digits` stored in the xtable object. But `print(xtable(tbl, digits=...))` does two things in one:
+> 
+>    - Creates the `xtable` object
+>    - Immediately prints it, possibly with default `digits` again
+> 
+>    In some setups, or depending on other arguments, this can be confusing. To be explicit and avoid surprises, split the steps and/or give `digits` to `print.xtable` directly:
+> 
+>    ```r
+>    library(xtable)
+> 
+>    xt <- xtable(tbl)       # or xtable(tbl, digits = digits)
+>    print(xt, digits = c(0, 2, 2, 2, 2, 2, 2, 0, 2, 0, 2))
+>    ```
+> 
+>    Or:
+> 
+>    ```r
+>    xt <- xtable(tbl, digits = c(0, 2, 2, 2, 2, 2, 2, 0, 2, 0, 2))
+>    print(xt)    # should now respect the stored digits
+>    ```
+> 
+> 4. **How digits are mapped to columns**
+> 
+>    For a data frame with `k` columns, `digits` for `print.xtable` must be length `k + 1`:
+> 
+>    - `digits[1]`: used for the row names/index column
+>    - `digits[2]`: first data column (`persist`)
+>    - `digits[3]`: second data column (`0%`)
+>    - …
+>    - `digits[11]`: last data column (`frac.maxiso`)
+> 
+>    So for your table:
+> 
+>    ```r
+>    digits <- c(
+>      0,  # row names
+>      2,  # persist
+>      2,  # 0%
+>      2,  # 5%
+>      2,  # 50%
+>      2,  # 95%
+>      2,  # 100%
+>      0,  # miniso (character: ignored, but must have a slot)
+>      2,  # frac.miniso
+>      0,  # maxiso (character: ignored)
+>      2   # frac.maxiso
+>    )
+>    ```
+> 
+>    This is structurally correct; just keep in mind character columns won’t show any rounding.
+> 
+> 5. **Quick minimal reproducible pattern**
+> 
+>    Try this pattern with your actual `tbl`:
+> 
+>    ```r
+>    library(xtable)
+> 
+>    digits <- c(0, 2, 2, 2, 2, 2, 2, 0, 2, 0, 2)
+>    xt <- xtable(tbl)
+>    print(xt, digits = digits)
+>    ```
+> 
+>    If you still see full-precision decimals, check:
+> 
+>    ```r
+>    str(tbl)
+>    ```
+> 
+>    to ensure the columns you expect to format are truly numeric (not factors or character).
+> 
+> If you paste the output of `str(tbl)` I can tell you exactly which entries in `digits` are actually having an effect and suggest the precise vector you need.
+**user**:
+> That didn't work:
+> ```
+> > digits <- c(0, 2, 2, 2, 2, 2, 2, 0, 2, 0, 2)
+> > 
+> > xt <- xtable(tbl)
+> > 
+> > print(xt, digits = digits)
+> % latex table generated in R 4.4.2 by xtable 1.8-4 package
+> % Tue Jun 30 10:26:11 2026
+> \begin{table}[ht]
+> \centering
+> \begin{tabular}{rllllllllll}
+>   \hline
+>  & persist & 0\% & 5\% & 50\% & 95\% & 100\% & miniso & frac.miniso & maxiso & frac.maxiso \\ 
+>   \hline
+> 1 & 0 & -14.565260342583 & -2.43522013955961 & 0 & 1.76922375676716 & 12.7445650357702 & NER & 17.2305409394077 & NOR & 42.521328226079 \\ 
+>   2 & 0.36 & -1.64014626580553 & -0.381707222319636 & 0 & 0.336604150716205 & 1.46438630763934 & SDN & 17.6210203071342 & NOR & 43.8725970620935 \\ 
+>   3 & 0.6 & -0.998501076700697 & -0.235435446833324 & 0 & 0.213900089927183 & 0.910298913089249 & NER & 17.8658742794326 & NOR & 46.5232559879375 \\ 
+>   4 & 0.78 & -0.77236816959998 & -0.182785255266193 & 0 & 0.166228263964575 & 0.715774218975526 & NER & 18.0469162640826 & NOR & 46.6828440794703 \\ 
+>   5 & 1 & -0.608655611277915 & -0.144104109628255 & 0 & 0.131483477514629 & 0.563436832554793 & NER & 18.0438051223157 & NOR & 46.8819874206802 \\ 
+>    \hline
+> \end{tabular}
+> \end{table}
+> ```
+**assistant**:
+> There are two separate issues here:
+> 
+> 1. **Your `digits` vector is fine and is being accepted.**
+> 2. **`xtable` will not round values that are already character strings.**
+> 
+> What’s likely happening is that the numeric-looking columns in `tbl` are actually **character** (or factor) columns, so `xtable` is just printing their strings verbatim and ignoring `digits`.
+> 
+> ### 1. Verify the column types
+> 
+> Run:
+> 
+> ```r
+> str(tbl)
+> sapply(tbl, class)
+> ```
+> 
+> If you see `"character"` or `"factor"` for columns like `0%`, `5%`, `50%`, etc., then `digits` cannot affect them. `xtable` only formats columns of class `"numeric"` / `"integer"`.
+> 
+> If they’re *not* numeric, convert them before calling `xtable`:
+> 
+> ```r
+> tbl2 <- tbl
+> # Example: convert all non-character, non-factor columns to numeric
+> num_cols <- sapply(tbl2, function(x) !is.character(x) & !is.factor(x))
+> tbl2[num_cols] <- lapply(tbl2[num_cols], as.numeric)
+> 
+> xt <- xtable(tbl2)
+> print(xt, digits = c(0, 2, 2, 2, 2, 2, 2, 0, 2, 0, 2))
+> ```
+> 
+> Or explicitly by name:
+> 
+> ```r
+> tbl2 <- transform(
+>   tbl,
+>   persist      = as.numeric(persist),
+>   `0%`         = as.numeric(`0%`),
+>   `5%`         = as.numeric(`5%`),
+>   `50%`        = as.numeric(`50%`),
+>   `95%`        = as.numeric(`95%`),
+>   `100%`       = as.numeric(`100%`),
+>   frac.miniso  = as.numeric(frac.miniso),
+>   frac.maxiso  = as.numeric(frac.maxiso)
+> )
+> xt <- xtable(tbl2)
+> print(xt, digits = c(0, 2, 2, 2, 2, 2, 2, 0, 2, 0, 2))
+> ```
+> 
+> After that, you should see numbers like `-14.57` instead of `-14.565260342583`.
+> 
+> ### 2. Confirm that `print` does see your `digits`
+> 
+> To be sure `print.xtable` is getting your vector, try:
+> 
+> ```r
+> getOption("digits")           # this is a *different* global setting
+> xt <- xtable(tbl2)
+> print(xt, digits = digits, include.rownames = TRUE)
+> ```
+> 
+> If you accidentally have a *matrix* `digits` (e.g., via `as.matrix(digits)`), or a named vector that doesn’t match column count, `xtable` will silently fall back to column-wise defaults. Your plain numeric vector of length 11 is structurally correct, so the only remaining explanation is column classes.
+> 
+> ---
+> 
+> If you paste the output of:
+> 
+> ```r
+> str(tbl)
+> ```
+> 
+> I can tell you exactly which conversions are needed and give you a drop‑in snippet.

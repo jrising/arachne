@@ -1,0 +1,585 @@
+**user**:
+> I am writing up a methods appendix for a report. The first part of this section discusses risk modeling:
+> ```
+> \subsection{Risk modeling}
+> 
+> We assess fluvial and surface (pluvial) flooding impacts by combining three independent modelling sources: (i) river flood impacts from the PESETA IV analysis \citepalias{feyen2020climate} based on the LISFLOOD hydrological model, (ii) national projections from the UK Climate Change Risk Assessment 2017 (CCRA3) for future flood risk \citep{sayers2020third}, and (iii) COACCH flood impacts \citepalias{lincked2019d23}, which use the GLOFRIS and OSDaMage frameworks to quantify riverine flooding effects on labour, productivity, and infrastructure. We convert each source to a set of temperature‑driven damage functions in monetary terms and then combine them using a Bayesian meta-analysis that treats the three as structurally distinct models of UK flood damages.
+> 
+> The PESETA IV river flood results \citepalias{feyen2020climate} are derived from LISFLOOD \citep{van2010lisflood}, a large-scale hydrological model that simulates river discharge and inundation under climate change scenarios. LISFLOOD is driven by bias-corrected climate projections and uses detailed river network, soil, and land-use data to estimate changes in flood frequency and magnitude. Flood damages are obtained by overlaying inundation depth and extent on exposure maps (assets and population) and applying depth–damage functions to derive direct economic losses. We extract UK-specific time series of annual expected damages under different climate scenarios and express these as functions of global mean temperature change, using the common temperature pathways from FaIR as the forcing variable. This yields a set of reduced-form damage functions linking temperature to UK river flood damages, which are then converted into monetary losses consistent with our UK macroeconomic baseline.
+> 
+> The CCRA3 analysis \citep{sayers2020third} provides projections of future UK flood risk across multiple perils (coastal, fluvial, and surface). To isolate fluvial and surface flooding, we subtract coastal flooding damages from the reported total flood damages, using the consistent partitioning in the CCRA3 report. These flood damage estimates are reported at the scale of water management regions within each UK country. For each region, we follow our standard damage-function procedure: we construct time series of projected annual damages under specified climate and development scenarios, then relate these to global mean temperature or time, focusing on the period where climate change is the dominant driver of changes in risk. 
+> 
+> To calibrate uncertainty for the CCRA3-based damage functions, we exploit the discrepancy between estimated and modelled damages for the 2007 UK flood event. Observed total 2007 flood damages were approximately \textsterling 3.2\,billion, while the corresponding CCRA3-based projections for that event imply damages of \textsterling 10.9\,billion. We interpret the observed value as approximately the 5th percentile of the model-predicted distribution for that year. Under a lognormal (or similar) error structure, this mapping determines an implied standard error; we then assume that the same proportional standard error applies to all projected damage values derived from CCRA3. This procedure yields regional damage functions with explicit uncertainty bands, which we aggregate to a UK-level probabilistic damage function for fluvial and surface flooding.
+> 
+> The COACCH flood results \citepalias{lincked2019d23} are based on GLOFRIS, a global river flood hazard and risk model, coupled with the OSDaMage framework for translating flood events into economic impacts. GLOFRIS provides high-resolution maps of flood depth and frequency under different climate scenarios, which are combined with spatially explicit exposure and vulnerability data to estimate direct flood losses. OSDaMage then propagates these shocks through the economy to capture impacts on labour, productivity, and infrastructure. We extract UK-level annual expected damages (direct plus selected indirect effects) from these simulations and fit temperature-dependent damage functions following the same reduced-form approach as for PESETA and CCRA3, ensuring consistency in units (millions of pounds, in common price and currency terms) and baseline socioeconomic assumptions where possible.
+> 
+> For each of the three sources, the outcome is a stochastic damage function that maps global mean temperature (or time, conditional on a temperature pathway) to annual UK flood damages in monetary terms. We then combine these three model-specific damage functions using a Bayesian meta-analysis framework. In this framework, each model provides an estimate of expected damages and an associated uncertainty distribution at each temperature level. We treat the true but unknown flood damage function as a latent process and the three models as conditionally independent, noisy measurements of this process. The Bayesian combination yields a posterior distribution for damages at each temperature, with a central estimate (e.g.\ posterior mean or median) and credible intervals that reflect both within-model uncertainty and between-model (structural) differences. 
+> 
+> Finally, we convert the combined flood damages into percentage of UK GDP by dividing the annual monetary losses by a harmonised no-damage GDP baseline for the same year. Where applicable, we ensure that price levels, exchange rates, and macroeconomic paths are consistent with the treatment in other sectors. The general meta-analytic framework, assumptions about error structures, and implementation details of the Bayesian combination across sectors are documented in \citet{rising2026comprehensive} and are not repeated here.
+> ```
+> 
+> Now, I need two more sections, where I discuss modeling adaptation and adding in stochastic annual variability and extreme events.
+> 
+> Here is the code that produces the adaptation modeling:
+> ```
+> setwd("~/Dropbox/HMT/channels/flooding")
+> 
+> library(dplyr)
+> library(reshape2)
+> library(ncdf4)
+> 
+> df <- read.csv("tabula-Lehner et al. 2025.csv")
+> df2 <- melt(df[, 1:7], c('Scenario', 'Variable', 'Baseline'), variable.name='Adaptation')
+> df2$Baseline <- as.numeric(df2$Baseline)
+> df3 <- df2 %>% group_by(Scenario, Adaptation) %>% summarize(impact.frac=value[Variable == 'welfare'] / Baseline[Variable == 'welfare'],
+>                                                      invest=value[Variable == 'investment in adaptation'] + value[Variable == 'interest payment'])
+> df4 <- df3 %>% group_by(Scenario) %>% reframe(approach=c('None', as.character(Adaptation)[which.max(impact.frac)]),
+>                                               impact.frac=c(impact.frac[Adaptation == 'Impact.Absolute'], impact.frac[Adaptation == approach[2]]),
+>                                               invest=c(0, invest[Adaptation == approach[2]]))
+> df4$year <- ifelse(grepl("2030", df4$Scenario), 2030, 2050)
+> df4$gmst2100 <- ifelse(grepl("low warming", df4$Scenario), 2, 4)
+> df4$approach <- ifelse(df4$approach %in% c('Impact.Absolute', 'None'), "None",
+>                 ifelse(df4$approach == 'Ada..balanced.budget..Absolute', "Balanced Budget",
+>                 ifelse(df4$approach == 'Ada..dom.bonds..Absolute', "Domestic Bonds",
+>                 ifelse(df4$approach == 'Ada..intern.bonds..Absolute', "International Bonds", NA))))
+> 
+> ## Translate this into local temperatures
+> gsat <- read.csv("../../climate/gsat/ssps_26_70_ukproject_allmembers.csv")
+> gsat$rowid <- paste(gsat$scenario, gsat$run_id)
+> 
+> rows.4 <- subset(gsat, year == 2100 & abs(value - 4) < .1)
+> rows.2 <- subset(gsat, year == 2100 & abs(value - 2) < .1)
+> 
+> gsat.4 <- gsat %>% filter(rowid %in% rows.4$rowid) %>%
+>     summarize(gsat.2030=mean(value[year == 2030]), gsat.2050=mean(value[year == 2050]))
+> gsat.2 <- gsat %>% filter(rowid %in% rows.2$rowid) %>%
+>     summarize(gsat.2030=mean(value[year == 2030]), gsat.2050=mean(value[year == 2050]))
+> gsat.2011 <- gsat %>%
+>     summarize(gsat=mean(value[year == 2011]), se=sd(value[year == 2011]))
+> 
+> df4$gsat <- NA
+> df4$gsat[df4$gmst2100 == 2 & df4$year == 2030]
+> 
+> fig1 <- read.csv("figure1-data.csv")
+> fig1$Scenario <- c(rep('low warming', 6), rep('high warming', 6))
+> fig1$year <- rep(c(rep(2030, 3), rep(2050, 3)), 2)
+> fig1$datum <- rep(c("Impact", "Impact+Costs", "Costs"), 4)
+> 
+> fig12 <- fig1 %>% group_by(Scenario, year) %>% reframe(impact=c(y[datum == 'Impact'], y[datum == 'Impact+Costs'] - y[datum == 'Costs']), costs=c(0, y[datum == 'Costs']))
+> fig12$gmst2100 <- ifelse(fig12$Scenario == 'low warming', 2, 4)
+> 
+> fig12$gsat <- NA
+> fig12$gsat[fig12$gmst2100 == 2 & fig12$year == 2030] <- gsat.2$gsat.2030
+> fig12$gsat[fig12$gmst2100 == 2 & fig12$year == 2050] <- gsat.2$gsat.2050
+> fig12$gsat[fig12$gmst2100 == 4 & fig12$year == 2030] <- gsat.4$gsat.2030
+> fig12$gsat[fig12$gmst2100 == 4 & fig12$year == 2050] <- gsat.4$gsat.2050
+> 
+> source("../../lib/damagefunc.R")
+> 
+> stan.data <- list(N=nrow(fig12) + 1,
+>                   cdiff=c(fig12$gsat, gsat.2011$gsat),
+>                   impact=c(fig12$impact / 1000, 0),
+>                   impact_se=c(fig12$impact / 1000 / 2, gsat.2011$se),
+>                   costs=c(fig12$costs / 1000, 0),
+>                   ## Prior is it's all quadratic term: b T^2 = 6.9
+>                   quadmu=6.9 / 2.2^2, quadse=6.9 / 2.2^2,
+>                   sigmacauchy=2.5)
+> 
+> ## init <- function(chain_id) {
+> ##     mydf <- fig12[sample(nrow(fig12), nrow(fig12), replace=T),]
+> ##     mydf$gsat2 <- mydf$gsat^2
+> 
+> ##     mod <- lm(impact ~ gsat + gsat2, data=mydf)
+> ##     ## exp(eta * invest) = runif => eta = log(runif) / invest
+> ##     eta = log(runif(1)) / sample(mydf$costs[mydf$costs > 0], 1)
+> 
+> ##     list(coeff=coef(mod)[1:2], coeff3=coef(mod)[3], sigma=sd(mydf$impact, na.rm=T), neta=-eta,
+> ##          tau=rnorm(stan.data$N))
+> ## }
+> 
+> fit <- stan(model_code=stan.code.notime, data=stan.data, chains=4, open_progress=F)
+> la <- extract(fit, permute=T)
+> 
+> pdf1 <- data.frame()
+> pdf2 <- data.frame()
+> for (gsat in seq(0, 4, length.out=50)) {
+>     impacts <- 1000 * (la$coeff[, 1] + la$coeff[, 2] * gsat + la$coeff3 * gsat^2)
+>     pdf1 <- rbind(pdf1, data.frame(gsat, mu=mean(impacts), ci25=quantile(impacts, .25), ci75=quantile(impacts, .75)))
+>     if (gsat > gsat.2011$gsat) {
+>         impacts <- 1000 * (la$coeff[, 1] + la$coeff[, 2] * gsat + la$coeff3 * gsat^2) * exp(-la$neta * mean(fig1$y[fig1$datum == 'Costs'] / 1000))
+>         pdf2 <- rbind(pdf2, data.frame(gsat, mu=mean(impacts), ci25=quantile(impacts, .25), ci75=quantile(impacts, .75)))
+>     }
+> }
+> 
+> ggplot(pdf1, aes(gsat, mu)) +
+>     geom_line(aes(colour='No Adaptation')) + geom_ribbon(aes(ymin=ci25, ymax=ci75), alpha=.5) +
+>     geom_line(data=pdf2, aes(colour='With Adaptation')) + geom_ribbon(data=pdf2, aes(ymin=ci25, ymax=ci75), alpha=.5) +
+>     geom_point(data=fig12, aes(y=impact, colour=ifelse(costs > 0, 'With Adaptation', 'No Adaptation'))) +
+>     geom_point(data=data.frame(gsat=gsat.2011$gsat, mu=0), aes(colour="Baseline")) +
+>     theme_bw() + xlab("Global temperature change since pre-industrial (C)") +
+>     ylab("Expected direct flood damages (million £ / yr)") + scale_colour_discrete(NULL)
+> ggsave("model.pdf", width=6.5, height=4)
+> 
+> save(la, file="model.RData")
+> 
+> load.flood.adapt <- function() {
+>     load("channels/flooding/model.RData")
+>     la
+> }
+> 
+> flood.adapt.prop <- function(spend.MGBPyr, la) {
+>     data.frame(scale=exp(-la$neta * spend.MGBPyr / 1000)) %>% dplyr::summarize(mu=mean(scale), ci25=quantile(scale, .25), ci75=quantile(scale, .75))
+> }
+> ```
+> 
+> Can you please write up a clear, succinct methodology for the adaptation section, including showing the figure model.pdf? Follow conventions of (1) using LaTeX and surround math with $...$, \[ ... \], and the like; (2) if you need to use indices, counties are i, Monte Carlos are m, and years are t.
+**assistant**:
+> ```latex
+> \subsection{Adaptation modeling}
+> 
+> To represent the effect of proactive flood adaptation on UK flood damages, we estimate a reduced-form, temperature-dependent damage function with and without adaptation, calibrated to the global results in \citet{lehner2025adaptation}. We interpret their global welfare and adaptation-cost outcomes as noisy observations of how aggregate flood damages respond to (i) changes in global mean surface temperature (GMST) and (ii) sustained adaptation expenditure, and embed this relationship in a simple parametric model suitable for use within our UK macro-damage framework.
+> 
+> \subsubsection{Data and mapping to temperature}
+> 
+> We begin from tabulated results in \citet{lehner2025adaptation}, which report global outcomes under multiple adaptation-financing approaches and warming scenarios. For each scenario--adaptation combination, we extract:
+> 
+> \begin{itemize}
+>   \item the baseline welfare level (no additional flood adaptation),
+>   \item the welfare under each adaptation approach (``Balanced Budget'', ``Domestic Bonds'', ``International Bonds''),
+>   \item the annualised adaptation investment and associated interest payments.
+> \end{itemize}
+> 
+> For each scenario $s$ and adaptation option $a$, we construct:
+> 
+> \[
+> \text{impact.frac}_{s,a}
+>   = \frac{W_{s,a}}{W^{\text{baseline}}_{s}},
+>   \quad
+> \text{invest}_{s,a}
+>   = I_{s,a} + r_{s,a},
+> \]
+> 
+> where $W_{s,a}$ is welfare with adaptation, $W^{\text{baseline}}_{s}$ is welfare in the no-adaptation baseline, $I_{s,a}$ is the direct investment in adaptation, and $r_{s,a}$ is the associated interest cost. We then define, for each scenario $s$, two representative ``approaches'':
+> 
+> \begin{enumerate}
+>   \item \emph{No adaptation} ($a = \text{None}$): $\text{impact.frac}_{s,\text{None}}$ is taken from the ``Impact.Absolute'' case, with $\text{invest}_{s,\text{None}} = 0$.
+>   \item \emph{Optimal adaptation} ($a = \text{Opt}$): we select the adaptation option that yields the highest $\text{impact.frac}_{s,a}$ among the available approaches, and set $\text{invest}_{s,\text{Opt}}$ to the corresponding total annual adaptation cost.
+> \end{enumerate}
+> 
+> The \citet{lehner2025adaptation} scenarios are defined for two global warming levels by 2100 ($\Delta T_{2100} \approx 2^\circ\text{C}$ and $4^\circ\text{C}$) and two time horizons ($t=2030, 2050$), yielding four $(\Delta T_{2100}, t)$ combinations for each of the ``No'' and ``Optimal'' adaptation cases. To place these results on a common temperature axis, we link them to ensemble GMST projections from FaIR-based scenarios (the same ensemble used for our sectoral analysis). Specifically, we identify ensemble members that reach approximately $2^\circ\text{C}$ or $4^\circ\text{C}$ of GMST increase by 2100, and compute the corresponding mean GMST in 2030 and 2050, which we denote $\Delta T^{(2)}_{2030}$, $\Delta T^{(2)}_{2050}$, $\Delta T^{(4)}_{2030}$, and $\Delta T^{(4)}_{2050}$. This yields a set of calibration points:
+> 
+> \[
+> \left\{\bigl(\Delta T_{s,t}, D_{s,t}^{\text{NA}}, C_{s,t}^{\text{NA}}\bigr),
+>        \bigl(\Delta T_{s,t}, D_{s,t}^{\text{A}}, C_{s,t}^{\text{A}}\bigr)\right\},
+> \]
+> 
+> where:
+> \begin{itemize}
+>   \item $\Delta T_{s,t}$ is the ensemble-mean GMST anomaly at $(s,t)$,
+>   \item $D_{s,t}^{\text{NA}}$ and $D_{s,t}^{\text{A}}$ are the corresponding expected annual direct flood damages under No-Adaptation (NA) and Adaptation (A), expressed in billion pounds per year,
+>   \item $C_{s,t}^{\text{NA}}=0$ and $C_{s,t}^{\text{A}}$ is the annual adaptation cost (investment plus interest), in billion pounds per year.
+> \end{itemize}
+> 
+> In addition, we include the near-present climate state (circa 2011) with $\Delta T_{2011}$ taken from the same ensemble and $D_{2011}=0$ as an approximate damage reference point, allowing us to anchor the damage function at the recent historical climate.
+> 
+> \subsubsection{Parametric damage function with adaptation}
+> 
+> We model the expected direct flood damages $D(\Delta T)$ (in million \pounds\ per year) as a smooth quadratic function of global mean temperature change $\Delta T$ (in $^\circ\text{C}$), consistent with the structure used for other sectors in this report:
+> 
+> \[
+> D(\Delta T) = 1000 \left(\beta_0 + \beta_1 \Delta T + \beta_2 \Delta T^2\right),
+> \]
+> 
+> where $\beta_0, \beta_1, \beta_2$ are regression coefficients. This functional form is applied to both the No-Adaptation and Adaptation cases; adaptation is represented as a proportional scaling of damages associated with a sustained level of annual adaptation spending.
+> 
+> Concretely, we assume that a constant annual expenditure on flood adaptation, $C$ (in million \pounds/yr), reduces expected damages multiplicatively by a factor:
+> 
+> \[
+> S(C) = \exp\left(-\eta \,\frac{C}{1000}\right),
+> \]
+> 
+> where $\eta > 0$ is an adaptation effectiveness parameter and $C/1000$ converts damages to a billion-pound scale (matching the calibration data). Under this structure:
+> 
+> \[
+> D^{\text{A}}(\Delta T, C) = D^{\text{NA}}(\Delta T)\, S(C)
+> = 1000 \left(\beta_0 + \beta_1 \Delta T + \beta_2 \Delta T^2\right)
+>    \exp\left(-\eta \,\frac{C}{1000}\right).
+> \]
+> 
+> We estimate $\eta$ jointly with the damage-function coefficients by fitting the model to the combined set of points $\{(\Delta T_{s,t}, D_{s,t}^{\text{NA}}, C_{s,t}^{\text{NA}})\}$ and $\{(\Delta T_{s,t}, D_{s,t}^{\text{A}}, C_{s,t}^{\text{A}})\}$, augmented by the $2011$ baseline.
+> 
+> \subsubsection{Bayesian estimation}
+> 
+> We use a Bayesian regression implemented in Stan to estimate the parameters $(\beta_0,\beta_1,\beta_2,\eta)$ and the residual standard deviation $\sigma$ from the calibration data. Let $n$ index calibration points (across scenarios $s$, time horizons $t$, and adaptation regimes). For each point $n$ we observe:
+> 
+> \[
+> \tilde{\Delta T}_n, \quad \tilde{D}_n, \quad \tilde{C}_n,
+> \]
+> 
+> where $\tilde{\Delta T}_n$ is the GMST anomaly, $\tilde{D}_n$ is the reported expected direct flood damage (in billion \pounds/yr, converted to million \pounds/yr in the regression), and $\tilde{C}_n$ is the corresponding annual adaptation cost. We model:
+> 
+> \[
+> \tilde{D}_n
+> = 1000 \left(\beta_0 + \beta_1 \tilde{\Delta T}_n + \beta_2 \tilde{\Delta T}_n^2\right)
+>   \exp\left(-\eta \,\frac{\tilde{C}_n}{1000}\right)
+>   + \varepsilon_n,
+> \quad \varepsilon_n \sim \mathcal{N}(0, \sigma^2).
+> \]
+> 
+> We place weakly informative priors on the parameters. In particular, we encode the prior belief that, in the absence of adaptation, quadratic terms dominate the temperature–damage relationship at higher warming. Specifically, we centre the prior for $\beta_2$ such that a purely quadratic form would imply damages of approximately $6.9$ billion \pounds/yr at $\Delta T = 2.2^\circ\text{C}$, i.e.\
+> 
+> \[
+> \beta_2 \sim \mathcal{N}\!\left(\frac{6.9}{2.2^2}, \frac{6.9}{2.2^2}\right),
+> \]
+> 
+> and use broad priors for $\beta_0$ and $\beta_1$. For the adaptation effectiveness parameter, we put a diffuse prior on $\eta$ via a Cauchy scale prior on the corresponding regression coefficient, allowing the data to determine the degree of damage reduction achievable per billion pounds of annual adaptation spending.
+> 
+> Stan is run with four chains, and we extract the joint posterior samples of $(\beta_0,\beta_1,\beta_2,\eta)$, denoted collectively by $\lambda^{(m)}$, $m=1,\dots,M$. For each posterior draw, we compute the implied damage curves with and without adaptation across a range of temperature increases $0 \le \Delta T \le 4^\circ\text{C}$:
+> 
+> \[
+> D^{\text{NA},(m)}(\Delta T)
+> = 1000 \left(\beta_0^{(m)} + \beta_1^{(m)} \Delta T + \beta_2^{(m)} \Delta T^2\right),
+> \]
+> 
+> \[
+> D^{\text{A},(m)}(\Delta T)
+> = D^{\text{NA},(m)}(\Delta T)
+>   \exp\left(-\eta^{(m)} \,\frac{\bar{C}}{1000}\right),
+> \]
+> 
+> where $\bar{C}$ is a representative annual adaptation cost inferred from the \citet{lehner2025adaptation} data (the mean of the observed adaptation expenditures in the optimal/adapted cases). From these samples we construct pointwise posterior means and central credible intervals for both curves.
+> 
+> \subsubsection{Resulting damage functions and implementation}
+> 
+> Figure~\ref{fig:flood-adapt-model} summarises the fitted damage functions with and without adaptation as a function of GMST change. The solid lines show the posterior mean expected direct flood damages under the No-Adaptation and With-Adaptation cases, and the shaded bands indicate the interquartile range (25th–75th percentiles) of the posterior distribution at each temperature. The calibration points from \citet{lehner2025adaptation} (including the near-present reference) are overlaid.
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=0.8\textwidth]{channels/flooding/model.pdf}
+>   \caption{Bayesian fit of temperature-dependent UK flood damages with and without adaptation. Lines show posterior mean expected direct flood damages (million \pounds/yr) as a function of global mean temperature change since pre-industrial. Shaded bands denote the interquartile range of posterior uncertainty. Points show calibration data derived from \citet{lehner2025adaptation} and the near-present baseline.}
+>   \label{fig:flood-adapt-model}
+> \end{figure}
+> 
+> In the integrated damage system, we implement this structure as follows. Let $\widehat{D}^{\text{meta}}(\Delta T)$ denote the meta-analytic UK flood damage function (Section~\ref{sec:risk-modeling}) that aggregates across the three underlying hazard models (PESETA, CCRA3, COACCH). For any given year $t$ and Monte Carlo draw $m$, we first evaluate the no-adaptation damages at the realised global temperature anomaly $\Delta T_t^{(m)}$:
+> 
+> \[
+> \widehat{D}_{t}^{\text{NA},(m)} = \widehat{D}^{\text{meta}}(\Delta T_t^{(m)}).
+> \]
+> 
+> We then apply the adaptation scaling implied by the posterior distribution of $\eta$ for a user-specified annual adaptation budget $C_t$ (in million \pounds/yr):
+> 
+> \[
+> \widehat{D}_{t}^{\text{A},(m)}
+> = \widehat{D}_{t}^{\text{NA},(m)} \,
+>   \exp\left(-\eta^{(m)} \,\frac{C_t}{1000}\right).
+> \]
+> 
+> The transformation is implemented by the function \texttt{flood.adapt.prop(spend.MGBPyr, la)}, which returns the posterior mean and central credible interval for the proportional damage reduction factor $S(C_t)$, conditional on the posterior draws stored in \texttt{model.RData}. This yields a flexible representation of adaptation: different annual spending profiles $C_t$ can be mapped into time- and scenario-dependent reductions in expected flood damages, fully consistent with the global adaptation evidence in \citet{lehner2025adaptation} and the UK-specific meta-analytic damage function.
+> ```
+**user**:
+> This is too long, and I do not want subsections. Please avoid an overly step-by-step description and do not refer to function or column names explicitly.
+**assistant**:
+> ```latex
+> \subsection{Adaptation modeling}
+> 
+> We represent proactive flood adaptation by estimating a temperature-dependent damage function with and without adaptation, calibrated to the global welfare and adaptation outcomes reported in \citet{lehner2025adaptation}. Their scenarios provide global changes in welfare and associated annual adaptation expenditures under different warming levels and financing approaches. We interpret these as noisy observations of how expected direct flood damages respond to global mean surface temperature (GMST) and sustained adaptation spending.
+> 
+> From \citet{lehner2025adaptation}, we construct pairs of cases that correspond to (i) no additional adaptation and (ii) an ``optimal'' adaptation choice that maximises welfare for each warming scenario and horizon (approximately $2^\circ$C and $4^\circ$C in 2100, each evaluated at 2030 and 2050). For each case, we infer an equivalent level of expected direct flood damages (in billion \pounds/yr) and the total annual adaptation costs (investment plus interest). We map these cases to GMST anomalies by matching their warming pathways to an ensemble of FaIR-based temperature projections, and also include a near-present reference point (circa 2011) with near-zero additional damages. This yields a small set of calibration points, each with a GMST anomaly, an associated damage level, and an annual adaptation expenditure.
+> 
+> Expected direct flood damages $D(\Delta T)$ (in million \pounds/yr) are modeled as a quadratic function of GMST change $\Delta T$ (in $^\circ$C),
+> \[
+> D(\Delta T) = 1000 \left(\beta_0 + \beta_1 \Delta T + \beta_2 \Delta T^2\right),
+> \]
+> and adaptation is represented as a multiplicative reduction that depends on annual adaptation expenditure $C$ (in million \pounds/yr),
+> \[
+> D^{\text{A}}(\Delta T, C)
+> = D^{\text{NA}}(\Delta T)\,\exp\!\left(-\eta \,\frac{C}{1000}\right),
+> \]
+> where $D^{\text{NA}}$ is the no‑adaptation damage function, and $\eta>0$ is an adaptation‑effectiveness parameter. The division by $1000$ aligns $C$ with the billion‑pound scale of the calibration data. In this form, a higher sustained adaptation budget produces an exponentially larger proportional reduction in expected damages.
+> 
+> We estimate $(\beta_0,\beta_1,\beta_2,\eta)$ and a residual standard deviation using Bayesian regression in Stan, fitting the above relationship to the calibration points (no‑adaptation and adaptation cases plus the near‑present baseline). The likelihood treats reported damages as Gaussian around the parametric form, conditional on GMST and adaptation spending. Priors are weakly informative, with the quadratic term centred to be consistent with a baseline assumption that, in the absence of adaptation, quadratic temperature effects dominate at higher warming levels (e.g.\ implying damages of order $6.9$ billion \pounds/yr at $\Delta T \approx 2.2^\circ$C). The adaptation parameter $\eta$ receives a diffuse prior, allowing the data to govern the inferred damage‑reduction per billion \pounds of annual spending.
+> 
+> Posterior draws from this model produce a family of damage curves with and without adaptation across a range of GMST changes. Figure~\ref{fig:flood-adapt-model} shows the resulting temperature–damage relationship. Solid lines give posterior mean expected direct flood damages under no adaptation and under a representative level of sustained adaptation, with shaded bands indicating the interquartile range of uncertainty. The calibration points from \citet{lehner2025adaptation} and the near‑present reference are overlaid.
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=0.8\textwidth]{channels/flooding/model.pdf}
+>   \caption{Bayesian fit of temperature-dependent UK flood damages with and without adaptation. Lines show posterior mean expected direct flood damages (million \pounds/yr) as a function of global mean temperature change since pre-industrial. Shaded bands denote the interquartile range of posterior uncertainty. Points show calibration data derived from \citet{lehner2025adaptation} and the near-present baseline.}
+>   \label{fig:flood-adapt-model}
+> \end{figure}
+> 
+> Within the integrated system, we apply this structure as a multiplicative adjustment to the combined UK flood damage function described above. For each year $t$ and Monte Carlo draw $m$, we first evaluate the no‑adaptation damages $\widehat{D}^{\text{NA},(m)}_t$ at the realised GMST anomaly. Given an assumed annual adaptation budget $C_t$ (in million \pounds/yr), and a posterior draw of $\eta^{(m)}$, we then obtain adapted damages as
+> \[
+> \widehat{D}^{\text{A},(m)}_t
+> = \widehat{D}^{\text{NA},(m)}_t \,
+>   \exp\!\left(-\eta^{(m)} \,\frac{C_t}{1000}\right).
+> \]
+> This yields a probabilistic, spending‑dependent reduction in expected UK flood damages that is consistent with both the global adaptation evidence and the UK‑specific damage estimates used elsewhere in the analysis.
+> ```
+**user**:
+> Thank you. Next, I would like you to provide a methods section for
+> "Variability and extreme events". Here is the relevant code:
+> ```
+> setwd("~/Dropbox/HMT/channels/flooding")
+> 
+> library(dplyr)
+> library(readxl)
+> library(MASS)
+> library(scales)
+> library(ggplot2)
+> 
+> load("~/Dropbox/COACCH/channels/Riverine/rivercombo-adm3.RData")
+> load("model.RData")
+> load("../../climate/likely.RData")
+> 
+> ## Proposal: Just use -la$neta * [Annual invest in trillions] applied to precomputed risks
+> ## But that's across the UK. What if we split it up? I don't know benefits in different areas.
+> ## We know:
+> ## D exp(-eta C) and D = sum_i D_i.
+> ## So, assume benefits are applied everywhere, according to total costs (don't allow local costs).
+> 
+> ## Let's construct a 1 trillion GBP adaptation version of the dataset
+> 
+> ## Use EM-DAT (public_emdat_custom_request_2025-07-16_e7b5784d-91af-40b6-93ea-cf417316a734.xlsx) and UK report (flooding-evidence.xlsx) to construct annual spatial/temporal variation
+> 
+> read.gbp <- function(val) {
+>     stopifnot(substring(val, 1, 1) == "£")
+>     if (grepl("million", val))
+>         return(read.gbp(substring(val, 1, nchar(val) - 8)) * 1e6)
+>     if (grepl("billion", val))
+>         return(read.gbp(substring(val, 1, nchar(val) - 8)) * 1e9)
+>     as.numeric(sub(",", "", substring(val, 2, nchar(val))))
+> }
+> 
+> resid1 <- read_excel("flooding-evidence.xlsx")
+> resid1$lo <- sapply(resid1$`Min damages estimate `, read.gbp)
+> resid1$hi <- sapply(resid1$`Max damages estimate`, read.gbp)
+> resid1$mu <- sapply(resid1$`Best damages estimate `, read.gbp)
+> resid1$months <- c(rep(1, 5), rep(3, 3), 12 * 4 - 1)
+> resid1$startdate <- as.Date(c('2016-11-01', '2017-10-01', '2018-09-01', '2018-10-01', '2018-12-01', '2007-06-01', '2013-11-01', '2015-11-01', '2016-01-01'))
+> 
+> resid2 <- read_excel("public_emdat_custom_request_2025-07-16_e7b5784d-91af-40b6-93ea-cf417316a734.xlsx")
+> resid2$`End Day`[is.na(resid2$`End Day`)] <- 14
+> resid2$`Start Day`[is.na(resid2$`Start Day`)] <- 14
+> resid2$months <- as.Date(paste(resid2$`End Year`, resid2$`End Month`, resid2$`End Day`, sep='-')) -
+>     as.Date(paste(resid2$`Start Year`, resid2$`Start Month`, resid2$`Start Day`, sep='-'))
+> resid2$months <- 1 # range is 0 (1 day) to 34, so call it 1 month
+> 
+> resid2b <- resid2 %>% group_by(`Start Year`, `Start Month`) %>% summarize(`Total Damage, Adjusted ('000 US$)`=sum(`Total Damage, Adjusted ('000 US$)`, na.rm=T))
+> resid2b$mu <- 1000 * resid2b$`Total Damage, Adjusted ('000 US$)` * (313.7 / 237.0) * 0.7826 # (CPI 2024 / CPI 2015) * (0.7826 GBP / USD)
+> resid2b$startdate <- as.Date(paste(resid2b$`Start Year`, resid2b$`Start Month`, '01', sep='-'))
+> 
+> residpdf <- rbind(cbind(resid1[, c('lo', 'hi', 'mu', 'startdate', 'months')], source="FCERM/EA"),
+>                   cbind(resid2b[, c('mu', 'startdate')], months=1, lo=NA, hi=NA, source="EM-DAT"))
+> 
+> ggplot(residpdf, aes(startdate, mu / months, xend=startdate + months * 365.25 / 12, yend=mu / months)) +
+>     geom_segment(aes(colour=source), linewidth=2) + geom_rect(aes(xmin=startdate, xmax=startdate + months * 365.25 / 12, ymin=lo / months, ymax=hi / months), alpha=.5) +
+>     scale_y_log10("Total Damages (2024 GBP)", labels=label_number(suffix=" GBP", scale_cut=cut_short_scale())) + theme_bw() + xlab(NULL) + scale_colour_discrete("Source:")
+> ggsave("residuals.pdf", width=6.5, height=4)
+> 
+> residpdf2 <- residpdf %>% mutate(quarter=as.numeric(residpdf$startdate - min(residpdf$startdate)) / (365.25 / 4)) %>%
+>     group_by(quarter=floor(quarter), source) %>% summarize(mu=sum(mu / months), lo=sum(lo / months),
+>                                                            hi=sum(hi / months)) %>%
+>     mutate(startdate=min(residpdf$startdate) + quarter * (365.25 / 4))
+> 
+> ggplot(subset(residpdf2, mu > 10e6), aes(startdate, mu, xend=startdate + 3 * 365.25 / 12, yend=mu)) +
+>     geom_segment(aes(colour=source), linewidth=2) + geom_rect(aes(xmin=startdate, xmax=startdate + 3 * 365.25 / 12, ymin=lo, ymax=hi), alpha=.5) +
+>     scale_y_log10("Total Damages (2024 GBP)", labels=label_number(suffix=" GBP", scale_cut=cut_short_scale())) + theme_bw() + xlab(NULL) + scale_colour_discrete(name="Source:") +
+>     theme(legend.justification=c(0,0), legend.position=c(.4,.01))
+> ggsave("residuals2.pdf", width=4, height=2.5)
+> 
+> ## Principle: Each month-storm is a realization of LogNormal(mu, sd), and we know some values and sums of months
+> ## Assume that max likelihood for distribution across unknown months is uniform
+> 
+> obs <- c(resid1$mu / resid1$months, resid2b$mu[resid2b$mu > 0])
+> lnparams <- fitdistr(obs, "lognormal")
+> xxparams <- fitdistr(obs, "exponential")
+> wwparams <- fitdistr(obs, "weibull")
+> 
+> library(ismev)
+> fit <- gev.fit(obs)
+> library(EnvStats)
+> 
+> quantile(rlnorm(1000, lnparams$estimate[1], lnparams$estimate[2]))
+> quantile(rweibull(1000, wwparams$estimate[1], wwparams$estimate[2]))
+> quantile(rgevd(1000, fit$vals[1, 1], fit$vals[1, 2], -fit$vals[1, 3]))
+> 
+> ggplot(data.frame(damage=c(resid1$mu / resid1$months, resid2b$mu[resid2b$mu > 0]),
+>                   source=c(rep("FCERM/EA", nrow(resid1)), rep("EM-DAT", sum(resid2b$mu > 0)))),
+>        aes(damage)) +
+>     geom_histogram(aes(fill=source)) +
+>     geom_line(data=data.frame(damage=seq(0, max(resid2b$mu), length.out=100), source="Log-Normal") %>%
+>                   mutate(yy=dlnorm(damage, lnparams$estimate[1], lnparams$estimate[2])), aes(y=yy * 1e10, colour=source)) +
+>     geom_line(data=data.frame(damage=seq(0, max(resid2b$mu), length.out=100), source="Exponential") %>%
+>                   mutate(yy=dexp(damage, xxparams$estimate)), aes(y=yy * 1e10, colour=source)) +
+>     geom_line(data=data.frame(damage=seq(0, max(resid2b$mu), length.out=100), source="Weibull") %>%
+>                   mutate(yy=dweibull(damage, wwparams$estimate[1], wwparams$estimate[2])), aes(y=yy * 1e10, colour=source)) +
+>     geom_line(data=data.frame(damage=seq(0, max(resid2b$mu), length.out=100), source="GEV") %>%
+>                   mutate(yy=dgevd(damage, fit$vals[1, 1], fit$vals[1, 2], -fit$vals[1, 3])), aes(y=yy * 1e9, colour=source))
+> 
+> ## How many events per year?
+> obsyears <- substring(c(resid1$startdate, resid2b$startdate[resid2b$mu > 0]), 1, 4)
+> pnparams <- fitdistr(table(obsyears), "Poisson")
+> 
+> combo1 <- combo %>% group_by(scenario, county, period) %>% reframe(run_id=run_id, origrid=run_id[order(damage.mgbp)], damage.mgbp=sort(damage.mgbp))
+> combo2 <- combo1 %>%
+>     group_by(scenario, county, run_id) %>% reframe(origrid=sample(origrid, 1), Year=2025:2075, damage.mgbp=approx(c(2020, 2050, 2090), damage.mgbp, Year)$y)
+> combo2$scenrid <- paste(combo2$scenario, combo2$origrid)
+> 
+> results <- data.frame()
+> for (climscen in c('Most Likely', 'High Risk')) {
+>     ## Annual projections
+>     for (year in 2025:2075) {
+>         if (climscen == 'Most Likely') {
+>             subfin <- subset(combo2, Year == year & scenrid %in% gsat.likely$scenrid)
+>         } else {
+>             subfin <- subset(combo2, Year == year & scenario == 'ssp370')
+>         }
+>         subfin2 <- subfin %>% group_by(county) %>% summarize(mu=mean(damage.mgbp), ci05=quantile(damage.mgbp, .05),
+>                                                              ci95=quantile(damage.mgbp, .95))
+> 
+>         results <- rbind(results, cbind(scenario=climscen, year=year, measure="EAD", subfin2))
+>     }
+> }
+> 
+> climscen <- 'High Risk'
+> ## 1-in-200 year projections
+> for (year in c(2030, 2040, 2050)) {
+>     ## 1-in-10 year outcome
+>     subfin <- subset(combo2, scenario == 'ssp370' & Year >= year & Year < year + 10)
+>     ## Choose the worst year for each MC
+>     worstyears <- subfin %>% group_by(Year, run_id) %>% summarize(damage.mgbp=sum(damage.mgbp),
+>                                                                   resid=sum(rweibull(rpois(1, pnparams$estimate), wwparams$estimate[1], wwparams$estimate[2])) / 1e6,
+>                                                                   total=damage.mgbp + resid) %>%
+>         group_by(run_id) %>% summarize(Year=Year[which.max(total)], resid=max(resid))
+>     subfin2 <- subfin %>% left_join(worstyears, by='run_id', suffix=c('', '.worst')) %>%
+>         filter(Year == Year.worst) %>% left_join(subset(combo, period == '2011-2030' & scenario == 'ssp370'), by=c('run_id', 'county'), suffix=c('', '.weight'))
+>     subfin3 <- subfin2 %>% group_by(run_id) %>% mutate(weight1=damage.mgbp.weight - min(damage.mgbp.weight, 0), weight2=weight1 / sum(weight1),
+>                                                        total=damage.mgbp + resid * weight2)
+>     subfin4 <- subfin3 %>% group_by(county) %>% summarize(mu=mean(total), ci05=quantile(total, .05),
+>                                                           ci95=quantile(total, .95))
+> 
+>     results <- rbind(results, cbind(scenario=climscen, year=year, measure="Extreme", subfin4))
+> }
+> 
+> write.csv(results, "dataset.csv", row.names=F)
+> ## results <- read.csv("dataset.csv")
+> 
+> library(ggplot2)
+> 
+> results2 <- results %>% group_by(scenario, year, measure) %>% summarize(mu=sum(mu), ci05=sum(ci05), ci95=sum(ci95))
+> 
+> ggplot(subset(results2, measure == 'EAD'), aes(year, mu)) +
+>     geom_line(data=subset(results2, measure == 'EAD'), aes(colour=scenario)) +
+>     geom_ribbon(aes(ymin=ci05, ymax=ci95, group=scenario), alpha=.5) +
+>     theme_bw() + scale_x_continuous(NULL, expand=c(0, 0)) + ylab("UK-wide flooding damage (million GBP)") +
+>     scale_colour_discrete("Scenario:") + theme(legend.justification=c(0, 1), legend.position=c(0.01, .99))
+> 
+> ggplot(subset(results2, measure == 'EAD'), aes(year, mu)) +
+>     geom_line(data=subset(results2, measure == 'EAD'), aes(colour=scenario)) +
+>     geom_ribbon(aes(ymin=ci05, ymax=ci95, group=scenario), alpha=.5) +
+>     geom_errorbar(data=subset(results2, measure == 'Extreme'),
+>                   aes(x=year + 5, ymin=ci05, ymax=ci95), colour=scales::muted("red")) +
+>     theme_bw() + scale_x_continuous(NULL, expand=c(0, 0)) + ylab("UK-wide flooding damage (million GBP)") +
+>     scale_colour_discrete("Scenario:") + theme(legend.justification=c(0, 1), legend.position=c(0.01, .99))
+> ggsave("dataset-uk.pdf", width=6.5, height=4)
+> 
+> ggplot(subset(results, measure == 'EAD'), aes(year, mu, group=county)) +
+>     facet_wrap(~ scenario, ncol=1) +
+>     geom_line(aes(colour=scenario), alpha=.5) +
+>     theme_bw() + scale_x_continuous(NULL, expand=c(0, 0)) + ylab("Flooding damage (million GBP)") +
+>     scale_colour_discrete("Scenario:") + theme(legend.justification=c(1, 0), legend.position=c(.99, 0.01))
+> 
+> ggplot(subset(results, measure == 'EAD'), aes(year, mu, group=county)) +
+>     facet_wrap(~ scenario, ncol=1) +
+>     geom_line(aes(colour=scenario), alpha=.5) +
+>     geom_jitter(data=subset(results, measure == 'Extreme'),
+>                 aes(x=year + 5, y=ci95), colour=scales::muted("red"), width=4, height=0) +
+>     theme_bw() + scale_x_continuous(NULL, expand=c(0, 0)) + ylab("Flooding damage (million GBP)") +
+>     scale_colour_discrete("Scenario:") + theme(legend.justification=c(1, 0), legend.position=c(.99, 0.01))
+> ggsave("dataset-adm3.pdf", width=6.5, height=4)
+> ```
+> 
+> Please include LaTeX figure descriptions for `dataset-adm3.pdf`,
+> `dataset-uk.pdf`, and `residuals.pdf` which will be in a
+> `figures/adapt/flooding` folder.
+**assistant**:
+> ```latex
+> \subsection{Variability and extreme events}
+> 
+> In addition to long-run expected annual damages, we represent interannual variability and rare extreme flood events by combining historical event data with the climate-driven projections described above. This yields (i) a probabilistic characterization of single-event damages and their frequency, and (ii) stochastic corrections to the deterministic damage paths to approximate 1-in-200 year outcomes.
+> 
+> We first compile a catalogue of historical flood damage events from two sources: (i) the UK Flood and Coastal Erosion Risk Management (FCERM)/Environment Agency report (``flooding-evidence.xlsx''), which provides minimum, maximum, and best estimates of event damages in pounds, and (ii) the EM-DAT international disaster database, which records total damages (in thousand US dollars) by event and month. All historical losses are converted to 2024 \pounds\ using consumer price indices and average exchange rates. For the FCERM/EA data, we assign event durations in months based on the reported temporal extent and divide total damages by duration to obtain monthly average damages. For EM-DAT, we aggregate records by start year and month, assume a standard event duration of one month, and again convert to monthly damages. The combined dataset thus consists of a set of independent monthly flood-damage realizations, with associated dates and, where available, uncertainty ranges.
+> 
+> To characterise the distribution of single-event damages, we treat each observed monthly damage as one draw from an underlying, stationary statistical distribution. We fit several candidate distributions to the combined sample of monthly damages (in 2024 \pounds) using maximum likelihood: log-normal, exponential, Weibull, and a Generalized Extreme Value (GEV) distribution. The Weibull distribution provides a flexible and robust fit across the observed range and is adopted as our baseline representation for stochastic event magnitudes. Separately, we estimate the annual frequency of damaging flood events by counting the number of events per calendar year in the historical catalogue and fitting a Poisson distribution to these annual counts. Together, the Weibull and Poisson fits define a simple compound process for total annual damage from discrete events.
+> 
+> Expected annual damages (EAD) under future climate change are taken from the pre-computed county-level projections (dataset \texttt{rivercombo-adm3.RData}), which provide Monte Carlo paths of annual flood damages $D_{i,t}^{(m)}$ (in million \pounds) for each county $i$, year $t$, and Monte Carlo draw $m$, under multiple climate scenarios. We focus on two aggregated scenarios: a ``Most Likely'' pathway (an ensemble of runs consistent with a likely global temperature trajectory) and a ``High Risk'' pathway (scenario SSP3-7.0). For each scenario and year, we interpolate damages between the original time slices (2020, 2050, 2090) to obtain annual values from 2025 to 2075. We then summarise, for each scenario and year, the mean and 5th/95th percentile of $D_{i,t}^{(m)}$ across Monte Carlo draws at the county level and at the UK total, defining the EAD paths with associated uncertainty.
+> 
+> To approximate rare extreme outcomes, we construct 1-in-200 year equivalent damages for selected years under the High Risk scenario by superimposing a stochastic ``residual'' component on top of the climate-driven baseline. For a target central year $t^\ast \in \{2030, 2040, 2050\}$, we consider a 10-year window $[t^\ast, t^\ast+9]$ and, for each Monte Carlo draw $m$, we generate additional annual residual damages as follows. In each year $t$ within the window, we draw a Poisson-distributed number of events with the estimated mean annual rate, and then draw an independent Weibull-distributed damage for each event (in 2024 \pounds). The sum of these event damages in year $t$ is converted to million \pounds\ and added to the baseline UK-wide damages for that year and draw.
+> 
+> We then identify, for each Monte Carlo draw $m$, the year within the 10-year window that yields the highest total UK damage (baseline plus residual). This ``worst year'' is interpreted as the realisation of a rare, high-impact event in that decade. To allocate the additional residual damages from this worst year spatially across counties, we weight counties in proportion to their baseline damages over a reference period. Specifically, for each draw $m$, we compute non-negative weights $w_i^{(m)}$ based on the county-level damages in 2011–2030 under SSP3-7.0, normalised to sum to one over $i$. The UK-wide residual amount is then distributed across counties according to $w_i^{(m)}$, and added to the corresponding county-level baseline damages in the worst year. This process yields, for each county $i$ and draw $m$, a synthetic realisation of an extreme flood-damage outcome associated with the target decade.
+> 
+> Finally, for each target year $t^\ast$ and for each county $i$, we summarise the distribution of these worst-year damages across Monte Carlo draws by computing the mean and 5th/95th percentiles. Aggregating over counties gives UK-wide extreme-damage summaries. We interpret these as 1-in-200 year equivalent damages conditioned on the High Risk climate pathway, recognising that they are approximated via a compound-event process calibrated to historical variability.
+> 
+> All steps are implemented in R. The resulting EAD and extreme-damage estimates at county and UK levels are stored in \texttt{dataset.csv} and visualised in the figures below.
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=\textwidth]{figures/adapt/flooding/residuals.pdf}
+>   \caption{Historical monthly flood damages and fitted distributions. Segments show per-month damages (in 2024 \pounds) for individual events derived from UK FCERM/Environment Agency reports and EM-DAT, with shaded rectangles indicating reported uncertainty ranges where available. The combined series forms the empirical basis for estimating the distribution of single-event damages and their temporal variability.}
+>   \label{fig:residuals}
+> \end{figure}
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=\textwidth]{figures/adapt/flooding/dataset-uk.pdf}
+>   \caption{Projected UK-wide flood damages under ``Most Likely'' and ``High Risk'' climate scenarios. Solid lines show the mean Expected Annual Damages (EAD) in million \pounds, with shaded bands indicating the 5th–95th percentile range across Monte Carlo draws. Red vertical error bars indicate the 5th–95th percentile range of 1-in-200 year equivalent extreme damages for selected decades under the High Risk scenario, offset slightly in time to distinguish them from the EAD trajectories.}
+>   \label{fig:dataset-uk}
+> \end{figure}
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=\textwidth]{figures/adapt/flooding/dataset-adm3.pdf}
+>   \caption{County-level (ADM3) flood damages under ``Most Likely'' and ``High Risk'' climate scenarios. Each faint line traces the Expected Annual Damages (EAD) for a single county (in million \pounds), illustrating spatial heterogeneity and temporal trends. Red jittered points show the upper end of the 5th–95th percentile range for 1-in-200 year equivalent extreme damages for individual counties in selected decades under the High Risk scenario, highlighting the potential for localized, high-impact events.}
+>   \label{fig:dataset-adm3}
+> \end{figure}
+> ```
+**user**:
+> This is too long again. Please shorten it. Also  please note that you will not have to explain the definitions of "Expected annual damages (EAD)" or the "1-in-200" events, since the principles behind these will be described in another non-channel-specific section.
+**assistant**:
+> ```latex
+> \subsection{Variability and extreme events}
+> 
+> To represent interannual variability and rare extremes in UK flood damages, we overlay a simple event-based stochastic process on top of the climate-driven damage projections described above.
+> 
+> We first construct an empirical set of historical flood-damage events from two sources: (i) the UK Flood and Coastal Erosion Risk Management / Environment Agency evidence report, which provides minimum, maximum, and best estimates of event damages in pounds, and (ii) the EM-DAT disaster database, which reports total damages in thousand US dollars. All values are converted to 2024 \pounds\ using consumer prices and exchange rates, and expressed as monthly damages by dividing by event duration (or assuming a one-month duration where this is not reported). The resulting series of per-month damages is treated as a sample of independent event realizations.
+> 
+> We fit several candidate distributions to these observed monthly damages by maximum likelihood (log-normal, exponential, Weibull, and Generalized Extreme Value). A two-parameter Weibull distribution provides a good compromise between flexibility and parsimony and is adopted as the baseline for event magnitudes. Separately, we estimate the annual number of damaging events as a Poisson process by fitting a Poisson distribution to the historical counts of events per year. Together, the Weibull and Poisson fits define a stochastic process for annual residual flood losses around the smooth damage paths.
+> 
+> Future EAD at county level $D_{i,t}^{(m)}$ comes from the riverine flood projections, interpolated to annual values between the original time slices and summarised across Monte Carlo draws $m$ for each climate scenario. To approximate 1-in-200 year damages under the High Risk scenario, we focus on three central years (2030, 2040, 2050). For each central year, we consider a 10-year window and, for each Monte Carlo draw, simulate additional annual residual damages within that window by drawing a Poisson number of events and Weibull-distributed event magnitudes (calibrated to historical data). Summing these residuals and adding them to the baseline UK-wide damages for each year in the window, we then identify the year with the highest total damage for that draw. This ``worst year'' is interpreted as one realisation of a rare extreme event in that decade.
+> 
+> To distribute the additional residual damages spatially within the UK, we allocate the UK-wide residual for each Monte Carlo draw across counties in proportion to their baseline damages in a recent reference period (2011–2030 under SSP3-7.0), using non-negative weights that sum to one over $i$. Adding these weighted residuals to $D_{i,t}^{(m)}$ in the selected worst year yields county-level extreme-damage realisations. We summarise their mean and 5th/95th percentiles by county and in aggregate for the UK, and store the results for downstream analysis.
+> 
+> Figure~\ref{fig:residuals} shows the historical monthly damages used to calibrate the magnitude and frequency distributions of events. Figures~\ref{fig:dataset-uk} and \ref{fig:dataset-adm3} present the resulting EAD paths and associated extreme-damage summaries at UK and county scales.
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=\textwidth]{figures/adapt/flooding/residuals.pdf}
+>   \caption{Historical monthly UK flood damages in 2024 \pounds\ from Environment Agency / FCERM reports and EM-DAT. Segments represent per-month damages for individual events, with shaded bands indicating reported uncertainty where available.}
+>   \label{fig:residuals}
+> \end{figure}
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=\textwidth]{figures/adapt/flooding/dataset-uk.pdf}
+>   \caption{Projected UK-wide flood damages. Lines show mean Expected Annual Damages (EAD) in million \pounds\ under ``Most Likely'' and ``High Risk'' climate scenarios, with shaded bands giving the 5th–95th percentile range across Monte Carlo draws. Red error bars indicate the 5th–95th percentile range of 1-in-200 year equivalent damages for selected decades under the High Risk scenario.}
+>   \label{fig:dataset-uk}
+> \end{figure}
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=\textwidth]{figures/adapt/flooding/dataset-adm3.pdf}
+>   \caption{County-level flood damages. Faint lines show Expected Annual Damages (EAD) in million \pounds\ for individual counties under each climate scenario, illustrating spatial heterogeneity. Red jittered points mark the upper end of the 5th–95th percentile range of 1-in-200 year equivalent damages for counties in selected decades under the High Risk scenario.}
+>   \label{fig:dataset-adm3}
+> \end{figure}
+> ```

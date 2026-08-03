@@ -1,0 +1,94 @@
+**user**:
+> I'm building an automated system in python that produces work on github branches and then merges things in as the work is complete. In the case I'm working on now, at a certain point, we're ready to close a branch and merge it back into its parent. But we really just want one of the files ("document.md") to be merged in. The problem is that other files on that branch have been committed. How can I just merge document.md into the parent branch?
+**assistant**:
+> You have a few clean options, all doable entirely from the parent branch. I’ll give you the simplest, then some variants depending on how “clean” you want the Git history.
+> 
+> Assume:
+> 
+> - Parent branch: `main`
+> - Feature branch: `feature-branch`
+> - File you want: `document.md`
+> 
+> ---
+> 
+> ## 1. Easiest: Checkout just that file from the branch, then commit
+> 
+> On `main`, pull in only `document.md` as it exists on `feature-branch`:
+> 
+> ```bash
+> # 1. Make sure you’re on the parent branch
+> git checkout main
+> 
+> # 2. Bring document.md from the feature branch into main’s working tree
+> git checkout feature-branch -- document.md
+> 
+> # 3. Inspect/resolve anything if needed, then commit
+> git status  # confirm only document.md is modified
+> git diff    # verify the changes
+> git add document.md
+> git commit -m "Update document.md from feature-branch"
+> git push
+> ```
+> 
+> This:
+> 
+> - Does **not** merge the branch.
+> - Only updates `document.md` to the state it has in `feature-branch`.
+> - Leaves `feature-branch` free to delete or keep as you like.
+> 
+> In your Python automation, this is just a sequence of `subprocess.run([...])` calls.
+> 
+> ---
+> 
+> ## 2. More explicit: Cherry-pick changes only for `document.md`
+> 
+> If you want the history to reflect which commits from `feature-branch` contributed to `document.md`, you can cherry-pick those commits while restricting paths.
+> 
+> For each commit `X` on `feature-branch` that touches `document.md`:
+> 
+> ```bash
+> git checkout main
+> git cherry-pick -n X           # apply changes from commit X
+> git reset HEAD -- .            # unstage everything
+> git add document.md            # stage only document.md
+> git commit -m "Apply doc changes from X"
+> ```
+> 
+> In practice this is more work to script and is only worth it if you really care about commit-level provenance.
+> 
+> ---
+> 
+> ## 3. If you want a temporary merge, then “keep only this file”
+> 
+> You can also:
+> 
+> 1. Merge the branch into a *temp* branch.
+> 2. Copy out only `document.md` into `main`.
+> 
+> ```bash
+> git checkout main
+> git checkout -b temp-merge
+> git merge feature-branch        # resolve if necessary
+> 
+> # Now on temp-merge, document.md is as desired. Move it onto main:
+> git checkout main
+> git checkout temp-merge -- document.md
+> git add document.md
+> git commit -m "Update document.md from temp-merge"
+> git push
+> ```
+> 
+> Then delete `temp-merge` and `feature-branch` if desired.
+> 
+> ---
+> 
+> ## Recommended for automation
+> 
+> For your automated system, I’d implement **Option 1**:
+> 
+> 1. Ensure working tree is clean on parent branch.
+> 2. `git checkout parent`  
+> 3. `git checkout feature-branch -- document.md`  
+> 4. If there are changes, commit with a standard message referencing the branch and then (optionally) delete/close the branch via the GitHub API.
+> 
+> If you show me a bit of your current Python automation (how you’re calling git, any use of GitPython, etc.), I can sketch out the exact Python function for “merge just this file from branch X into branch Y.”

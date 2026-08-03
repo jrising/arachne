@@ -1,0 +1,1243 @@
+**user**:
+> I am writing an appendix on the methodology I used, in which I developed a new tool to use AI to review papers for a report. The process proceeds in steps, for which I will give you the code and the associated configuration (the code is meant to describe the process, the configuration is specific to any given literature review). I would like for you to clearly, but succinctly, describe this for the appendix.
+> 
+> Here is the first step - abstract review:
+> ===
+> import os, csv, time
+> import pandas as pd
+> from chatwrap import gemini, openaigpt, openai_batch
+> 
+> from config import *
+> from lib.helpers import *
+> 
+> def get_fullprompt(title, abstract, keywords):
+>     exclude_text = "  " + "\n  ".join([f"{key}: {value}" for key, value in exclude_codes.items()])
+>     include_text = "  " + "\n  ".join([f"{key}: {value}" for key, value in include_codes.items()])
+>     return f"""{abstract_prompt}
+> 
+> The following is a paper identified by very general search:
+> {title}
+> Abstract: {abstract}
+> Keywords: {keywords}
+> 
+> Based on this information, should this paper be included in the review? If *not*, please classify this with one or more of the following codes:
+> {exclude_text}
+> If it *should* be included, classify it with one or more of the following codes:
+> {include_text}
+> 
+> Provide a succinct explanation, and only mention codes identified for this paper."""
+> 
+> print(get_fullprompt("My paper", "Something something", "Keyword 1, and 2"))
+> 
+> def submit_single_abstract_openai(doi, title, abstract, keywords):
+>     prompt = get_fullprompt(title, abstract, keywords)
+>     return openaigpt.single_prompt(prompt)
+> 
+> def submit_single_abstract_gemini(doi, title, abstract, keywords):
+>     prompt = get_fullprompt(title, abstract, keywords)
+>     return gemini.single_prompt(prompt)
+> 
+> knowndoi_gemini, knowndoi_openai = get_knowns(response_file)
+> 
+> def get_prompts(knowndoi, searches, maxcount):
+>     prompts = {}
+>     count = 0
+>     for search in searches:
+>         for row in iterate_search(search):
+>             if row['DOI'] not in knowndoi:
+>                 prompts[row['DOI']] = get_fullprompt(row['Title'], row['Abstract'], row['Author Keywords'])
+>                 count += 1
+>                 if count == maxcount:
+>                     break
+>     return prompts
+> 
+> if openai_config == 'batch':
+>     responses = openai_batch.main_flow(openaigpt.client, response_file + "-batch.jsonl", "../waiting.pkl", lambda: get_prompts(knowndoi_openai, searches, count_perrun))
+>     for doi, response in responses.items():
+>         knowndoi_openai.add(doi)
+>         add_response(response_file, doi, 'openai', response)
+> 
+> for search in searches:
+>     count = 0
+>     lasttime_gemini = time.time()
+>     for row in iterate_search(search):
+>         if row['DOI'] not in knowndoi_gemini:
+>             if gemini_config == 'slow':
+>                 nowtime = time.time()
+>                 time.sleep(max(24*60*60 / 1490 - (nowtime - lasttime_gemini), 0))
+>             lasttime_gemini = time.time()
+>             response = submit_single_abstract_gemini(row['DOI'], row['Title'], row['Abstract'], row['Author Keywords'])
+>             add_response(response_file, row['DOI'], 'gemini', response)
+>             knowndoi_gemini.add(row['DOI'])
+>             count += 1
+>         if openai_config == 'slow' and row['DOI'] not in knowndoi_openai:
+>             response = submit_single_abstract_openai(row['DOI'], row['Title'], row['Abstract'], row['Author Keywords'])
+>             add_response(response_file, row['DOI'], 'openai', response)
+>             knowndoi_openai.add(row['DOI'])
+>             count += 1
+>         if count >= collate_count:
+>             break
+> 
+> if openai_config == 'batch':
+>     responses = openai_batch.main_flow(openaigpt.client, response_file + "-batch.jsonl", "waiting.pkl", lambda: get_prompts(knowndoi_openai, searches, count_perrun))
+>     for doi, response in responses.items():
+>         knowndoi_openai.add(doi)
+>         add_response(response_file, doi, 'openai', response)
+> ===
+> abstract_prompt = "I am performing a global review and analytical synthesis of the macroeconomic and macro-fiscal risks of climate change and the costs and benefits of adaptation at a national level."
+> exclude_codes = {'XC': "Not related to climate risks",
+>                  'XV': "Not valued in economic terms",
+>                  'XN': "Not nation-scale or multinational (not macroeconomic or related to nation-wide adaptation)",
+>                  'XA': "No new analysis (using previously-published work)",
+>                  'XO': "Excluded for another reason (please specify)"}
+> include_codes = {'RE': "Reports macroeconomic outcomes (GDP effects, productivity loss, interest, inflation, etc.)",
+>                  'RF': "Reports fiscal outcomes (budget balance, borrowing costs, public expenditure or revenue, etc.)",
+>                  'RA': "Reports both economic costs and/or benefits (or related measures like ROI, NPV) of nation-wide adaptation"}
+> ===
+> 
+> Can you write this up?
+**assistant**:
+> Certainly! Here is a succinct description of your methodology for the appendix:
+> 
+> ### Appendix: Methodology for Abstract Review Using AI
+> 
+> This section outlines the methodology employed to automate the abstract review process in the literature review. The objective was to systematically classify research papers using AI technologies based on their relevance to the study of macroeconomic and macro-fiscal risks of climate change and adaptation strategies.
+> 
+> #### Step 1: Abstract Review Process
+> 
+> The abstract review process used AI models to screen and classify paper abstracts. The process involved several key steps, utilizing customized code and configurable parameters to tailor the review to specific research needs.
+> 
+> **Process Description:**
+> 
+> 1. **Prompt Generation:**
+>    - For each paper identified through a systematic search, a comprehensive prompt was created.
+>    - The prompt included the study's title, abstract, keywords, and a general directive aimed at reviewing macroeconomic and macro-fiscal climate change risks and adaptations.
+>    - Two sets of codes were predefined: **exclude codes** (e.g., `XC`, `XV`) to identify irrelevant papers and **include codes** (e.g., `RE`, `RF`, `RA`) to mark relevant papers.
+>    - A sample configuration is shown below:
+>      - **Exclude Codes:** Indicate reasons for exclusion (e.g., not related to climate risks or not economic in nature).
+>      - **Include Codes:** Highlight aspects that warrant inclusion (e.g., reports on macroeconomic or fiscal outcomes).
+> 
+> 2. **AI Submission and Classification:**
+>    - Generated prompts were submitted to selected AI models (OpenAI GPT or Google Gemini) via single or batch processing, based on configuration:
+>      - *Single Submission:* Individual abstracts processed sequentially.
+>      - *Batch Submission:* Multiple abstracts processed in batches.
+>    - The AI models returned classifications with explanations for each abstract, assigning one or more relevant codes.
+> 
+> 3. **Data Handling and Tracking:**
+>    - The Digital Object Identifier (DOI) of each processed paper was tracked to prevent redundant reviews.
+>    - Responses were recorded alongside associated DOIs, detailing which AI model provided each response.
+> 
+> 4. **Configuration Management:**
+>    - Configuration settings controlled aspects like processing mode (`openai_config`) and rate limiting (`gemini_config`), adapted to constraints and the overall size of the review task.
+> 
+> This approach ensured a scalable, automated, and consistent initial screening of literature for subsequent detailed analysis.
+**user**:
+> I don't want to describe this with the use of sub-steps (especially since there are 7 more script-level steps to go!). Honestly, I think all someone needs to know for this step is the full prompt that was applied to each abstract.
+**assistant**:
+> Got it! Here’s a more straightforward version focusing on the key prompt for the abstract review:
+> 
+> ### Appendix: Methodology for Abstract Review Using AI
+> 
+> In this study, a tool was developed to review research papers through an artificial intelligence (AI) methodology. The first step of the process involved generating a prompt for the review of each paper's abstract.
+> 
+> **Full Prompt Used for Abstract Review:**
+> ```
+> I am performing a global review and analytical synthesis of the macroeconomic and macro-fiscal risks of climate change and the costs and benefits of adaptation at a national level.
+> 
+> The following is a paper identified by very general search:
+> {title}
+> Abstract: {abstract}
+> Keywords: {keywords}
+> 
+> Based on this information, should this paper be included in the review? If *not*, please classify this with one or more of the following codes:
+>   XC: Not related to climate risks
+>   XV: Not valued in economic terms
+>   XN: Not nation-scale or multinational (not macroeconomic or related to nation-wide adaptation)
+>   XA: No new analysis (using previously-published work)
+>   XO: Excluded for another reason (please specify)
+> 
+> If it *should* be included, classify it with one or more of the following codes:
+>   RE: Reports macroeconomic outcomes (GDP effects, productivity loss, interest, inflation, etc.)
+>   RF: Reports fiscal outcomes (budget balance, borrowing costs, public expenditure or revenue, etc.)
+>   RA: Reports both economic costs and/or benefits (or related measures like ROI, NPV) of nation-wide adaptation.
+> 
+> Provide a succinct explanation, and only mention codes identified for this paper.
+> ```
+> 
+> This prompt guided the AI in evaluating each abstract to determine its relevance to the research focus, ensuring a systematic review process.
+**user**:
+> The next step constructs a common verdict from running this with two AI models:
+> ===
+> import csv, re, os
+> import pandas as pd
+> 
+> from config import *
+> from lib.helpers import *
+> 
+> def interpret_excludes(response):
+>     excludes = []
+>     for code in exclude_codes:
+>         if code in response:
+>             excludes.append(code)
+>     return excludes
+> 
+> def interpret_includes(response):
+>     includes = []
+>     for code in include_codes:
+>         if code in response:
+>             includes.append(code)
+>     return includes
+> 
+> def interpret_response(response):
+>     excludes = interpret_excludes(response)
+>     includes = interpret_includes(response)
+>     
+>     if len(excludes) > 0 and len(includes) == 0:
+>         return (' '.join(excludes), 1)
+>     if len(includes) > 0 and len(excludes) == 0:
+>         return (' '.join(includes), 5)
+>     
+>     if len(includes) == 0 and len(excludes) == 0:
+>         return ("No codes", "NA")
+>     
+>     return ("Ambiguous", 3)
+> 
+> if question_file:
+>     passfail_df = pd.read_csv(question_file)
+>     passfail = {row['DOI']: row['Outcome'] for index, row in passfail_df.iterrows()}
+> else:
+>     passfail = {}
+> 
+> responses = pd.read_csv(response_file)
+> responses = responses.astype(str)
+> 
+> further_consideration = {} # doi: (gemini_response, openai_response, gemini_verdict, openai_verdict, common_verdict, pdf_found)
+> with open(verdict_file, 'w') as fp:
+>     writer = csv.writer(fp)
+>     writer.writerow(['DOI', 'gemini', 'openai', 'common', 'priority', 'passfail'])
+>     
+>     for doi in set(responses.DOI):
+>         responses_gemini = responses[(responses.DOI == doi) & (responses.Source == 'gemini')].Response
+>         if len(responses_gemini) > 0:
+>             if len(responses_gemini) > 1:
+>                 ## Look for non-failed, non-ambiguous response, from the end
+>                 for ii in range(len(responses_gemini)):
+>                     response_gemini = responses_gemini.iloc[len(responses_gemini) - ii - 1]
+>                     gemini_verdict, gemini_score = interpret_response(response_gemini)
+>                     if gemini_verdict not in ["No codes", "Ambiguous"]:
+>                         break
+>             else:
+>                 response_gemini = responses_gemini.iloc[0]
+>                 gemini_verdict, gemini_score = interpret_response(response_gemini)
+>         else:
+>             continue
+>         
+>         responses_openai = responses[(responses.DOI == doi) & (responses.Source == 'openai')].Response
+>         if len(responses_openai) > 0:
+>             if len(responses_openai) > 1:
+>                 ## Look for non-failed, non-ambiguous response, from the end
+>                 for ii in range(len(responses_openai)):
+>                     response_openai = responses_openai.iloc[len(responses_openai) - ii - 1]
+>                     openai_verdict, openai_score = interpret_response(response_openai)
+>                     if openai_verdict not in ["No codes", "Ambiguous"]:
+>                         break
+>             else:
+>                 response_openai = responses_openai.iloc[0]
+>                 openai_verdict, openai_score = interpret_response(response_openai)
+>         else:
+>             continue
+>         
+>         print(doi)
+>         
+>         further_check = True
+>         if "No codes" in [gemini_verdict, openai_verdict]:
+>             common_verdict = "Code failure"
+>             if gemini_verdict == "No codes" and openai_verdict == "No codes":
+>                 score = "NA"
+>             elif gemini_verdict == "No codes":
+>                 score = openai_score
+>             else:
+>                 score = gemini_score
+>         elif "Ambiguous" in [gemini_verdict, openai_verdict]:
+>             common_verdict = "Ambiguous"
+>             score = (openai_score + gemini_score - 2) / 2 + 1
+>         else:
+>             # Look for inclusion on either side
+>             gemini_includes = interpret_includes(response_gemini)
+>             openai_includes = interpret_includes(response_openai)
+>             score = (openai_score + gemini_score - 2) / 2 + 1
+>             if len(gemini_includes) > 0 or len(openai_includes) > 0:
+>                 common_verdict = ' '.join(set(gemini_includes + openai_includes))
+>             else:
+>                 gemini_excludes = interpret_excludes(response_gemini)
+>                 openai_excludes = interpret_excludes(response_openai)
+>                 common_excludes = set(gemini_excludes).intersection(openai_excludes)
+>                 if len(common_excludes) > 0:
+>                     common_verdict = ' '.join(common_excludes)
+>                     further_check = False
+>                     score = 0
+>                 else:
+>                     common_verdict = "Disagree"
+> 
+>         if passfail:
+>             if doi in passfail.keys():
+>                 if passfail[doi] == "Failed":
+>                     further_check = False
+>                 if passfail[doi] == "Passed":
+>                     score += 5
+>                 passfail_check = passfail[doi]
+>             else:
+>                 passfail_check = "NA"
+>         else:
+>             passfail_check = "NA"
+>                     
+>         if further_check:
+>             targetpath = os.path.join(pdfs_dir, re.sub(r'[^\w\.\-]', '_', doi) + '.pdf')
+>             further_consideration[doi] = [response_gemini.replace("\n", " "), response_openai.replace("\n", " "), gemini_verdict, openai_verdict, common_verdict, int(score), passfail_check, "Found" if os.path.exists(targetpath) else "Missing"]
+>         writer.writerow([doi, gemini_verdict, openai_verdict, common_verdict, int(score), passfail_check])
+> 
+> with open(verdict_file.replace(".csv", "-further.csv"), 'w') as fp:
+>     writer = csv.writer(fp)
+>     writer.writerow(['DOI', 'Title', 'Abstract', 'Gemini Response', 'OpenAI Response', 'Gemini Verdict', 'OpenAI Verdict', 'Common Verdict', 'Priority', 'Pass-Fail', 'PDF Found'])
+>     for search in searches:
+>         for row in iterate_search(search):
+>             if row['DOI'] in further_consideration.keys():
+>                 writer.writerow([row['DOI'], row['Title'], row['Abstract']] + further_consideration[row['DOI']])
+>                 del further_consideration[row['DOI']]
+> ===
+> 
+> Can you clearly state this?
+**assistant**:
+> Certainly! Here’s a clear statement for this step in your methodology:
+> 
+> ### Step 2: Common Verdict Construction from AI Model Outputs
+> 
+> In this step, the responses from the two AI models (OpenAI and Gemini) were analyzed to derive a common verdict regarding the relevance of each paper’s abstract. The methodology involved the following process:
+> 
+> 1. **Response Interpretation:** 
+>    - Each AI response was processed to identify any exclusion or inclusion codes based on predefined classifications. 
+>    - The results determined whether a paper was deemed relevant, ambiguous, or excluded based on the combined interpretations from both models.
+> 
+> 2. **Verdict Assignment:**
+>    - A common verdict was assigned using the following criteria:
+>      - If one model excluded a paper and the other did not include it, the verdict reflected the exclusion.
+>      - In cases where both models agreed on inclusions or exclusions, the common verdict was straightforward.
+>      - If the responses were ambiguous or inconclusive, a designation of "Ambiguous" was assigned, reflecting the need for further review.
+> 
+> 3. **Score Generation:**
+>    - Each paper received a numerical score based on the interpreted outcomes, contributing to an overall assessment of its relevance for the literature review.
+> 
+> 4. **Output Documentation:**
+>    - The results, including DOI, individual responses from both models, and the common verdict, were documented in a CSV file, alongside additional metadata like priority classification and the presence of the corresponding PDF.
+> 
+> This step ensured a structured approach to synthesize AI-driven evaluations, facilitating thorough decision-making in the literature review process.
+**user**:
+> Please try to keep this short. The next step involves recording relevant data from each page of the PDF of the paper:
+> ===
+> import os, csv, time, yaml, re
+> import pandas as pd
+> import openai
+> from pypdf import PdfReader
+> 
+> from lib import interaction, images
+> from config import *
+> 
+> def pass1_collate(pdfpath):
+>     reader = PdfReader(pdfpath)
+>     columninfo = {} # column: { page: text }
+>     pagenum = 0
+>     for page in reader.pages:
+>         pagenum += 1
+>         print(f"Page {pagenum}")
+>         pagetext = images.textify_page(pdfpath, page, 'low')
+> 
+>         columns = "  " + "\n  ".join([f"{key}: {value}" for key, value in column_defs_collate.items()])
+> 
+>         prompt = f"""{abstract_prompt} The following is a page from a paper that is potentially relevant to my review:
+> {pagetext}
+> 
+> Please summarize and extract any relevant information from this page relevant to the following categories:
+> {columns}
+> 
+> Only include information specifically contributed by this paper, not material referenced from other studies.
+> 
+> Specify the results in a list with single lines of text in a YAML dictionary (each line should read "Category": "Extracted Information"), and only include those entries for this page where there is concrete relevant information. This page may have no relevant information, in which case report 'No relevant information'."""
+> 
+>         response = interaction.aiengine.chat_response([{"role": "user", "content": prompt}])
+>         columns = interaction.extract_yaml_dict(response)
+> 
+>         if isinstance(columns, dict):
+>             for column in columns:
+>                 if column not in columninfo:
+>                     columninfo[column] = {}
+>                 columninfo[column][pagenum] = columns[column]
+> 
+>     return columninfo
+> 
+> verdicts = pd.read_csv(verdict_file)
+> count = 0
+> for dopass in range(dopass_count):
+>     print(f"Pass {dopass+1}")
+>     dopass_suffix = f"-pass{dopass}" if dopass > 0 else ""
+>     for index, row in verdicts.iterrows():
+>         if row.priority >= priority_limit:
+>             fileroot = re.sub(r'[^\w\.\-]', '_', row.DOI)
+>             targetpath = os.path.join(pdfs_dir, fileroot + '.pdf')
+>             extractpath = os.path.join(extract_dir, fileroot + dopass_suffix + '.yml')
+>             if os.path.exists(targetpath) and not os.path.exists(extractpath):
+>                 print(row.DOI)
+>                 count += 1
+> 
+>                 # Step 1: Extract relevant information from each page
+>                 columninfo = pass1_collate(targetpath)
+> 
+>                 with open(extractpath, 'w') as fp:
+>                     yaml.safe_dump(columninfo, fp)
+> 
+>                 if count >= collate_count:
+>                     break
+> ===
+> extract_dir = "../extract"
+> collate_count = 100
+> column_defs_collate = {'Outcome(s) of Interest': "Specific macroeconomic outcomes (GDP effects, productivity loss, interest, inflation, etc.) or fiscal outcomes (budget balance, borrowing costs, public expenditure or revenue, etc.) or measures of economic costs and/or benefits (or related measures like ROI, NPV) of nation-wide adaptation.",
+>                        'Drivers of Risk': "What shocks or changes are impacting the outcomes?",
+>                        'Quantitative material': "Is there quantitative information on the outcomes of interest on this page?",
+>                        'Methodology': "How is the analysis performed and when are its results applicable?",
+>                        'Highlights': "What are the most important outcomes of the analysis?",
+>                        'More Notes': "Do you have any other notes?"}
+> ===
+> 
+> Can you write this up (perhaps just providing the full prompt as given to each page)?
+**assistant**:
+> Sure! Here’s a concise write-up for this step, including the full prompt used for extracting relevant information from each PDF page:
+> 
+> ### Step 3: Data Extraction from PDF Pages
+> 
+> This step involved extracting relevant data from each page of the PDF documents corresponding to the reviewed papers. The extraction process utilized the following full prompt for each page:
+> 
+> **Full Prompt Used for Data Extraction:**
+> ```
+> I am performing a global review and analytical synthesis of the macroeconomic and macro-fiscal risks of climate change and the costs and benefits of adaptation at a national level. The following is a page from a paper that is potentially relevant to my review:
+> {pagetext}
+> 
+> Please summarize and extract any relevant information from this page relevant to the following categories:
+>   Outcome(s) of Interest: Specific macroeconomic outcomes (GDP effects, productivity loss, interest, inflation, etc.) or fiscal outcomes (budget balance, borrowing costs, public expenditure or revenue, etc.) or measures of economic costs and/or benefits (or related measures like ROI, NPV) of nation-wide adaptation.
+>   Drivers of Risk: What shocks or changes are impacting the outcomes?
+>   Quantitative material: Is there quantitative information on the outcomes of interest on this page?
+>   Methodology: How is the analysis performed and when are its results applicable?
+>   Highlights: What are the most important outcomes of the analysis?
+>   More Notes: Do you have any other notes?
+> 
+> Only include information specifically contributed by this paper, not material referenced from other studies.
+> 
+> Specify the results in a list with single lines of text in a YAML dictionary (each line should read "Category": "Extracted Information"), and only include those entries for this page where there is concrete relevant information. This page may have no relevant information, in which case report 'No relevant information'.
+> ```
+> 
+> This prompt guided the AI in summarizing and extracting structured information from each page, which was then saved in a YAML format for further analysis.
+**user**:
+> Then we summarize data for everything but the quantitative data that has been identified:
+> ===
+> import os, re, yaml
+> import pandas as pd
+> 
+> from lib import interaction, commands
+> from lib.helpers import *
+> from config import *
+> 
+> # Step 2: Summarize certain columns (we will pass these on to other calls)
+> def pass2_summarize(targetpath, row, columninfo, coldefs, results):
+>     for col, command in coldefs.items():
+>         results[col] = [pass2_summarize_one(targetpath, row, columninfo, coldefs, col, command)] # wrap in a list for Pandas
+> 
+> def pass2_summarize_one(targetpath, row, columninfo, coldefs, col, command):
+>     # Special commands
+>     if isinstance(command, str):
+>         if command == "LINK":
+>             if os.path.exists(targetpath.replace('.pdf', '.txt')):
+>                 with open(targetpath.replace('.pdf', '.txt'), 'r') as f:
+>                     for line in f:
+>                         pass
+>                     return line.strip()
+>             else:
+>                 return "Unknown"
+>         if command == "STATUS":
+>             return "Step 5"
+>         if command in ["SUMMARIZE", "BRIEF"]:
+>             namematch = commands.extract_alphanumeric_and_spaces(col)
+>             allpages = {}
+>             for key, values in columninfo.items():
+>                 if commands.extract_alphanumeric_and_spaces(key) == namematch:
+>                     allpages.update(values)
+> 
+>             if len(allpages) == 0:
+>                 return "NA"
+>                     
+>             if len(allpages) == 1:
+>                 return list(allpages.values())[0]
+> 
+>             texts = '\n'.join([f"Page {num}: {text}" for num, text in allpages.items()])
+>             if command == "SUMMARIZE":
+>                 instruct = "Please summarize this information as a single concise notes, avoiding phrases like 'This paper ...'."
+>             else:
+>                 instruct = "Please provide a brief keywords as the summary, rather than full sentences."
+>             
+>             prompt = f"""{abstract_prompt} Right now, I want to summarize material related to '{col}'. The following notes were extracted from pages from a paper that is potentially relevant to my review:
+> ===
+> {texts}
+> ===
+> 
+> {instruct} Specify the summary in triple backticks, like this: ```Synopsis here.```."""
+> 
+>             return interaction.get_internaltext([{"role": "user", "content": prompt}], 3).strip()
+> 
+>         return command
+> 
+>     ## Run the command
+>     return command(row, columninfo)
+> 
+> verdicts = pd.read_csv(verdict_file)
+> 
+> allcols = []
+> for key in column_defs_summary:
+>     allcols.extend(column_defs_summary[key].keys())
+>     
+> count = 0
+> getout = False
+> for dopass in range(dopass_count):
+>     print(dopass)
+>     dopass_suffix = f"-pass{dopass}" if dopass > 0 else ""
+>     dopass_summary_file = summary_file.replace('.csv', dopass_suffix + '.csv')
+> 
+>     done, knowndoi = get_summaries(summary_file, dopass)
+>     
+>     for search in searches:
+>         if getout:
+>             break
+>         for row in iterate_search(search):
+>             if row.DOI in knowndoi:
+>                 continue
+>             verdictrow = verdicts[verdicts.DOI == row.DOI]
+>             if len(verdictrow) == 0:
+>                 continue
+>             if verdictrow.priority.iloc[0] < priority_limit:
+>                 continue
+> 
+>             fileroot = re.sub(r'[^\w\.\-]', '_', row.DOI)
+>             targetpath = os.path.join(pdfs_dir, fileroot + '.pdf')
+>             extractpath = os.path.join(extract_dir, fileroot + dopass_suffix + '.yml')
+>             if os.path.exists(targetpath) and os.path.exists(extractpath) and row.DOI not in knowndoi:
+>                 print(row.DOI)
+>                 print(targetpath)
+>                 print(extractpath)
+>                 count += 1
+> 
+>                 with open(extractpath, 'r') as fp:
+>                     columninfo = yaml.safe_load(fp)
+>             
+>                 # Step 2: Produce summary rows
+>                 results = {'DOI': row.DOI}
+>                 pass2_summarize(targetpath, row, columninfo, column_defs_summary['All'], results)
+>                 if results['NEXT'][0] != "N/A":
+>                     nextset = results['NEXT'][0]
+>                     del results['NEXT']
+>                     if 'Any' in column_defs_summary:
+>                         pass2_summarize(targetpath, row, columninfo, column_defs_summary['Any'], results)
+>                     
+>                     while nextset:
+>                         pass2_summarize(targetpath, row, columninfo, column_defs_summary[nextset], results)
+>                         if results.get('NEXT', ['N/A'])[0] != 'N/A':
+>                             nextset = results['NEXT'][0]
+>                             del results['NEXT']
+>                         else:
+>                             nextset = None
+>                 else:
+>                     del results['NEXT']
+> 
+>                 for col in allcols:
+>                     if col != 'NEXT' and col not in results:
+>                         results[col] = [""]
+> 
+>                 print(results)
+>                     
+>                 if done is None:
+>                     done = pd.DataFrame(results)
+>                 else:
+>                     done = pd.concat([done, pd.DataFrame(results)], ignore_index=True)
+>                 done.to_csv(dopass_summary_file, index=False)
+>                         
+>                 if count >= summary_count:
+>                     break
+> ===
+> import os, re, yaml
+> import pandas as pd
+> 
+> from lib import interaction, commands
+> from lib.helpers import *
+> from config import *
+> 
+> # Step 2: Summarize certain columns (we will pass these on to other calls)
+> def pass2_summarize(targetpath, row, columninfo, coldefs, results):
+>     for col, command in coldefs.items():
+>         results[col] = [pass2_summarize_one(targetpath, row, columninfo, coldefs, col, command)] # wrap in a list for Pandas
+> 
+> def pass2_summarize_one(targetpath, row, columninfo, coldefs, col, command):
+>     # Special commands
+>     if isinstance(command, str):
+>         if command == "LINK":
+>             if os.path.exists(targetpath.replace('.pdf', '.txt')):
+>                 with open(targetpath.replace('.pdf', '.txt'), 'r') as f:
+>                     for line in f:
+>                         pass
+>                     return line.strip()
+>             else:
+>                 return "Unknown"
+>         if command == "STATUS":
+>             return "Step 5"
+>         if command in ["SUMMARIZE", "BRIEF"]:
+>             namematch = commands.extract_alphanumeric_and_spaces(col)
+>             allpages = {}
+>             for key, values in columninfo.items():
+>                 if commands.extract_alphanumeric_and_spaces(key) == namematch:
+>                     allpages.update(values)
+> 
+>             if len(allpages) == 0:
+>                 return "NA"
+>                     
+>             if len(allpages) == 1:
+>                 return list(allpages.values())[0]
+> 
+>             texts = '\n'.join([f"Page {num}: {text}" for num, text in allpages.items()])
+>             if command == "SUMMARIZE":
+>                 instruct = "Please summarize this information as a single concise notes, avoiding phrases like 'This paper ...'."
+>             else:
+>                 instruct = "Please provide a brief keywords as the summary, rather than full sentences."
+>             
+>             prompt = f"""{abstract_prompt} Right now, I want to summarize material related to '{col}'. The following notes were extracted from pages from a paper that is potentially relevant to my review:
+> ===
+> {texts}
+> ===
+> 
+> {instruct} Specify the summary in triple backticks, like this: ```Synopsis here.```."""
+> 
+>             return interaction.get_internaltext([{"role": "user", "content": prompt}], 3).strip()
+> 
+>         return command
+> 
+>     ## Run the command
+>     return command(row, columninfo)
+> 
+> verdicts = pd.read_csv(verdict_file)
+> 
+> allcols = []
+> for key in column_defs_summary:
+>     allcols.extend(column_defs_summary[key].keys())
+>     
+> count = 0
+> getout = False
+> for dopass in range(dopass_count):
+>     print(dopass)
+>     dopass_suffix = f"-pass{dopass}" if dopass > 0 else ""
+>     dopass_summary_file = summary_file.replace('.csv', dopass_suffix + '.csv')
+> 
+>     done, knowndoi = get_summaries(summary_file, dopass)
+>     
+>     for search in searches:
+>         if getout:
+>             break
+>         for row in iterate_search(search):
+>             if row.DOI in knowndoi:
+>                 continue
+>             verdictrow = verdicts[verdicts.DOI == row.DOI]
+>             if len(verdictrow) == 0:
+>                 continue
+>             if verdictrow.priority.iloc[0] < priority_limit:
+>                 continue
+> 
+>             fileroot = re.sub(r'[^\w\.\-]', '_', row.DOI)
+>             targetpath = os.path.join(pdfs_dir, fileroot + '.pdf')
+>             extractpath = os.path.join(extract_dir, fileroot + dopass_suffix + '.yml')
+>             if os.path.exists(targetpath) and os.path.exists(extractpath) and row.DOI not in knowndoi:
+>                 print(row.DOI)
+>                 print(targetpath)
+>                 print(extractpath)
+>                 count += 1
+> 
+>                 with open(extractpath, 'r') as fp:
+>                     columninfo = yaml.safe_load(fp)
+>             
+>                 # Step 2: Produce summary rows
+>                 results = {'DOI': row.DOI}
+>                 pass2_summarize(targetpath, row, columninfo, column_defs_summary['All'], results)
+>                 if results['NEXT'][0] != "N/A":
+>                     nextset = results['NEXT'][0]
+>                     del results['NEXT']
+>                     if 'Any' in column_defs_summary:
+>                         pass2_summarize(targetpath, row, columninfo, column_defs_summary['Any'], results)
+>                     
+>                     while nextset:
+>                         pass2_summarize(targetpath, row, columninfo, column_defs_summary[nextset], results)
+>                         if results.get('NEXT', ['N/A'])[0] != 'N/A':
+>                             nextset = results['NEXT'][0]
+>                             del results['NEXT']
+>                         else:
+>                             nextset = None
+>                 else:
+>                     del results['NEXT']
+> 
+>                 for col in allcols:
+>                     if col != 'NEXT' and col not in results:
+>                         results[col] = [""]
+> 
+>                 print(results)
+>                     
+>                 if done is None:
+>                     done = pd.DataFrame(results)
+>                 else:
+>                     done = pd.concat([done, pd.DataFrame(results)], ignore_index=True)
+>                 done.to_csv(dopass_summary_file, index=False)
+>                         
+>                 if count >= summary_count:
+>                     break
+> ===
+**assistant**:
+> Here’s a concise summary of this step, focusing on the key aspects of summarizing extracted data:
+> 
+> ### Step 4: Data Summary for Relevant Information
+> 
+> In this step, summarized data was produced for each paper based on the relevant information previously extracted from their PDF pages. This summarization involved the following key actions:
+> 
+> 1. **Summary Generation:**
+>    - Specific columns of interest were targeted for summarization, utilizing a structured approach to compile the extracted information into concise notes or brief keywords.
+>    - Instructions were prompted into the AI for generating concise summaries, ensuring that responses avoided unnecessary references to the papers themselves.
+> 
+> 2. **Execution:**
+>    - A structured command sequence was used to process each relevant column and summarize the available material from the extracted YAML data.
+>    - The output included a range of categories relevant to macroeconomic and macro-fiscal risks of climate change.
+> 
+> 3. **Result Compilation:**
+>    - The summarized results were collated into a CSV file for further analysis and reporting.
+> 
+> **Full Prompt Used for Summarization:**
+> ```
+> I am performing a global review and analytical synthesis of the macroeconomic and macro-fiscal risks of climate change and the costs and benefits of adaptation at a national level. Right now, I want to summarize material related to '{col}'. The following notes were extracted from pages from a paper that is potentially relevant to my review:
+> ===
+> {texts}
+> ===
+> 
+> Please summarize this information as a single concise note, avoiding phrases like 'This paper ...'. Specify the summary in triple backticks, like this: ```Synopsis here.```
+> ```
+> 
+> This prompt guided the summarization process, allowing for efficient data consolidation while ensuring clarity and relevance in the results.
+**user**:
+> And then we extract out quantiative information with the following:
+> ===
+> import os, csv, time, yaml, re
+> import argparse
+> import pandas as pd
+> import openai
+> from pypdf import PdfReader
+> 
+> from lib import interaction, images
+> from config import *
+> 
+> def pass3_extract(pdfpath, instructs, request, xtt, paperinfo):
+>     reader = PdfReader(pdfpath)
+> 
+>     columninfo = "  " + "\n  ".join([f"{column}: {question[0]}" for column, question in instructs.items()])
+>     headerstr = ",".join([f"\"{column}\"" for column in instructs.keys()])
+> 
+>     allrows = []
+>     for pagenum, info in xtt[extract_fromcollate].items():
+>         page = reader.pages[pagenum - 1]
+>         print(f"Page {pagenum}")
+>         rows = pass3_extract_page(pdfpath, page, instructs, request, columninfo, headerstr, paperinfo, pagenum)
+>         
+>         if rows:
+>             allrows.append(pd.DataFrame(rows))
+> 
+>     if allrows:
+>         return pd.concat(allrows, ignore_index=True)
+>     return None
+>     
+> def pass3_extract_page(pdfpath, page, instructs, request, columninfo, headerstr, paperinfo, pagenum):
+>     pagetext = images.textify_page(pdfpath, page, 'high')
+> 
+>     prompt = f"""{abstract_prompt} Here is some information about a pager identified as relevant to the search:
+> {paperinfo}
+> 
+> The following is the text of page {pagenum}, which may have detailed information we want to extract:
+> {pagetext}
+> 
+> {request}
+> 
+> Report this information under the following columns:
+> {columninfo}
+> 
+> Specify the result as a CSV, provided in triple quotes. Your response should start:
+> ```
+> {headerstr}
+> ...
+> ```
+> 
+> This page may have no relevant information, in which case report the header with no following rows."""
+> 
+>     chat = [{"role": "user", "content": prompt}]
+> 
+>     return interaction.get_csvtext_validated(chat, 3, instructs)
+>     
+> if __name__ == '__main__':
+>     parser = argparse.ArgumentParser(
+>         prog='Step 7: Extraction',
+>         description='Extracts detailed information from a summarized PDF.')
+>     parser.add_argument('-d', '--dryrun', action='store_true')
+> 
+>     args = parser.parse_args()
+> 
+>     count = 0
+>     for dopass in range(dopass_count):
+>         dopass_suffix = f"-pass{dopass}" if dopass > 0 else ""
+>         dopass_summary_file = summary_file.replace('.csv', dopass_suffix + '.csv')
+> 
+>         summaries = pd.read_csv(dopass_summary_file)
+>         for index, row in summaries.iterrows():
+>             if row[extract_fromsummary] in column_defs_extract:
+>                 fileroot = re.sub(r'[^\w\.\-]', '_', row.DOI)
+>                 targetpath = os.path.join(pdfs_dir, fileroot + '.pdf')
+>                 extractpath = os.path.join(extract_dir, fileroot + dopass_suffix + '.yml')
+>                 detailpath = os.path.join(extract_dir, fileroot + dopass_suffix + '.csv')
+>                 if os.path.exists(targetpath) and os.path.exists(extractpath) and not os.path.exists(detailpath):
+>                     print(row.DOI)
+>                     if args.dryrun:
+>                         continue
+>                     count += 1
+> 
+>                     with open(extractpath, 'r') as fp:
+>                         xtt = yaml.safe_load(fp)
+> 
+>                     if extract_fromcollate not in xtt:
+>                         continue
+>                         
+>                     paperinfo = [f"  {key}: {value}" for key, value in row.items() if not pd.isna(value) and not key[:7] == "Unnamed"]
+>                 
+>                     df = pass3_extract(targetpath, column_defs_extract[row[extract_fromsummary]], extract_request[row[extract_fromsummary]], xtt, "\n".join(paperinfo))
+>                     if df is not None:
+>                         df.to_csv(detailpath)
+>                     else:
+>                         with open(detailpath, 'w') as fp:
+>                             fp.write("\n") # No data found.
+>             
+>                     if count >= extract_count:
+>                         break
+> ===
+> extract_fromcollate = 'Quantitative material'
+> extract_fromsummary = 'Applicability'
+> extract_request = {'Macroeconomic/Fiscal': "Please summarize and extract any quantitative results that are either macroeconomic outcomes (GDP effects, productivity loss, interest, inflation, etc.) or fiscal outcomes (budget balance, borrowing costs, public expenditure or revenue, etc.) impacted by climate change.",
+>                    'Adaptation': "Please summarize and extract any quantitative results that are economic costs and/or benefits (or related measures like ROI, NPV) of national-scale adaptation to climate change."}
+> column_defs_extract = {'Macroeconomic/Fiscal': {
+>     'Outcome': ["What is the outcome that is affected by climate change? Just provide a single term. If reductions in the outcome are described, do not include 'losses' or similar in the outcome name, since we will report these as negative. ", checks.very_short],
+>     'Country(ies)': ["What specific country or group of countries was considered? Just provide the country names or group.", checks.very_short],
+>     'Scenario': ["Under what socioeconomic or climate scenario were the outcomes analyzed? Just provide a technical scenario name.", checks.very_short],
+>     'Year': ["Under what future or past year is the outcome evaluated? Just specify a single year.", checks.year],
+>     'Relative to': ["What comparison scenario are quantitative outcomes reported relative to? For example, specify a baseline year or if it is relative to no climate change, write 'No CC'.", checks.very_short],
+>     'Units': ["What are the units of the quantitative outcome?", checks.very_short],
+>     'Value': ["What is the value of the quantitative outcome? Specify this as positive if the affected outcome is greater than the comparison scenario, so (for example) losses in the outcome will be negative.", checks.numeric],
+>     'SD': ["What is the standard error or standard deviation of the result? Specify a number or NA.", checks.numeric_or_na],
+>     'Low Quantile': ["If a lower quantile value is specified, what is the percent value of that quantile, or NA.", checks.percent_or_na],
+>     'Low Value': ["If a lower quantile value is specified, what is the value at that quantile, or NA.", checks.numeric_or_na],
+>     'High Quantile': ["If a lower quantile value is specified, what is the percent value of that quantile, or NA.", checks.percent_or_na],
+>     'High Value': ["If a lower quantile value is specified, what is the value at that quantile, or NA.", checks.numeric_or_na],
+>     'Result Source': ["Where is this quantitative result reported in the paper? Include the page number.", checks.short],
+>     'More Notes': ["Do you have any other notes?"]
+> },
+>                        'Adaptation': {
+>                            'Impacted Sector': ["What economic sector or group is being impacted by climate change? Just provide a single term or All or NA.", checks.very_short],
+>                            'Solution': ["What type of solution is being evaluated? Just provide a single term or Any or NA.", checks.very_short],
+>                            'Country(ies)': ["What specific country or group of countries was considered? Just provide the country names or group.", checks.very_short],
+>                            'Scenario': ["Under what socioeconomic or climate scenario were the outcomes analyzed? Just provide a technical scenario name.", checks.very_short],
+>                            'Quantification': ["How are the effects of adaptation being quantified? Just provide a technical term.", checks.very_short],
+>                            'Expression': ["As a simple mathematical expression, what does the quantification express? Valid terms (common units in brackets) include AvoidedImpact [million USD / yr, % of GDP], MonetaryBenefits [million USD / yr, % of GDP], NonMonetaryBenefits [million USD / yr, % of GDP], BaselineImpact [million USD / yr, % of GDP], AdaptationCost [million USD / yr, % of GDP], CapExCost [million USD], OpExCost [million USD / yr], and functions like DiscountedSum() [million USD] and RateOfReturn() [%]", checks.short],
+>                            'Type of Value': ["What is being included in the costs or benefits? Specify 'Monetary' (cash flows), 'Fiscal' (government balances), 'Economic' (monetary and nonmonetary), 'Various' (not clearly distinguished), or 'N/A'.", checks.oneof(['Monetary', 'Fiscal', 'Economic', 'Various','N/A'])],
+>                            'Sample': ["Is this a description of the reporting sample, reflecting just those leaders who likely have good results (Lead), or is this an analysis across the whole range of needed adaptation (Need)? Specify 'Lead', 'Need', or 'N/A'.", checks.oneof(['Lead', 'Need', 'N/A'])],
+>                            'Units': ["What are the units of the quantitative outcome?", checks.very_short],
+>                            'Value': ["What is the value of the quantitative outcome?", checks.numeric],
+>                            'SD': ["What is the standard error or standard deviation of the result? Specify a number or NA.", checks.numeric_or_na],
+>                            'Low Quantile': ["If a lower quantile value is specified, what is the percent value of that quantile, or NA.", checks.percent_or_na],
+>                            'Low Value': ["If a lower quantile value is specified, what is the value at that quantile, or NA.", checks.numeric_or_na],
+>                            'High Quantile': ["If a lower quantile value is specified, what is the percent value of that quantile, or NA.", checks.percent_or_na],
+>                            'High Value': ["If a lower quantile value is specified, what is the value at that quantile, or NA.", checks.numeric_or_na],
+>                            'Result Source': ["Where is this quantitative result reported in the paper?", checks.short],
+>                            'More Notes': ["Do you have any other notes?"]
+>                        }}
+> ===
+**assistant**:
+> Here’s a concise summary for this step focused on extracting quantitative information from the PDFs:
+> 
+> ### Step 5: Extraction of Quantitative Information
+> 
+> In this step, quantitative data relevant to macroeconomic outcomes and adaptation benefits were extracted from the PDF pages of the reviewed papers. The extraction process utilized the following method:
+> 
+> 1. **Quantitative Data Extraction:**
+>    - Each relevant PDF page was processed to identify and extract specific quantitative information based on pre-defined categories.
+>    - The extraction was conducted using a structured prompt that outlined what information to gather from the text of each page.
+> 
+> **Full Prompt Used for Quantitative Data Extraction:**
+> ```
+> I am performing a global review and analytical synthesis of the macroeconomic and macro-fiscal risks of climate change and the costs and benefits of adaptation at a national level. Here is some information about a paper identified as relevant to the search:
+> {paperinfo}
+> 
+> The following is the text of page {pagenum}, which may have detailed information we want to extract:
+> {pagetext}
+> 
+> {request}
+> 
+> Report this information under the following columns:
+> {columninfo}
+> 
+> Specify the result as a CSV, provided in triple quotes. Your response should start:
+> ```
+> {headerstr}
+> ...
+> ```
+> 
+> This page may have no relevant information, in which case report the header with no following rows.
+> ```
+> 
+> 2. **Data Compilation:**
+>    - The extracted data was compiled into a structured CSV format for each paper, including various quantitative measures and their contextual details.
+> 
+> This structured approach ensured a systematic collection of quantitative insights, facilitating further analysis and synthesis in the literature review process.
+**user**:
+> Can you do a better job here by filling in most of the {...} things in the prompt? You don't have paperinfo and pagetext obviously, but the rest you can get from the configuration.
+**assistant**:
+> Absolutely! Here’s a more detailed version of the prompt for quantitative data extraction, with placeholders filled in as much as possible based on the provided configuration:
+> 
+> ### Step 5: Extraction of Quantitative Information
+> 
+> In this step, quantitative data relevant to macroeconomic outcomes and adaptation benefits were extracted from the PDF pages of the reviewed papers. The extraction process utilized the following method:
+> 
+> 1. **Quantitative Data Extraction:**
+>    - Each relevant PDF page was processed to identify and extract specific quantitative information based on pre-defined categories outlined in the configuration.
+> 
+> **Full Prompt Used for Quantitative Data Extraction:**
+> ```
+> I am performing a global review and analytical synthesis of the macroeconomic and macro-fiscal risks of climate change and the costs and benefits of adaptation at a national level. The following is some information about a paper identified as relevant to the search:
+> {paperinfo}  # (This would be populated with relevant details like DOI, title, etc.)
+> 
+> The following is the text of page {pagenum}, which may have detailed information we want to extract:
+> {pagetext}  # (Text extracted from the PDF page)
+> 
+> Please summarize and extract any quantitative results that are either macroeconomic outcomes (GDP effects, productivity loss, interest, inflation, etc.) or fiscal outcomes (budget balance, borrowing costs, public expenditure or revenue, etc.) impacted by climate change.
+> 
+> Report this information under the following columns:
+> - Outcome: What is the outcome that is affected by climate change? Just provide a single term.
+> - Country(ies): What specific country or group of countries was considered? Just provide the country names or group.
+> - Scenario: Under what socioeconomic or climate scenario were the outcomes analyzed? Just provide a technical scenario name.
+> - Year: Under what future or past year is the outcome evaluated? Just specify a single year.
+> - Relative to: What comparison scenario are quantitative outcomes reported relative to? 
+> - Units: What are the units of the quantitative outcome?
+> - Value: What is the value of the quantitative outcome? Specify this as positive if the affected outcome is greater than the comparison scenario.
+> - SD: What is the standard error or standard deviation of the result? Specify a number or NA.
+> - Low Quantile: If a lower quantile value is specified, what is the percent value of that quantile, or NA.
+> - Low Value: If a lower quantile value is specified, what is the value at that quantile, or NA.
+> - High Quantile: If a lower quantile value is specified, what is the percent value of that quantile, or NA.
+> - High Value: If a lower quantile value is specified, what is the value at that quantile, or NA.
+> - Result Source: Where is this quantitative result reported in the paper? Include the page number.
+> - More Notes: Do you have any other notes?
+> 
+> Specify the result as a CSV, provided in triple quotes. Your response should start:
+> ```
+> "Outcome","Country(ies)","Scenario","Year","Relative to","Units","Value","SD","Low Quantile","Low Value","High Quantile","High Value","Result Source","More Notes"
+> ...
+> ```
+> 
+> This page may have no relevant information, in which case report the header with no following rows.
+> ```
+> 
+> 2. **Data Compilation:**
+>    - The extracted data was compiled into a structured CSV format for each paper, including various quantitative measures and their contextual details.
+> 
+> This structured approach ensured a systematic collection of quantitative insights, facilitating further analysis and synthesis in the literature review process.
+**user**:
+> Finally, we do the last few steps multiple times and then apply the following merging code:
+> ===
+> import os, re
+> import pandas as pd
+> 
+> from lib import interaction, helpers
+> from config import *
+> 
+> def merge_rows(verdictrow, applied, columns):
+>     title = verdictrow.Title.iloc[0]
+>     abstract = verdictrow.Abstract.iloc[0]
+> 
+>     template = ""
+>     expectedcolumns = set()
+>     knowncolumns = {}
+>     rowinfo = ""
+>     for column in applied.columns:
+>         if all(str(applied[column].iloc[ii]) == str(applied[column].iloc[0]) for ii in range(1, len(applied))):
+>             colinfo = column + ": " + str(applied[column].iloc[0]) + "\n"
+>             rowinfo += colinfo
+>             knowncolumns[column] = [applied[column].iloc[0]]
+>         else:
+>             if columns[column]:
+>                 colinfo = column + ":\n  Description: " + columns[column] + "\n"
+>             else:
+>                 colinfo = column + ":\n"
+>             rowinfo += "\n" + colinfo + "  Recorded: " + "\n  Recorded: ".join(map(str, applied[column])) + "\n\n"
+>             template += f'"{column}": "..."\n'
+>             expectedcolumns.add(column)
+>     
+>     prompt = f"""{abstract_prompt} Here is a pager identified as relevant to the search:
+> 
+> {title}
+> Abstract: {abstract}
+> 
+> Multiple reviewers have provided summaries of this paper, and now I want to merge these into a consistent summary. The summary should focus on information that is corroborated by more than one reviewer, where possible.
+> 
+> Here is the data from the reviewers:
+> 
+> {rowinfo}
+> 
+> Specify the results in a list with single lines of text in a YAML dictionary. Your response should look like this:
+> ```
+> {template}
+> ```
+> """
+> 
+>     chat = [{"role": "user", "content": prompt}]
+> 
+>     for attempts in range(3):
+>         response = interaction.aiengine.chat_response(chat)
+>         result = interaction.extract_yaml_dict(response)
+>     
+>         if isinstance(result, str):
+>             chat = interaction.chat_push(interaction.chat_push(chat, 'assistant', response),
+>                                          'user', f"Sorry, I had trouble with this: {result} Can you try again?")
+>         else:
+>             remainingcolumns = expectedcolumns - result.keys()
+>             if len(remainingcolumns) > 0:
+>                 chat = interaction.chat_push(interaction.chat_push(chat, 'assistant', response),
+>                                              'user', f"Sorry, I am missing the following columns: {', '.join(remainingcolumns)}. Can you try again?")
+>             else:
+>                 print("Successful merging.")
+>                 break
+> 
+>     if isinstance(result, dict):
+>         for col in result:
+>             knowncolumns[col] = [result[col]]
+>         for col in remainingcolumns:
+>             knowncolumns[col] = [applied[column].iloc[-1]] # choose the latest one
+> 
+>         return pd.DataFrame(knowncolumns)
+>     else:
+>         print("Providing the most recent row.")
+>         return applied.iloc[-1]
+> 
+> def merge_extract(verdictrow, detaileds, paperinfo, request, instructs):
+>     title = verdictrow.Title.iloc[0]
+>     abstract = verdictrow.Abstract.iloc[0]
+> 
+>     datainfo = ""
+>     for ii in range(len(detaileds)):
+>         datainfo += f"Reviewer {ii+1}:\n\n{detaileds[ii].to_csv(index=False)}\n\n"
+> 
+>     headerstr = ",".join([f"\"{column}\"" for column in instructs.keys()])
+>         
+>     prompt = f"""{abstract_prompt} Here is a pager identified as relevant to the search:
+> 
+> {title}
+> Abstract: {abstract}
+> 
+> {paperinfo}
+> 
+> Multiple reviewers have extracted detailed information from this paper, and now I want to merge these into a consistent dataset. The dataset should focus on information that is corroborated by more than one reviewer, where possible.
+> 
+> Here was the request to the reviewers: {request}
+> 
+> Here is the data from the reviewers:
+> 
+> {datainfo}
+> 
+> Specify the result as a CSV, provided in triple quotes. Your response should start:
+> ```
+> {headerstr}
+> ...
+> ```
+> """
+> 
+>     chat = [{"role": "user", "content": prompt}]
+> 
+>     return interaction.get_csvtext_validated(chat, 3, instructs)
+> 
+> def save_merged(merged):
+>     for key in merged:
+>         merged[key].to_csv(summary_file.replace(".csv", merge_suffix[key] + ".csv"), index=False)
+> 
+> def save_extracts(extracts):
+>     for key in extracts:
+>         extracts[key].to_csv(merge_extract_file.replace(".csv", merge_suffix[key] + ".csv"), index=False)
+> 
+> verdicts = pd.read_csv(verdict_file.replace('.csv', '-further.csv'))
+> 
+> summaries = []
+> knowndoi = set()
+> for dopass in range(dopass_count):
+>     summaries_pass, knowndoi_pass = helpers.get_summaries(summary_file, dopass)
+> 
+>     summaries.append(summaries_pass)
+>     knowndoi |= set(knowndoi_pass)
+> 
+> merged = {}
+> for key in merge_suffix:
+>     merged_file = summary_file.replace(".csv", merge_suffix[key] + ".csv")
+>     if os.path.exists(merged_file):
+>         merged[key] = pd.read_csv(merged_file)
+>     else:
+>         merged[key] = pd.DataFrame({'DOI': []})
+> 
+> extracts = {}
+> for key in merge_suffix:
+>     extract_file = merge_extract_file.replace(".csv", merge_suffix[key] + ".csv")
+>     if os.path.exists(extract_file):
+>         extracts[key] = pd.read_csv(extract_file)
+>     else:
+>         extracts[key] = pd.DataFrame({'DOI': []})
+>         
+> if __name__ == '__main__':
+>     count = 0
+>     for doi in knowndoi:
+>         # Get the original authors and abstract
+>         verdictrow = verdicts[verdicts.DOI == doi]
+> 
+>         # Merge the summaries, column by column
+>         doisummaries = []
+>         for dopass in range(dopass_count):
+>             rows = summaries[dopass][summaries[dopass].DOI == doi]
+>             doisummaries.append(rows)
+> 
+>         doisummaries = pd.concat(doisummaries, ignore_index=True)
+>         dropped = doisummaries[doisummaries[extract_fromsummary] == ""]
+>         
+>         for key, columns in merge_columns.items():
+>             applied = doisummaries[doisummaries[extract_fromsummary] == key]
+>             applied = applied[columns.keys()]
+> 
+>             if len(applied) <= len(dropped):
+>                 print(f"Conservatively dropping {key} from {doi}")
+>                 continue
+> 
+>             if any(merged[key].DOI == doi):
+>                 last_summarycount = merged[key].SummaryCount[merged[key].DOI == doi].iloc[0]
+>             else:
+>                 last_summarycount = 0
+>             if len(applied) != last_summarycount:
+>                 if len(applied) == 1:
+>                     applied['SummaryCount'] = len(applied)
+>                     applied['DOI'] = doi
+>                     newrow = applied
+>                     merged[key] = pd.concat([merged[key][merged[key].DOI != doi], applied], ignore_index=True)
+>                 else:
+>                     applied2 = merge_rows(verdictrow, applied, columns)
+>                     applied2['SummaryCount'] = len(applied)
+>                     applied2['DOI'] = doi
+>                     newrow = applied2
+>                     merged[key] = pd.concat([merged[key][merged[key].DOI != doi], applied2], ignore_index=True)
+>                 save_merged(merged)
+>             else:
+>                 newrow = merged[key][merged[key].DOI == doi]
+> 
+>             dones = extracts[key][extracts[key].DOI == doi]
+>                 
+>             detaileds = []
+>             fileroot = re.sub(r'[^\w\.\-]', '_', doi)
+>             for dopass in range(dopass_count):
+>                 dopass_suffix = f"-pass{dopass}" if dopass > 0 else ""
+>                 detailpath = os.path.join(extract_dir, fileroot + dopass_suffix + '.csv')
+>                 if os.path.exists(detailpath):
+>                     try:
+>                         rows = pd.read_csv(detailpath)
+>                         rows = rows.loc[:, ~rows.columns.str.startswith('Unnamed')]
+>                         detaileds.append(rows)
+>                     except:
+>                         print(f"Failed to read {detailpath}.")
+> 
+>             if len(detaileds) == 0:
+>                 continue
+> 
+>             if len(dones) == 0 or dones.ExtractCount.iloc[0] < len(detaileds):
+>                 if len(detaileds) == 1:
+>                     validrows2 = detaileds[0]
+>                 else:
+>                     paperinfo = [f"  {key}: {value.iloc[0]}" for key, value in newrow.items() if not pd.isna(value.iloc[0]) and not key[:7] == "Unnamed"]
+>                     instructs = column_defs_extract[key]
+>                     request = extract_request[key]
+>                 
+>                     validrows = merge_extract(verdictrow, detaileds, "\n".join(paperinfo), request, instructs)
+>                     validrows2 = pd.DataFrame(validrows)
+>                     
+>                 validrows2['ExtractCount'] = len(detaileds)
+>                 validrows2['DOI'] = doi
+>                 extracts[key] = pd.concat([extracts[key][extracts[key].DOI != doi], validrows2], ignore_index=True)
+>                 save_extracts(extracts)
+> 
+>     save_merged(merged)
+>     save_extracts(extracts)
+> ===
+> 
+> Can you clearly lay out the two prompts there?
+**assistant**:
+> Sure! Here are the two main prompts used in the merging process, along with their contexts:
+> 
+> ### Prompt 1: Merging Summaries
+> 
+> This prompt is used to consolidate multiple reviewer summaries into a consistent summary for a given paper:
+> 
+> **Full Prompt for Merging Summaries:**
+> ```
+> I am performing a global review and analytical synthesis of the macroeconomic and macro-fiscal risks of climate change and the costs and benefits of adaptation at a national level. Here is a paper identified as relevant to the search:
+> 
+> {title}  # Title of the paper
+> Abstract: {abstract}  # Abstract of the paper
+> 
+> Multiple reviewers have provided summaries of this paper, and now I want to merge these into a consistent summary. The summary should focus on information that is corroborated by more than one reviewer, where possible.
+> 
+> Here is the data from the reviewers:
+> 
+> {rowinfo}  # Entries from the reviewers that include observed data.
+> 
+> Specify the results in a list with single lines of text in a YAML dictionary. Your response should look like this:
+> ```
+> {template}  # Expected template structure for the YAML output.
+> ```
+> ```
+> 
+> ### Prompt 2: Merging Extracted Quantitative Data
+> 
+> This prompt is used to consolidate detailed data extracted by multiple reviewers from the same paper into a coherent dataset:
+> 
+> **Full Prompt for Merging Extracted Data:**
+> ```
+> I am performing a global review and analytical synthesis of the macroeconomic and macro-fiscal risks of climate change and the costs and benefits of adaptation at a national level. Here is a paper identified as relevant to the search:
+> 
+> {title}  # Title of the paper
+> Abstract: {abstract}  # Abstract of the paper
+> 
+> {paperinfo}  # Additional information about the paper, provided during extraction.
+> 
+> Multiple reviewers have extracted detailed information from this paper, and now I want to merge these into a consistent dataset. The dataset should focus on information that is corroborated by more than one reviewer, where possible.
+> 
+> Here was the request to the reviewers: {request}  # What specific data was requested from the reviewers.
+> 
+> Here is the data from the reviewers:
+> 
+> {datainfo}  # CSV-formatted data entries from each reviewer.
+> 
+> Specify the result as a CSV, provided in triple quotes. Your response should start:
+> ```
+> {headerstr}  # Header row for the CSV output.
+> ...
+> ```
+> ```
+> 
+> These prompts effectively guide the AI in merging reviewer summaries and extracted data, ensuring a coherent and synthesized output for further analysis.

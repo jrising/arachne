@@ -1,0 +1,72 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> What is the typical understanding of a crossbar with whiskers? I've usually just gotten it as the default output in R, but now I want to use it to represent the mean, IQR, and 90% range of a result, and I'm not sure if it will come across as something else.
+**assistant**:
+> In most statistical graphics, “a crossbar with whiskers” is interpreted as a *boxplot*, and the default mental model people have is:
+> 
+> - **Central bar/line**: median (not mean)  
+> - **Box**: interquartile range (IQR = 25th–75th percentiles)  
+> - **Whiskers**: extend to the most extreme non‑outlier points, often up to 1.5×IQR beyond the quartiles (not necessarily any fixed percentile range like 90%)  
+> - **Points beyond whiskers**: outliers  
+> 
+> So if you show a bar with whiskers and don’t label it, many people will assume something close to that.
+> 
+> However, there *is* a related and somewhat common convention where:
+> 
+> - A **thick horizontal line or bar** shows the *mean*  
+> - **Thin whiskers** show some interval, often a *confidence interval* (e.g. 95% CI) or *range* (min–max)  
+> 
+> This is more common in experimental sciences, but far less standardized than boxplots. When R gives you a “crossbar with whiskers” by default (depending on which function/package), it is very often:
+> 
+> - A **boxplot**, as above, or  
+> - A **mean ± 1 SE / 1 SD / 95% CI plot** (e.g., in some ggplot geoms or helper functions), depending on the code.
+> 
+> ---
+> 
+> ### Using it for mean, IQR, and 90% range
+> 
+> What you propose is:
+> 
+> - Center: **mean**  
+> - Box (or inner bar): **IQR (25th–75th)**  
+> - Whiskers: **90% range** (5th–95th percentiles)
+> 
+> This is *perfectly reasonable statistically*, but not a standard visual convention. Without explanation, many readers will:
+> 
+> - Assume the central mark is the **median**, not the mean.
+> - Assume the whiskers follow the **1.5×IQR rule** or maybe min–max, not a 90% interval.
+> 
+> So, it will *not* automatically carry your intended meaning.
+> 
+> ---
+> 
+> ### How to make this work in practice
+> 
+> You can safely use that encoding if you:
+> 
+> 1. **State the mapping clearly in the caption/legend**, e.g.:  
+>    > Bars show the mean; boxes show the interquartile range (25th–75th percentile); whiskers show the 5th–95th percentile range.
+> 
+> 2. **Visually distinguish it from a classic boxplot**, for instance:
+>    - Use a **point or short thick bar** to mark the mean *on top* of a lightly drawn IQR box.
+>    - Use **different line weights or colors** for the IQR vs 90% whiskers.
+>    - Or omit the box altogether and just do a **mean marker + 90% interval** if that’s the key message.
+> 
+> 3. If you use R/ggplot: choose geoms that don’t scream “boxplot,” like:
+>    - `geom_pointrange()` or `geom_linerange()` for the 90% interval,
+>    - with `geom_crossbar()` or `geom_rect()` for the IQR,
+>    - and `stat_summary()` (or manual) for the mean.
+> 
+> That way, people are cued that this is a *custom summary graphic*, not a vanilla boxplot.
+> 
+> ---
+> 
+> ### Recommendation
+> 
+> - If the audience is statistically literate and you label clearly, your mean+IQR+90% design is fine.
+> - If you want something instantly interpretable with minimal explanation, stick closer to:
+>   - A **conventional boxplot** (median, IQR, whiskers per rule), or  
+>   - A **mean + CI plot** (mean point or bar, whiskers as 95% CI).
+> 
+> If you’d like, I can sketch the R/ggplot code for a specific layout (e.g., mean point + IQR crossbar + 90% whiskers) that clearly signals its nonstandard nature.

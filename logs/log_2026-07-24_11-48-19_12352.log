@@ -1,0 +1,646 @@
+**user**:
+> I am writing up a methods appendix for a report. The first part of this section discusses risk modeling:
+> ```
+> We estimate labour productivity impacts using two complementary sources: a meta-analysis of experimental exposure–response functions from \citetalias{gosling2018peseta}, and econometric estimates from \citetalias{schleypen2019}. Both are translated into temperature-dependent damage functions for the UK and combined via the same meta-analytic procedure applied in other sectors.
+> 
+> \citetalias{gosling2018peseta} summarise five underlying productivity models as exposure–response functions (ERFs) that relate work capacity to wet-bulb temperature, based on experimental and physiological evidence for heat stress. These ERFs are applied to outdoor labour and heat-exposed sectors to obtain UK-wide losses in effective labour productivity under alternative climate scenarios. We fit a reduced-form UK-level damage function that maps global mean temperature (and time, conditional on SSP1-2.6 and SSP3-7.0) to percentage losses in output attributable to reduced labour productivity. Following our standard downscaling procedure, we project this function to ADM3 level and rescale regional results, weighted by population, to ensure they aggregate back to the UK-wide values.
+> 
+> \citetalias{schleypen2019} take an econometric approach, estimating how sectoral value added from labour responds to temperature, using historical variation rather than experimental data. We extract the implied UK temperature–output relationship, convert it to percentage changes in sectoral value added per degree of warming, and aggregate these to a national measure of labour-related output losses. This yields a second reduced-form damage function, again expressed as a mapping from global mean temperature to annual UK losses (in monetary terms and as a share of GDP).
+> 
+> The two resulting damage functions—one rooted in experimental/physiological constraints, the other in observed economic responses—are then combined using a simple Bayesian meta-analysis. Each model is treated as a noisy observation of an underlying, unknown labour-productivity damage function. The combined function provides central estimates and uncertainty ranges for UK labour productivity losses as a percentage of GDP. The general meta-analytic framework and its implementation across sectors are described in \citet{rising2026comprehensive} and are not repeated here.
+> ```
+> 
+> Now, I need two more sections, where I discuss modeling adaptation and adding in stochastic annual variability and extreme events.
+> 
+> Here is the code that produces the adaptation modeling:
+> ```
+> source("../../lib/costs.R")
+> source("../../lib/myPBSmapping.R")
+> 
+> ## Averted losses under full adaptation
+> adapts <- data.frame(adaptation=c('Air conditioning', 'Solar blinds', 'Increased ventilation', 'Behavioural change'),
+>                      baseline=1900, averted=c(1557, 1473, 336, 743), # million / yr
+>                      capex.gbp.m2yr=c(318.15, 62.26, 9.68, 0.0) / 10, # pay over 10 years
+>                      opex.gbp.m2yr=c(0.2597 * 40, 0, 0.2597 * 2 * 10.7639, 0), # pay every year
+>                      capex.gbp.m2=c(318.15, 62.26, 9.68, 0.0) * factor.capex,
+>                      opex.gbp.m2=c(0.2597 * 40, 0, 0.2597 * 2 * 10.7639, 0) * factor.annual)
+> ## A/C OpEx: Average electricity price for UK non-domestic users was 25.97 pence per kWh in 2024 Quarter 4. Average annual energy consumption for cooling in offices is around 40 kWh/m2, according to CIBSE Journal.
+> ## Ventilation OpEx: Ventilation typically uses about 2 kWh per square foot (approximately 21.5 kWh/m²) in non-domestic buildings.
+> 
+> adapts$frac <- adapts$averted / adapts$baseline
+> 
+> saveddf <- df
+> load("TotalArea.RData")
+> totalarea <- df
+> df <- saveddf
+> ## subset(totalarea, Latitude > 51.25 & Latitude < 51.72 & Longitude > -0.57 & Longitude < 0.37)
+> ## subset(totalarea, Latitude %in% c(51.25, 51.75) & Longitude %in% c(-0.25, 0.25) & Year == "2000")
+> totalarea2 <- totalarea %>% group_by(Area) %>% dplyr::summarize(Floorspace_1000m2=ifelse(any(!is.na(Floorspace_1000m2)), tail(Floorspace_1000m2[!is.na(Floorspace_1000m2)], 1), NA)) %>%
+>     mutate(MatchArea=gsub(" UA$", "", Area))
+> todrop <- totalarea2$MatchArea[duplicated(totalarea2$MatchArea)] # Can't distinguish between normal and UA
+> 
+> polydata <- read.csv("../../regions/gadm36_GBR_shp/gadm36_GBR_3-withattr.csv")
+> 
+> polydata2 <- polydata[, -1] %>% left_join(totalarea2 %>% filter(!(MatchArea %in% todrop)), by=c('NAME_3'='MatchArea'))
+> 
+> mod <- lm(Floorspace_1000m2 ~ popsum, data=polydata2)
+> ## mod <- lm(log(Floorspace_1000m2) ~ log(popsum) + log(area), data=polydata2)
+> 
+> polydata2$Floorspace_obs <- !is.na(polydata2$Floorspace_1000m2)
+> polydata2$Floorspace_1000m2[is.na(polydata2$Floorspace_1000m2)] <- predict(mod, polydata2[is.na(polydata2$Floorspace_1000m2),])
+> 
+> floorspace.1000m2 <- sum(polydata2$Floorspace_1000m2)
+> 
+> ## Total cost per year for 100% effect
+> adapts$ukcosts.gbp <- (adapts$capex.gbp.m2yr + adapts$opex.gbp.m2yr) * floorspace.1000m2 * 1000 * c(49.4 / 100, 1, 1 - 0.2, 1)
+> ## TODO: Use workspace-type (office, retail, etc.) floorspace with Tong's penetration rate data (currently using Robinson all-worker numbers)
+> 
+> ## Now: Marginal effect of a dollar spent across the UK, as d (% lost) / d GBP
+> adapts$ukcosts.gbp.marginal <- adapts$frac * 100 / adapts$ukcosts.gbp
+> 
+> ## Robinson WP: Reduced hours
+> heatwave.hours <- function(anomaly, with.alert, mcnum) {
+>     ## coefs <- rnorm(1, c(-0.045, 0.099, -0.062), c(0.016, 0.001, 0.006)) # Table 1, Col 2
+>     ## coefs <- mvrnorm(mcnum, c(-0.049, 0.095, -0.068), diag(c(0.022, 0.000, 0.002)), empirical=mcnum > 1) # Table 3, Col 1 (Heckman correction)
+>     ## coefs %*% c(with.alert, anomaly, with.alert * anomaly)
+>     coefs <- mvrnorm(mcnum, c(0.095, -0.068), diag(c(0.000, 0.002)), empirical=mcnum > 1) # Table 3, Col 1 (Heckman correction)
+>     coefs %*% c(anomaly, with.alert * anomaly)
+> }
+> 
+> ## Robinson WP: Reduced effort
+> heatwave.effort <- function(anomaly, with.alert, mcnum) {
+>     ## coefs <- rnorm(1, c(-0.039, 0.095, -0.049), c(0.018, 0.001, 0.002)) # Table 1, Col 4
+>     ## coefs <- mvrnorm(mcnum, c(-0.044, 0.099, -0.053), diag(c(0.012, 0.000, 0.008)), empirical=mcnum > 1) # Table 3, Col 2 (Heckman correction)
+>     ## coefs %*% c(with.alert, anomaly, with.alert * anomaly)
+>     coefs <- mvrnorm(mcnum, c(0.099, -0.053), diag(c(0.000, 0.008)), empirical=mcnum > 1) # Table 3, Col 2 (Heckman correction)
+>     coefs %*% c(anomaly, with.alert * anomaly)
+> }
+> 
+> ## Relationship between Tavg and anomaly
+> get.anomaly <- function(tavg) {
+>     ## 95% quantile regression
+>     -12.84 + 0.849 * tavg
+> }
+> 
+> shp <- importShapefile("~/Dropbox/HMT/regions/gadm36_GBR_shp/gadm36_GBR_3-withattr.shp")
+> polydata <- attr(shp, 'PolyData')
+> 
+> ## Costs from "Methodology for Valuing and Monitoring Climate Services to Manage Climate Variability"
+> pop.scotland <- 5490100
+> alert.costs.2030 <- 189796 # £/year
+> alert.costs.2050 <- 256526 # £/year
+> pop.uk <- sum(polydata$popsum)
+> pop.england <- sum(polydata$popsum[polydata$NAME_1 == 'England'])
+> pop.uk.not.england <- sum(polydata$popsum[polydata$NAME_1 != 'England'])
+> 
+> ## Linear in year:
+> mod.costs <- lm(log(costs) ~ year, data=data.frame(year=c(2030, 2050), costs=(log(pop.uk.not.england) / log(pop.scotland)) * c(alert.costs.2030, alert.costs.2050)))
+> ## Elasticity: 1 - exp(-alpha * spend), such that if spend = SPEND, 0.95
+> ## -log(0.05) / spend = alpha
+> 
+> get.alert <- function(spend, year) {
+>     full.alert.costs <- exp(predict(mod.costs, data.frame(year)))
+>     alpha <- -log(0.05) / full.alert.costs
+>     1 - exp(-alpha * spend)
+> }
+> 
+> library(dplyr)
+> library(ggplot2)
+> library(MASS)
+> 
+> pdf <- data.frame()
+> for (tavg in seq(16, 40, by=1)) {
+>     anomaly <- get.anomaly(tavg)
+>     hours0 <- heatwave.hours(anomaly, 0, 1)
+>     hours1 <- heatwave.hours(anomaly, .5, 100000)
+> 
+>     pdf <- rbind(pdf, data.frame(tavg, hours0, hours1.mu=mean(hours1), hours1.se=sd(hours1)))
+> }
+> 
+> ggplot(pdf, aes(tavg, hours0)) +
+>     geom_line(aes(colour="Without Alerts")) +
+>     geom_line(aes(y=hours1.mu, colour="With Alerts")) +
+>     geom_ribbon(aes(ymin=hours1.mu - hours1.se * 1.96, ymax=hours1.mu + hours1.se * 1.96), alpha=.5) +
+>     theme_bw()
+> 
+> anomaly <- 3 #get.anomaly(30)
+> hours0 <- heatwave.hours(anomaly, 0, 1)
+> hours1 <- heatwave.hours(anomaly, 1, 100000)
+> 
+> mean(hours1 / hours0[1, 1])
+> 
+> pdf <- data.frame()
+> for (spend in seq(0, 2000000, length.out=100)) {
+>     hours1 <- heatwave.hours(anomaly, get.alert(spend, 2030), 100000)
+>     pdf <- rbind(pdf, data.frame(spend, hours1.mu=mean(hours1), hours1.se=sd(hours1)))
+> }
+> 
+> ggplot(pdf, aes(spend, hours1.mu)) +
+>     geom_line() +
+>     geom_ribbon(aes(ymin=hours1.mu - hours1.se * 1.96, ymax=hours1.mu + hours1.se * 1.96), alpha=.5) +
+>     theme_bw()
+> 
+> pdf$frac.mu <- 1 - pdf$hours1.mu / hours0[1,1]
+> pdf$frac.se <- pdf$hours1.se / hours0[1,1]
+> pdf$ukcosts.gbp.marginal <- 100 * c(diff(pdf$frac.mu) / diff(pdf$spend), NA)
+> pdf$ukcosts.gbp.marginal.se <- 100 * c(diff(pdf$frac.se) / diff(pdf$spend), NA)
+> 
+> ## pdf2 <- rbind(cbind(adapts[, c('adaptation', 'ukcosts.gbp.marginal')], ukcosts.gbp.marginal.se=NA, spend=1e6),
+> ##               cbind(adaptation='Heat Alerts', pdf[, c('ukcosts.gbp.marginal', 'ukcosts.gbp.marginal.se', 'spend')]))
+> 
+> ggplot(pdf, aes(spend, ukcosts.gbp.marginal)) +
+>     geom_line(aes(colour="Heat Alerts")) +
+>     geom_ribbon(aes(ymin=ukcosts.gbp.marginal - ukcosts.gbp.marginal.se * 1.96, ymax=ukcosts.gbp.marginal + ukcosts.gbp.marginal.se * 1.96), alpha=.5) +
+>     geom_point(data=adapts, aes(colour=adaptation), x=1e6) +
+>     theme_bw()
+> 
+> ggplot(pdf, aes(spend, ukcosts.gbp.marginal)) +
+>     geom_line(aes(colour="Heat Alerts")) +
+>     geom_point(data=adapts, aes(colour=adaptation), x=1e6) +
+>     theme_bw() + scale_y_log10()
+> 
+> ## Make a marginal adaptation costs curve
+> 
+> anomalies <- c(1, 2, 3)
+> years <- c(2030, 2050, 2070)
+> pdf <- data.frame()
+> for (ii in 1:length(anomalies)) {
+>     hours0 <- heatwave.hours(anomalies[ii], 0, 1)
+>     hours1 <- heatwave.hours(anomalies[ii], 1, 100000)
+> 
+>     ## max.effect <- mean(hours1 / hours0[1, 1])
+> 
+>     for (spend in seq(0, 500000, length.out=100)) {
+>         alert.base <- get.alert(spend, years[ii])
+>         if (alert.base > 0.95)
+>             break
+>         alert.adjs <- get.alert(spend + 1, years[ii])
+> 
+>         hours.base <- sort(heatwave.hours(anomalies[ii], alert.base, 100000))
+>         hours.adjs <- sort(heatwave.hours(anomalies[ii], alert.adjs, 100000))
+> 
+>         ## fraction of loss remaining
+>         frac.base <- hours.base / hours0[1, 1]
+>         frac.adjs <- hours.adjs / hours0[1, 1]
+> 
+>         ukcosts.gbp.marginals <- -(frac.adjs - frac.base) * 100
+> 
+>         pdf <- rbind(pdf, data.frame(adaptation="Heat Alerts", anomaly=anomalies[ii], year=years[ii], spend, ukcosts.gbp.marginal=mean(ukcosts.gbp.marginals),
+>                                      ukcosts.gbp.marginal.se=sd(ukcosts.gbp.marginals)))
+>     }
+> }
+> 
+> for (ii in 1:nrow(adapts)) {
+>     pdf <- rbind(pdf, cbind(adapts[ii, c('adaptation', 'ukcosts.gbp.marginal')], anomaly=NA, year=NA, ukcosts.gbp.marginal.se=NA, spend=c(0, adapts$ukcosts.gbp[ii])))
+> }
+> 
+> ggplot(subset(pdf, adaptation != "Behavioural change"), aes(spend, 1e6 * ukcosts.gbp.marginal, group=paste(adaptation, anomaly, year))) +
+>     geom_line(aes(colour=adaptation)) +
+>     theme_bw() + scale_x_log10("Annual adaptation spending (£/year)") + scale_y_log10("UK-wide percent decrease in risk per million pound") +
+>     scale_colour_discrete("Adaptation Solution:")
+> ```
+> 
+> Can you please write up a clear, succinct methodology for the
+> adaptation section, including showing the figure mac-labour.pdf, which is the figure produced at the end of the code with a legend "Adaptation Solution:"? Figures
+> for this section will be in the `figures/adapt/labour` folder. For figure
+> labels, include the prefix "labour-".
+> 
+> Follow conventions of (1) Use UK spelling; (2) using LaTeX and surround math with $...$, \[
+> ... \], and the like; (3) avoid an overly step-by-step description and
+> do not use subsections; (4) if you need to use indices, counties are
+> i, Monte Carlos are m, and years are t; (5) do not refer to function
+> or column names explicitly; and (6) use natbib references, and where
+> new ones are required follow the references with note in parentheses
+> of what it should refer to.
+**assistant**:
+> We represent labour adaptation as a set of interventions that reduce heat-related productivity losses at the UK level and allow comparison of their marginal effectiveness per pound spent.
+> 
+> We first construct an indicative portfolio of workplace adaptation options: mechanical cooling, solar blinds, increased mechanical ventilation, and behavioural changes (e.g., work–rest cycles and flexible working). For each option, we specify (i) a baseline monetised annual loss from heat-related productivity impacts in the absence of adaptation, and (ii) the annual losses averted under full deployment, expressed in monetary terms. The ratio of averted to baseline losses defines the maximum fraction of national labour-productivity damages that can be eliminated by that option.
+> 
+> Capital and operating costs for the building-related adaptations are expressed on a floor-area basis. Capital costs per unit area are annualised over a ten-year repayment period, and operating costs per unit area reflect estimated electricity consumption for cooling and ventilation combined with UK non-domestic electricity prices (CIBSE cooling benchmarks and UK energy price statistics; new reference). To obtain national totals, we compile local-authority floorspace estimates, combining observed commercial floorspace data where available with a regression-based prediction elsewhere. Specifically, we estimate UK non-domestic floorspace for each county $i$ as a function of population, and use this relationship to impute floorspace in counties without direct observations. Aggregating over all counties yields total non-domestic floorspace, which we multiply by annualised per–square metre costs and, where appropriate, by assumed penetration rates to obtain an effective annual UK cost for each adaptation option.
+> 
+> For each adaptation measure $k$, we then calculate a national “cost-effectiveness” measure: the percentage reduction in UK labour-productivity losses per year, divided by the annual UK expenditure on that measure. This yields a marginal effect expressed as
+> \[
+> \frac{\mathrm{d} L}{\mathrm{d} C_k} \approx \frac{\Delta L_k}{C_k},
+> \]
+> where $L$ is the share of GDP lost to heat-related labour productivity impacts and $C_k$ is annual UK spending on measure $k$. These point estimates for building adaptations enter the marginal adaptation curve as horizontal segments at the corresponding spending levels.
+> 
+> Heat-health alert systems are treated as a continuous, scalable adaptation. We parameterise the annual cost of operating a national alert system by extrapolating published Scottish cost estimates to the UK population and interpolating between future years using a log-linear model of total costs over time (national meteorological service cost-effectiveness study; new reference). For a given year $t$ and annual spending level $C$, we assume that the share of the population effectively covered by alerts follows an increasing but saturating relationship,
+> \[
+> \pi_t(C) = 1 - \exp(-\alpha_t C),
+> \]
+> with $\alpha_t$ calibrated such that spending equal to an estimated “full system” cost in year $t$ achieves $95\%$ effective coverage.
+> 
+> The effectiveness of heat alerts in reducing labour losses is quantified from an empirical study of UK workers’ responses to heat warnings \citep{robinsonYYYY} (Robinson worker productivity study; new reference). We interpret the reported coefficients on heatwave occurrence and warning exposure as describing proportional changes in working hours and effort. For a given heat anomaly and alert coverage $\pi_t(C)$, we simulate $m$ realisations of hours and effort responses, deriving a distribution of residual productivity losses relative to a no-alert baseline. The resulting expected fraction of remaining loss, $f_t(C)$, defines the risk reduction attributable to alerts as $1 - f_t(C)$.
+> 
+> To characterise the marginal impact of an additional pound spent on the alert system at spending level $C$, we compute a finite-difference approximation,
+> \[
+> \frac{\mathrm{d} L_t}{\mathrm{d} C}\bigg\rvert_C \approx -\frac{f_t(C+\delta) - f_t(C)}{\delta} \times 100,
+> \]
+> for a small increment $\delta$, scaled to give the percentage-point reduction in national labour-productivity losses per additional pound spent. Repeating this procedure across a range of annual spending levels and for illustrative heat anomalies (e.g., $1$, $2$, and $3\,^\circ$C) and future years $t$ yields a set of smooth marginal-effect curves for heat alerts.
+> 
+> Finally, we combine the discrete building-adaptation points with the continuous alert-system curves to produce an overall marginal adaptation cost curve for labour productivity. This curve reports, on log–log axes, the percentage reduction in UK labour-productivity losses per million pounds of annual spending against the scale of that spending, allowing comparison across adaptation solutions and across different levels of climate stress. The resulting figure is shown as Figure~\ref{fig:labour-mac-labour}.
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=0.8\textwidth]{figures/adapt/labour/mac-labour.pdf}
+>   \caption{Marginal effectiveness of labour-related adaptation measures in reducing UK heat-related productivity losses. Curves show heat alert systems under alternative temperature anomalies and future years; points show building-level adaptations, with the legend indicating the “Adaptation Solution”.}
+>   \label{fig:labour-mac-labour}
+> \end{figure}
+**user**:
+> Oops, I left out a piece of code. This is what then applies the adaptation to the unadapted risk results:
+> ```
+> load.labor.adapt <- function() {
+>     source("channels/labour/adaptcalib.R", chdir=T) # adapts, and various functions
+>     adapts2 <- subset(adapts, is.finite(ukcosts.gbp.marginal))
+> 
+>     temps.uk <- read.csv("Dataset v2/temps.csv") %>% filter(Region == "GBR")
+> 
+>     return(list(adapts2, temps.uk, get.alert, get.anomaly, heatwave.hours, heatwave.effort))
+> }
+> 
+> labor.adapt.prop <- function(spend.MGBPyr, loaded) {
+>     adapts2 <- loaded[[1]]
+>     temps.uk <- loaded[[2]]
+>     get.alert <- loaded[[3]]
+>     get.anomaly <- loaded[[4]]
+>     heatwave.hours <- loaded[[5]]
+>     heatwave.effort <- loaded[[6]]
+> 
+>     results <- data.frame()
+>     for (ii in 1:nrow(temps.uk)) {
+>         alertspend <- optimize(function(spend) (get.alert(spend, temps.uk$year[ii]) - 0.95)^2, c(0, 1e6))$minimum
+>         if (spend.MGBPyr * 1e6 > alertspend) {
+>             remain <- spend.MGBPyr * 1e6 - alertspend - ifelse(temps.uk$year[ii] == min(temps.uk$year), 250e3, 0)
+>             spendper <- remain * adapts2$ukcosts.gbp.marginal / sum(adapts2$ukcosts.gbp.marginal)
+> 
+>             cooling <- sum(spendper * adapts2$ukcosts.gbp.marginal / 100) # % to fraction
+>         } else {
+>             cooling <- 0
+>         }
+> 
+>         row <- data.frame(scenario=temps.uk$scenario[ii], year=temps.uk$year[ii], measure=temps.uk$measure[ii])
+>         for (quant in c('mu', 'ci05', 'ci95')) {
+>             anomaly <- get.anomaly(temps.uk[ii, quant] - 273.15)
+>             hours0 <- heatwave.hours(anomaly, 0, 1e3)
+>             hours1 <- heatwave.hours(anomaly, .95, 1e3)
+> 
+>             effort0 <- heatwave.effort(anomaly, 0, 1e3)
+>             effort1 <- heatwave.effort(anomaly, 0.95, 1e3)
+> 
+>             total.hours <- (pop.england / pop.uk + (pop.uk.not.england / pop.uk) * hours1 / hours0) - cooling
+>             total.effort <- (pop.england / pop.uk + (pop.uk.not.england / pop.uk) * effort1 / effort0) - cooling
+> 
+>             ## Structurally identical, so label as CI25 and CI75
+>             outquant <- ifelse(quant == 'mu', 'mu', ifelse(quant == 'ci05', 'ci25', 'ci75'))
+>             row[, paste0(outquant, '.hours')] <- mean(total.hours)
+>             row[, paste0(outquant, '.effort')] <- mean(total.effort)
+>         }
+> 
+>         results <- rbind(results, row)
+>     }
+> 
+>     results
+> }
+> ```
+> 
+> Can you include any relevant pieces of this in your discussion?
+**assistant**:
+> We represent labour adaptation as a set of interventions that reduce heat-related productivity losses at the UK level and allow comparison of their marginal effectiveness per pound spent, and then apply these interventions to the unadapted risk results from the damage functions described above.
+> 
+> We first construct an indicative portfolio of workplace adaptation options: mechanical cooling, solar blinds, increased mechanical ventilation, and behavioural changes (e.g., work–rest cycles and flexible working). For each option, we specify (i) a baseline monetised annual loss from heat-related productivity impacts in the absence of adaptation, and (ii) the annual losses averted under full deployment, expressed in monetary terms. The ratio of averted to baseline losses defines the maximum fraction of national labour-productivity damages that can be eliminated by that option.
+> 
+> Capital and operating costs for the building-related adaptations are expressed on a floor-area basis. Capital costs per unit area are annualised over a ten-year repayment period, and operating costs per unit area reflect estimated electricity consumption for cooling and ventilation combined with UK non-domestic electricity prices (CIBSE cooling benchmarks and UK energy price statistics; new reference). To obtain national totals, we compile local-authority floorspace estimates, combining observed commercial floorspace data where available with a regression-based prediction elsewhere. Specifically, we estimate UK non-domestic floorspace for each county $i$ as a function of population, and use this relationship to impute floorspace in counties without direct observations. Aggregating over all counties yields total non-domestic floorspace, which we multiply by annualised per–square metre costs and, where appropriate, by assumed penetration rates to obtain an effective annual UK cost for each adaptation option.
+> 
+> For each adaptation measure $k$, we then calculate a national “cost-effectiveness” measure: the percentage reduction in UK labour-productivity losses per year, divided by the annual UK expenditure on that measure. This yields a marginal effect expressed as
+> \[
+> \frac{\mathrm{d} L}{\mathrm{d} C_k} \approx \frac{\Delta L_k}{C_k},
+> \]
+> where $L$ is the share of GDP lost to heat-related labour productivity impacts and $C_k$ is annual UK spending on measure $k$. These point estimates for building adaptations enter the marginal adaptation curve as horizontal segments at the corresponding spending levels.
+> 
+> Heat-health alert systems are treated as a continuous, scalable adaptation. We parameterise the annual cost of operating a national alert system by extrapolating published Scottish cost estimates to the UK population and interpolating between future years using a log-linear model of total costs over time (national meteorological service cost-effectiveness study; new reference). For a given year $t$ and annual spending level $C$, we assume that the share of the population effectively covered by alerts follows an increasing but saturating relationship,
+> \[
+> \pi_t(C) = 1 - \exp(-\alpha_t C),
+> \]
+> with $\alpha_t$ calibrated such that spending equal to an estimated “full system” cost in year $t$ achieves $95\%$ effective coverage.
+> 
+> The effectiveness of heat alerts in reducing labour losses is quantified from an empirical study of UK workers’ responses to heat warnings \citep{robinsonYYYY} (Robinson worker productivity study; new reference). We interpret the reported coefficients on heatwave occurrence and warning exposure as describing proportional changes in working hours and effort. For a given heat anomaly and alert coverage $\pi_t(C)$, we simulate $m$ realisations of hours and effort responses, deriving a distribution of residual productivity losses relative to a no-alert baseline. The resulting expected fraction of remaining loss, $f_t(C)$, defines the risk reduction attributable to alerts as $1 - f_t(C)$.
+> 
+> To characterise the marginal impact of an additional pound spent on the alert system at spending level $C$, we compute a finite-difference approximation,
+> \[
+> \frac{\mathrm{d} L_t}{\mathrm{d} C}\bigg\rvert_C \approx -\frac{f_t(C+\delta) - f_t(C)}{\delta} \times 100,
+> \]
+> for a small increment $\delta$, scaled to give the percentage-point reduction in national labour-productivity losses per additional pound spent. Repeating this procedure across a range of annual spending levels and for illustrative heat anomalies (e.g., $1$, $2$, and $3\,^\circ$C) and future years $t$ yields a set of smooth marginal-effect curves for heat alerts.
+> 
+> We then construct a marginal adaptation cost curve by combining the discrete building-adaptation points with the continuous alert-system curves. This curve reports, on log–log axes, the percentage reduction in UK labour-productivity losses per million pounds of annual spending against the scale of that spending, allowing comparison across adaptation solutions and across different levels of climate stress. The resulting figure is shown as Figure~\ref{fig:labour-mac-labour}.
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=0.8\textwidth]{figures/adapt/labour/mac-labour.pdf}
+>   \caption{Marginal effectiveness of labour-related adaptation measures in reducing UK heat-related productivity losses. Curves show heat alert systems under alternative temperature anomalies and future years; points show building-level adaptations, with the legend indicating the “Adaptation Solution”.}
+>   \label{fig:labour-mac-labour}
+> \end{figure}
+> 
+> Given a specified national adaptation budget, we allocate spending dynamically across years and interventions and apply the resulting adaptations to the unadapted risk projections. For each year $t$ and climate scenario, we first determine the spending on heat alerts required to achieve a fixed effective coverage of $95\%$ of the UK population. If the available annual budget (expressed in million pounds per year and converted to pounds) exceeds this amount, the remaining funds are allocated to the building-level adaptations in proportion to their national marginal cost-effectiveness values. This allocation rule implies that the share of residual funds directed to each building option $k$ is proportional to its estimated reduction in percentage losses per pound, so that the combined package approximates the upper envelope of the marginal adaptation cost curve.
+> 
+> The impact of the resulting adaptation mix on productivity is evaluated using projected UK temperature trajectories. For each scenario–year combination, we compute a national heat anomaly from UK-average temperature and, for each of several temperature quantiles (central estimate and bounds), simulate $m$ Monte Carlo draws of work hours and effort with and without alerts in place. The alert system is assumed to apply uniformly across the UK with $95\%$ effective coverage. We then combine these simulated proportional changes in hours and effort with population-weighting across England and the rest of the UK to obtain national-scale measures of remaining effective labour supply under the alert system alone. Building-level adaptations are represented as an additional proportional reduction in these residual losses: the share of loss removed by the building package is taken to be equal to the aggregate effectiveness implied by the allocated spending, obtained by summing over interventions the product of allocated spending and their marginal cost-effectiveness. This aggregate “cooling” effect is subtracted from the alert-adjusted loss, yielding, for each year $t$ and scenario, adapted projections of total hours and effort as fractions of the no-heat-loss baseline. These adapted productivity paths are then mapped back into monetary terms using the reduced-form damage functions described above.
+**user**:
+> Thank you. Next, I would like you to provide a succinct methods section for
+> "Variability and extreme events". Here is the relevant code:
+> ```
+> setwd("~/Dropbox/HMT/channels/labour/")
+> 
+> library(ncdf4)
+> source("../../lib/project.R")
+> source("calib.R")
+> 
+> results <- adm1.project(function(temps, mcii) {
+>     temps2 <- subset(temps, Year >= 2025 & Year <= 2075)
+>     anomalies <- get.anomaly(temps2$t2m - 273.15)
+>     hours0 <- sapply(anomalies, function(anomaly) heatwave.hours(anomaly, 0, 1))
+>     hours1 <- sapply(anomalies, function(anomaly) heatwave.hours(anomaly, .5, 1))
+>     resids <- rnorm(length(hours0), 0, max(abs(hours0))) # "athrho" is 0.5, so maybe explains half of variance?
+>     data.frame(ISOADM1=temps2$ISOADM1, Year=temps2$Year, hours0, hours1, resids)
+> }, run_id.limit=100)
+> 
+> save(results, file="project.RData")
+> 
+> setwd("~/Dropbox/HMT/channels/labour/")
+> 
+> library(dplyr)
+> library(ggplot2)
+> load("project.RData")
+> 
+> load("~/Dropbox/HMT/climate/likely.RData")
+> results$scenrid <- paste(results$scenario, results$run_id)
+> 
+> results2 <- data.frame()
+> for (climscen in c('Most Likely', 'High Risk')) {
+>     ## Annual projections
+>     for (year in 2025:2075) {
+>         if (climscen == 'Most Likely') {
+>             subfin <- subset(results, Year == year & scenrid %in% gsat.likely$scenrid)
+>         } else {
+>             subfin <- subset(results, Year == year & scenario == 'ssp370')
+>         }
+>         subfin2 <- subfin %>% group_by(ISOADM1) %>% summarize(mu=mean(hours0), ci05=quantile(hours0, .05),
+>                                                     ci95=quantile(hours0, .95),
+>                                                     hours1.mu=mean(hours1), hours1.ci05=quantile(hours1, .05),
+>                                                     hours1.ci95=quantile(hours1, .95))
+> 
+>         results2 <- rbind(results2, cbind(scenario=climscen, year=year, measure="EAD", subfin2))
+>     }
+> }
+> 
+> climscen <- 'High Risk'
+> ## 1-in-200 year projections
+> for (year in c(2030, 2040, 2050)) {
+>     ## 1-in-10 year outcome
+>     subfin <- subset(results, scenario == 'ssp370' & Year >= year & Year < year + 10)
+>     subfin2 <- subfin %>% mutate(hours0=hours0 + resids, hours1=hours1 + resids)
+>     ## Choose the worst year for each MC
+>     worstyears <- subfin2 %>% group_by(Year, run_id) %>% summarize(hours0=mean(hours0)) %>%
+>         group_by(run_id) %>% summarize(Year=Year[which.min(hours0)])
+>     subfin3 <- subfin2 %>% left_join(worstyears, by='run_id', suffix=c('', '.worst')) %>%
+>         filter(Year == Year.worst)
+>     subfin4 <- subfin3 %>% group_by(ISOADM1) %>% summarize(mu=mean(hours0), ci05=quantile(hours0, .05),
+>                                                     ci95=quantile(hours0, .95),
+>                                                     hours1.mu=mean(hours1), hours1.ci05=quantile(hours1, .05),
+>                                                     hours1.ci95=quantile(hours1, .95))
+> 
+>     results2 <- rbind(results2, cbind(scenario=climscen, year=year, measure="Extreme", subfin4))
+> }
+> 
+> ggplot(subset(results2, measure == 'EAD'), aes(year, mu, group=ISOADM1)) +
+>     facet_wrap(~ scenario, ncol=1) +
+>     geom_line(aes(colour=scenario), alpha=.5) +
+>     geom_jitter(data=subset(results2, measure == 'Extreme'),
+>                 aes(x=year + 5, y=ci95), colour=scales::muted("red"), width=4, height=0) +
+>     theme_bw() + scale_x_continuous(NULL, expand=c(0, 0)) + ylab("Lost Labour Hours per worker (no adaptation)") +
+>     scale_colour_discrete("Scenario:") + theme(legend.justification=c(1, 0), legend.position=c(.99, 0.01))
+> ggsave("dataset-adm1.pdf", width=6.5, height=4)
+> 
+> write.csv(results2, "dataset-adm1.csv", row.names=F)
+> ## results2 <- read.csv("dataset-adm1.csv")
+> 
+> source("~/projects/research-common/R/myPBSmapping.R")
+> 
+> shp <- importShapefile("../../regions/ne_10m_admin_1_states_provinces/ne_10m_admin_1_states_provinces.shp")
+> ## polydata <- attr(shp, 'PolyData')
+> polydata <- read.csv("../../regions/ne_10m_admin_1_states_provinces/ne_10m_admin_1_states_provinces.shp.csv")
+> polydata$PID <- 1:nrow(polydata)
+> polydata$ISOADM1 <- paste0(polydata$adm0_a3, polydata$diss_me)
+> 
+> polydata2 <- polydata %>% left_join(subset(results2, scenario == 'Most Likely' & year == 2050), by='ISOADM1')
+> shp2 <- shp %>% left_join(polydata2[, c('PID', 'mu', 'hours1.mu')], by='PID')
+> 
+> ggplot(subset(shp2, !is.na(mu)), aes(X, Y, group=paste(PID, SID))) +
+>     geom_polygon(aes(fill=mu)) + theme_bw() +
+>     xlab(NULL) + ylab(NULL) + scale_fill_continuous("Hours lost / wk\n(no adaptation):") +
+>     xlim(-9, 3)
+> 
+> ggplot(subset(shp2, !is.na(hours1.mu)), aes(X, Y, group=paste(PID, SID))) +
+>     geom_polygon(aes(fill=hours1.mu)) + theme_bw() +
+>     xlab(NULL) + ylab(NULL) + scale_fill_continuous("Hours lost / wk\n(50% alerts):") +
+>     xlim(-9, 3)
+> 
+> polydata2 <- polydata %>% left_join(subset(results2, measure == 'Extreme' & year == 2050), by='ISOADM1')
+> shp2 <- shp %>% left_join(polydata2[, c('PID', 'ci95')], by='PID')
+> 
+> ggplot(subset(shp2, !is.na(ci95)), aes(X, Y, group=paste(PID, SID))) +
+>     geom_polygon(aes(fill=ci95)) + theme_bw() +
+>     xlab(NULL) + ylab(NULL) + scale_fill_continuous("Hours lost / wk\n(extreme):") +
+>     xlim(-9, 3)
+> 
+> ## results2 <- read.csv("dataset-adm1.csv")
+> library(Hmisc)
+> 
+> results3 <- results2 %>% left_join(polydata[, c('ISOADM1', 'popsum')], by='ISOADM1') %>%
+>     group_by(scenario, year, measure) %>%
+>     dplyr::summarize(mu=wtd.mean(mu, popsum),
+>                      ci05=wtd.mean(ci05, popsum),
+>                      ci95=wtd.mean(ci95, popsum))
+> 
+> ggplot(subset(results3, measure == 'EAD'), aes(year, mu)) +
+>     coord_cartesian(ylim=c(-.5, .75)) +
+>     geom_line(data=subset(results3, measure == 'EAD'), aes(colour=scenario)) +
+>     geom_ribbon(aes(ymin=ci05, ymax=ci95, group=scenario), alpha=.5) +
+>     geom_errorbar(data=subset(results3, measure == 'Extreme'),
+>                   aes(x=year + 5, ymin=ci05, ymax=ci95), colour=scales::muted("red")) +
+>     theme_bw() + scale_x_continuous(NULL, expand=c(0, 0)) + ylab("Lost Labour Hours per worker (no adaptation)") +
+>     scale_colour_discrete("Scenario:") + theme(legend.justification=c(0, 1), legend.position=c(0.01, .99))
+> ggsave("dataset-adm1-ukwide.pdf", width=6.5, height=4)
+> 
+> setwd("~/Dropbox/HMT/channels/labour/")
+> 
+> library(dplyr)
+> 
+> load("~/Dropbox/COACCH/channels/Labor/adm3combo.RData")
+> 
+> combo1 <- combo %>% group_by(scenario, county, period) %>% reframe(run_id=run_id, origrid=run_id[order(damage.mgbp)], damage.mgbp=sort(damage.mgbp))
+> combo2 <- combo1 %>%
+>     group_by(scenario, county, run_id) %>% reframe(origrid=sample(origrid, 1), Year=2025:2075, damage.mgbp=approx(c(2020, 2050, 2090), damage.mgbp, Year)$y)
+> combo2$scenrid <- paste(combo2$scenario, combo2$origrid)
+> 
+> load("~/Dropbox/HMT/climate/likely.RData")
+> 
+> results <- data.frame()
+> for (climscen in c('Most Likely', 'High Risk')) {
+>     ## Annual projections
+>     for (year in 2025:2075) {
+>         if (climscen == 'Most Likely') {
+>             subfin <- subset(combo2, Year == year & scenrid %in% gsat.likely$scenrid)
+>         } else {
+>             subfin <- subset(combo2, Year == year & scenario == 'ssp370')
+>         }
+>         subfin2 <- subfin %>% group_by(county) %>% summarize(mu=mean(damage.mgbp), ci05=quantile(damage.mgbp, .05),
+>                                                              ci95=quantile(damage.mgbp, .95))
+> 
+>         results <- rbind(results, cbind(scenario=climscen, year=year, measure="EAD", subfin2))
+>     }
+> }
+> 
+> ## R2 from Rode et al. (2022)
+> ## r2 = 1 - var(yhat) / var(y)
+> r2 = 0.56
+> ## Find a normal distribution that produces this
+> preddf <- combo2 %>% filter(scenario == 'ssp370') %>% group_by(county, Year) %>% summarize(mu=mean(damage.mgbp))
+> mod <- lm(log(mu) ~ county + Year, data=preddf)
+> preddf$scaling <- exp(predict(mod, preddf))
+> preddf$resid <- preddf$scaling * rnorm(nrow(preddf), 0, 1)
+> residparam <- optimize(function(sd) {
+>     ytot <- preddf$mu + preddf$resid * sd
+>     r2est <- 1 - var(preddf$mu) / var(ytot)
+>     (r2est - r2)^2
+> }, c(0, var(preddf$mu) / mean(preddf$scaling)))
+> 
+> climscen <- 'High Risk'
+> ## 1-in-200 year projections
+> for (year in c(2030, 2040, 2050)) {
+>     ## 1-in-10 year outcome
+>     subfin <- subset(combo2, scenario == 'ssp370' & Year >= year & Year < year + 10)
+>     subfin2 <- subfin %>% left_join(preddf, by=c('county', 'Year')) %>%
+>         mutate(damage.mgbp.resid=scaling * rnorm(n(), 0, residparam$minimum),
+>                total=damage.mgbp + damage.mgbp.resid)
+>     ## Choose the worst year for each MC
+>     worstyears <- subfin2 %>% group_by(Year, run_id) %>% summarize(total=sum(total)) %>%
+>         group_by(run_id) %>% summarize(Year=Year[which.max(total)])
+>     subfin3 <- subfin2 %>% left_join(worstyears, by='run_id', suffix=c('', '.worst')) %>%
+>         filter(Year == Year.worst) %>% group_by(county) %>% summarize(mu=mean(total), ci05=quantile(total, .05),
+>                                                                       ci95=quantile(total, .95))
+> 
+>     results <- rbind(results, cbind(scenario=climscen, year=year, measure="Extreme", subfin3))
+> }
+> 
+> write.csv(results, "dataset-ukcp.csv", row.names=F)
+> ## results <- read.csv("dataset-ukcp.csv")
+> 
+> library(ggplot2)
+> 
+> results2 <- results %>% group_by(scenario, year, measure) %>% summarize(mu=sum(mu), ci05=sum(ci05), ci95=sum(ci95))
+> 
+> ggplot(subset(results2, measure == 'EAD'), aes(year, mu)) +
+>     geom_line(data=subset(results2, measure == 'EAD'), aes(colour=scenario)) +
+>     geom_ribbon(aes(ymin=ci05, ymax=ci95, group=scenario), alpha=.5) +
+>     geom_errorbar(data=subset(results2, measure == 'Extreme'),
+>                   aes(x=year + 5, ymin=ci05, ymax=ci95), colour=scales::muted("red")) +
+>     theme_bw() + scale_x_continuous(NULL, expand=c(0, 0)) + ylab("UK-wide labour productivity loss (million GBP)") +
+>     scale_colour_discrete("Scenario:") + theme(legend.justification=c(0, 1), legend.position=c(0.01, .99))
+> ggsave("dataset-uk.pdf", width=6.5, height=4)
+> 
+> ggplot(subset(results, measure == 'EAD'), aes(year, mu, group=county)) +
+>     facet_wrap(~ scenario, ncol=1) +
+>     geom_line(aes(colour=scenario), alpha=.5) +
+>     geom_jitter(data=subset(results, measure == 'Extreme'),
+>                 aes(x=year + 5, y=ci95), colour=scales::muted("red"), width=4, height=0) +
+>     theme_bw() + scale_x_continuous(NULL, expand=c(0, 0)) + ylab("Local labour productivity loss (million GBP)") +
+>     scale_colour_discrete("Scenario:") + theme(legend.justification=c(1, 0), legend.position=c(.99, 0.01))
+> ggsave("dataset-adm3.pdf", width=6.5, height=4)
+> ```
+> 
+> Please note that you will not have to explain the definitions of
+> "Expected annual damages (EAD)" or the "1-in-200" events, since the
+> principles behind these will be described in another
+> non-channel-specific section.
+> 
+> Please include LaTeX figure descriptions for `dataset-adm1-ukwide.pdf`, `dataset-adm1.pdf`, `dataset-adm3.pdf`, and `dataset-uk.pdf` which will be in the same figures folder?
+**assistant**:
+> We incorporate interannual variability and low-frequency extremes into the labour damages by combining climate-model ensemble spread, econometric residual uncertainty, and a simple stochastic representation of “bad years” at both subnational and national scales.
+> 
+> For variability in lost labour hours, we start from daily temperature projections for each first-level administrative unit and climate-model run. For each county $i$, model realisation, and year $t$ between 2025 and 2075, we compute a corresponding heat anomaly from annual mean temperature and translate this into projected hours of lost labour per worker using the experimental heat–productivity response with and without partial alert coverage (assumed to reach $50\%$ of the population). This yields annual series of unadapted and partially adapted hours lost for each model run. We then add an independent stochastic component to represent unexplained interannual variation in hours lost, calibrated so that the additional noise contributes a plausible share of overall variance (following the Heckman-corrected specification in \citealp{robinsonYYYY}; Robinson worker productivity study, new reference). Expected annual damages (EAD) in hours per worker are obtained, for each year and climate scenario, by aggregating across model runs to form ensemble means and empirical $5$th–$95$th percentile ranges at the county level.
+> 
+> To represent rare extremes in hours lost, we focus on a high-emissions climate pathway and, for selected future years, construct multi-year windows of annual outcomes. We add the same stochastic residual to each year’s lost hours, and identify, for each ensemble member, the single “worst” year within each window as the one with the greatest loss of labour time. These worst-year outcomes are then summarised by county as means and percentile bands, and interpreted as 1-in-200 labour-loss events at that horizon. We compute both county-level results and population-weighted UK averages, using subnational population data to aggregate hours per worker.
+> 
+> For monetary damages, we proceed analogously using the reduced-form damage functions described above. For each county $i$, climate-model run, and target period, we generate distributions of county-level labour damages in million pounds based on the structural uncertainty of the temperature–productivity regression. We then interpolate in time to obtain annual damage series from 2025 to 2075 for each run, climate scenario, and county. Ensemble EAD paths are constructed by taking, for each year and scenario, the cross-run mean and percentile range of county-level damages. To superimpose additional year-to-year economic variability consistent with the underlying econometric fit, we calibrate a multiplicative normal disturbance so that the ratio of explained to total variance in damages matches the reported coefficient of determination from \citet{rode2022} (Rode labour-temperature econometric study; new reference). Specifically, we estimate a simple predictive model for expected county damages and then determine the standard deviation of the residual term such that the resulting total variance reproduces the target $R^2$. This yields a stochastic residual process that can be added to the expected damages for each county and year.
+> 
+> We use this residual process to construct extreme monetary-loss years under the high-emissions scenario. For each ensemble member and 10-year window starting at a given year, we add the calibrated residual to the expected damages for each county and year, aggregate across counties to obtain a national total in each year, and then select the year of maximum national damage as the extreme outcome for that ensemble member. The distribution of these worst-year totals across ensemble members defines the mean and percentile bounds of 1-in-200 national losses for that starting year. Annual EAD and extreme-year outcomes are reported both at the county scale and aggregated to the whole UK.
+> 
+> The resulting variability and extreme-event patterns are illustrated in four figures. Figure~\ref{fig:labour-dataset-adm1-ukwide} compares UK-average EAD in lost hours per worker to extreme-hour events over time, under both a most-likely and a high-risk climate pathway. Figure~\ref{fig:labour-dataset-adm1} shows the corresponding distributions at the county scale in hours per worker, while Figures~\ref{fig:labour-dataset-adm3} and \ref{fig:labour-dataset-uk} present analogous results in monetary units at the county and UK scales, respectively.
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=0.8\textwidth]{figures/adapt/labour/dataset-adm1-ukwide.pdf}
+>   \caption{UK-wide distribution of lost labour hours per worker under climate variability and extremes. Solid lines show expected annual damages (EAD) in hours lost per worker, with shaded bands indicating the $5$th–$95$th percentile range across climate-model realisations, for a most-likely and a high-risk climate pathway. Vertical error bars (offset in time) show the mean and percentile range of 1-in-200 year extreme outcomes constructed from decadal windows under the high-risk scenario. All results are without additional adaptation.}
+>   \label{fig:labour-dataset-adm1-ukwide}
+> \end{figure}
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=0.8\textwidth]{figures/adapt/labour/dataset-adm1.pdf}
+>   \caption{County-level projected lost labour hours per worker under climate variability and extremes. Thin lines show expected annual damages (EAD) for each first-level administrative unit, for a most-likely and a high-risk climate pathway. Points indicate, for selected years under the high-risk pathway, the upper bound of the county-level 1-in-200 year extreme distribution in hours lost per worker. All results are without additional adaptation.}
+>   \label{fig:labour-dataset-adm1}
+> \end{figure}
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=0.8\textwidth]{figures/adapt/labour/dataset-adm3.pdf}
+>   \caption{County-level labour productivity losses in monetary terms under climate variability and extremes. Lines show expected annual damages (EAD) in million pounds per year for each county, for a most-likely and a high-risk climate pathway. Overlaid points (offset in time) indicate county-level 1-in-200 year extreme losses, represented by the upper bound of the decadal worst-year distribution under the high-risk scenario.}
+>   \label{fig:labour-dataset-adm3}
+> \end{figure}
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=0.8\textwidth]{figures/adapt/labour/dataset-uk.pdf}
+>   \caption{UK-wide labour productivity losses in monetary terms under climate variability and extremes. Solid lines show expected annual damages (EAD) in million pounds per year, with shaded ranges giving the $5$th–$95$th percentiles across climate-model realisations for a most-likely and a high-risk climate pathway. Error bars show national 1-in-200 year extreme losses derived from the distribution of worst years within decadal windows under the high-risk scenario.}
+>   \label{fig:labour-dataset-uk}
+> \end{figure}
+**user**:
+> This seems pretty long for a section that just talks about adding variability. Can you shorten it?
+**assistant**:
+> We superimpose stochastic annual variability and rare extremes on the smooth, scenario-mean labour damage paths described above, using both climate-model spread and econometric residual uncertainty.
+> 
+> For lost labour hours, we use daily-temperature projections from a multi-model ensemble at first-level administrative units. For each county $i$, ensemble member, and year $t$ (2025–2075), we convert annual mean temperature to a heat anomaly and apply the experimental heat–productivity response, with and without partial alert coverage (assumed at $50\%$), to obtain unadapted and partially adapted hours lost per worker. We add an independent normal residual to these hours to represent unexplained year-to-year variability, scaled so that the stochastic term contributes a realistic fraction of total variance (calibrated to the empirical study of worker responses to heat alerts; \citealp{robinsonYYYY}, Robinson worker productivity study, new reference). For each year, climate pathway, and county, we then compute expected annual damages (EAD) and $5$th–$95$th percentile intervals from the ensemble; UK-wide values are obtained using population-weighted averages across counties.
+> 
+> To represent rare extremes, we focus on a high-risk climate pathway. For selected start years, we take 10-year windows of annual hours lost (including the stochastic residual) and, for each ensemble member, identify the single worst year (maximum loss) in the window. These “worst-year” values define, for each county and nationally, the mean and percentile range of 1-in-200 outcomes, reported alongside the EAD paths.
+> 
+> For monetary damages, we follow the same structure but use the reduced-form damage projections. For each county, scenario, and ensemble member, we time-interpolate damages to annual values. We then estimate a simple predictive model of expected damages and calibrate a multiplicative normal residual so that the resulting total variance matches the reported $R^2$ of the underlying econometric fit \citep{rode2022} (Rode labour–temperature econometric study, new reference). This residual is added to expected damages to obtain annual stochastic realisations, from which we construct EAD and 1-in-200 outcomes at county and UK scales using the same decadal “worst-year” procedure as for hours.
+> 
+> Figures~\ref{fig:labour-dataset-adm1-ukwide}–\ref{fig:labour-dataset-uk} summarise these results.
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=0.8\textwidth]{figures/adapt/labour/dataset-adm1-ukwide.pdf}
+>   \caption{UK-wide lost labour hours per worker. Lines and shaded bands show EAD and ensemble $5$th–$95$th percentiles under most-likely and high-risk climate pathways; error bars give 1-in-200 outcomes from decadal worst years in the high-risk pathway (no additional adaptation).}
+>   \label{fig:labour-dataset-adm1-ukwide}
+> \end{figure}
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=0.8\textwidth]{figures/adapt/labour/dataset-adm1.pdf}
+>   \caption{County-level lost labour hours per worker. Thin lines show EAD for each first-level administrative unit under most-likely and high-risk pathways; points mark, for selected years, county-level 1-in-200 outcomes in the high-risk pathway (no additional adaptation).}
+>   \label{fig:labour-dataset-adm1}
+> \end{figure}
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=0.8\textwidth]{figures/adapt/labour/dataset-adm3.pdf}
+>   \caption{County-level labour productivity losses in monetary terms. Lines show EAD in million GBP per year; points indicate county-level 1-in-200 outcomes under the high-risk climate pathway.}
+>   \label{fig:labour-dataset-adm3}
+> \end{figure}
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=0.8\textwidth]{figures/adapt/labour/dataset-uk.pdf}
+>   \caption{UK-wide labour productivity losses in monetary terms. Lines and shaded bands show EAD and ensemble $5$th–$95$th percentiles; error bars show 1-in-200 national losses constructed from decadal worst years under the high-risk climate pathway.}
+>   \label{fig:labour-dataset-uk}
+> \end{figure}

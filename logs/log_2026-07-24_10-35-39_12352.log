@@ -1,0 +1,339 @@
+**user**:
+> I am writing up a methods appendix for a report. I have an old version of the methods for one model, where the estimates were computed as expected losses. I later updated that model to draw individual years, keeping the same expected losses.
+> 
+> Here is the old text:
+> ```
+> We represent catastrophic climate damages using a simple reduced-form adjustment based on the meta-analysis of damage functions in \citet{howard2017few}. Howard and Sterner compare models with and without explicit catastrophic risk and find that including such risk raises damages by an additional term proportional to the square of global mean temperature change. We adopt their central estimate and specify catastrophic damages as
+> \[
+> D_{\text{cat}}(\Delta T) = 0.260\,\Delta T^2,
+> \]
+> where $D_{\text{cat}}$ is expressed as a percentage of GDP and $\Delta T$ is global warming in degrees Celsius. The reported standard error ($\pm 0.267$ on the coefficient) implies that this estimate is not statistically distinguishable from zero, but we interpret it as a stylised representation of the uncertainty and potential scale of catastrophic losses rather than a precise prediction.
+> 
+> This term is applied multiplicatively to the baseline GDP path to obtain additional catastrophic damages under each scenario. Because it is calibrated from a “black-box” comparison of models, it is best viewed as an aggregate proxy for a range of poorly understood tipping and tail risks, rather than a mechanistic representation of any particular physical or economic tipping process. More detailed discussion of the rationale and limitations of this approach is provided in \citet{rising2026comprehensive}.
+> ```
+> 
+> And here is the new modeling code:
+> ```
+> setwd("~/Dropbox/HMT")
+> 
+> library(dplyr)
+> library(purrr)
+> library(ggplot2)
+> 
+> mu <- 0.260 # % loss
+> se <- 0.267
+> 
+> alldraws <- read.csv("climate/gsat/ssps_26_70_posttp.csv")
+> 
+> ## We interpret there is an underlying probability of a 25% loss (gets to 100% at 10 C)
+> ## And we assume that there's some delay on it (but potentially it's permanent)
+> ## E[Catastrophic_t] = 25 * p_t + decay * E[Catastrophic_t-1]
+> ## So p_t = (E[Catastrophic_t] - decay * E[Catastrophic_t-1]) / 25
+> 
+> catastrophic.amount = 25
+> 
+> alldraws$damage <- NA
+> for (rid in unique(alldraws$run_id)) {
+>     print(rid)
+>     coeff <- rnorm(1, mu, se)
+>     onedraw <- subset(alldraws, run_id == rid & year >= 2025) %>%
+>         mutate(eloss=coeff * value^2)
+>     soln <- optimize(function(decay) {
+>         onedraw2 <- onedraw %>% group_by(scenario) %>%
+>             mutate(pyear=(eloss - decay * lag(eloss)) / catastrophic.amount)
+>         ## Choose highest delay value (lowest delay) that does not result in negative values
+>         if (any(onedraw2$pyear[!is.na(onedraw2$pyear)] < 0))
+>             -decay + (2075 - 2025) / (min(onedraw2$year[onedraw2$pyear < 0], na.rm=T) - 2025)
+>         else
+>             -decay
+>     }, c(0, 1))
+>     onedraw2 <- onedraw %>% group_by(scenario) %>%
+>         mutate(pyear=(eloss - soln$minimum * lag(eloss)) / catastrophic.amount)
+>     onedraw2$pyear[is.na(onedraw2$pyear) | onedraw2$pyear < 0] <- 0
+>     onedraw3 <- onedraw2 %>% group_by(scenario) %>%
+>         mutate(loss=accumulate(1:n(), function(lagloss, ii) {
+>             catastrophic.amount * (runif(1) < pyear[ii]) + soln$minimum * lagloss
+>         }, .init = 0)[-1])
+>     alldraws$damage[alldraws$run_id == rid & alldraws$year >= 2025] <- onedraw3$loss
+> }
+> 
+> ## ggplot(alldraws, aes(year, damage, group=paste(run_id, scenario))) +
+> ##     geom_line()
+> 
+> alldraws$eloss <- mu * alldraws$value^2
+> pdf <- alldraws %>% filter(year >= 2025) %>% group_by(scenario, year) %>% summarize(ci25=quantile(damage, .25),
+>                                                            ci75=quantile(damage, .75),
+>                                                            damage=mean(damage), eloss=eloss[1])
+> ggplot(subset(pdf, year >= 1925 & year <= 2100), aes(year, damage / 100)) +
+>     geom_line(aes(colour=scenario, linetype='Simulated')) +
+>     #geom_ribbon(aes(ymin=ci25, ymax=ci75, group=scenario), alpha=.5) +
+>     geom_line(aes(y=eloss / 100, colour=scenario, linetype='Expected')) +
+>     theme_bw() + scale_y_continuous("Expected loss in global GDP (%)", expand=c(0, 0), labels=scales::percent) +
+>     ylab(NULL) + scale_linetype_discrete("Source:") + scale_colour_discrete("Scenario:")
+> ggsave("channels/catastrophic/model.pdf", width=6.5, height=4)
+> 
+> damage.cata <- alldraws[alldraws$year >= 2025 & alldraws$year <= 2100, c('scenario', 'run_id', 'year', 'damage')]
+> save(damage.cata, file="channels/catastrophic/catastrophic.RData")
+> ```
+> 
+> And here's the code that takes that and produces a dataset:
+> ```
+> setwd("~/Dropbox/HMT")
+> 
+> library(dplyr)
+> library(ggplot2)
+> 
+> load("channels/catastrophic/catastrophic.RData")
+> load("climate/likely.RData")
+> 
+> damage.cata$scenrid <- paste(damage.cata$scenario, damage.cata$run_id)
+> 
+> results <- data.frame()
+> for (scenario in c('Most Likely', 'High Risk')) {
+>     ## Annual projections
+>     for (yy in 2025:2075) {
+>         print(yy)
+>         if (scenario == 'Most Likely') {
+>             subfin <- subset(damage.cata, year == yy & scenrid %in% gsat.likely$scenrid)
+>         } else {
+>             subfin <- subset(damage.cata, year == yy & scenario == 'ssp370')
+>         }
+>         subfin2 <- subfin %>% summarize(mu=mean(damage), ci05=quantile(damage, .05), ci95=quantile(damage, .95))
+> 
+>         results <- rbind(results, cbind(scenario=scenario, year=yy, measure="EAD", subfin2))
+>     }
+> }
+> 
+> scenario <- 'High Risk'
+> ## 1-in-200 year projections
+> for (yy in c(2030, 2040, 2050)) {
+>     ## 1-in-10 year outcome
+>     subfin <- subset(damage.cata, scenario == 'ssp370' & year >= yy & year < yy + 10)
+>     ## Select hottest year for each mc
+>     subfin2 <- subfin %>% group_by(run_id) %>% summarize(damage=max(damage)) %>%
+>         summarize(mu=mean(damage), ci05=quantile(damage, .05), ci95=quantile(damage, .95))
+> 
+>     ## All uncertainty
+>     results <- rbind(results, cbind(scenario=scenario, year=yy, measure="Extreme", subfin2))
+> }
+> 
+> ggplot(subset(results, measure == 'EAD'), aes(year, mu)) +
+>     geom_line(aes(colour=scenario)) + geom_ribbon(aes(ymin=ci05, ymax=ci95, group=scenario), alpha=.5) +
+>     geom_errorbar(data=subset(results, measure == 'Extreme'),
+>                   aes(x=year + 5, ymin=ci05, ymax=ci95), colour=scales::muted("red")) +
+>     theme_bw() + scale_x_continuous(NULL, expand=c(0, 0)) + ylab("Catastrophic loss in global GDP (%)") +
+>     scale_colour_discrete("Scenario:") + theme(legend.justification=c(0, 1), legend.position=c(0.01, .99))
+> ggsave("channels/catastrophic/dataset.pdf", width=6.5, height=4)
+> 
+> write.csv(results, "channels/catastrophic/dataset.csv", row.names=F)
+> ```
+> 
+> Can you provide an updated version of this appendix section, clearly and succinctly explaining how the methodology, and including latex figures for model.pdf and dataset.pdf?
+**assistant**:
+> Below is a draft updated appendix section that:
+> 
+> - Explains the revised catastrophic-damage model (stochastic event process with decay).
+> - Makes clear that the *expected* losses are unchanged from the Howard–Sterner meta-analysis.
+> - Describes how the summary dataset is constructed.
+> - Includes LaTeX figure environments for `model.pdf` and `dataset.pdf`.
+> 
+> You can adjust notation, section titles, or references to match the rest of the report.
+> 
+> ---
+> 
+> ### Catastrophic climate damages
+> 
+> We represent catastrophic climate damages using a reduced-form adjustment based on the meta-analysis of damage functions in \citet{howard2017few}. Howard and Sterner compare models with and without explicit catastrophic risk and find that including such risk raises damages by an additional term proportional to the square of global mean temperature change. We adopt their central estimate and specify the *expected* catastrophic damages as
+> \[
+> \mathbb{E}\bigl[D_{\text{cat}}(\Delta T)\bigr] \;=\; \mu\,\Delta T^2,
+> \qquad \mu = 0.260,
+> \]
+> where $D_{\text{cat}}$ is expressed as a percentage of global GDP and $\Delta T$ is global mean warming in degrees Celsius. The reported standard error on the coefficient ($\text{SE}(\mu)=0.267$) implies that this estimate is not statistically distinguishable from zero, but we interpret it as a stylised representation of the uncertainty and potential scale of catastrophic losses rather than a precise prediction.
+> 
+> In the original implementation, this term was applied deterministically to the baseline GDP path as an expected loss. In the updated implementation, we preserve this same expectation but represent catastrophic damages as a stochastic sequence of discrete loss events.
+> 
+> #### From expected losses to stochastic catastrophic events
+> 
+> We interpret the Howard–Sterner coefficient as summarising the expectation of an underlying process in which occasional, severe catastrophic shocks occur with a temperature-dependent probability and then decay over time. Specifically, we assume:
+> 
+> 1. **Catastrophic event size.** Each “catastrophic” event is represented as an instantaneous reduction of
+>    \[
+>    L = 25\%
+>    \]
+>    of global GDP in the year of occurrence. This is a stylised, reduced-form representation of a large systemic shock.
+> 
+> 2. **Persistent, decaying impact.** The residual effect of past catastrophic losses decays over time at rate $\delta \in [0,1]$. Let $C_t$ denote the realised catastrophic damage in year $t$ (as a percent of GDP). We impose
+>    \[
+>    \mathbb{E}\bigl[C_t\bigr] \;=\; L\,p_t + \delta\,\mathbb{E}\bigl[C_{t-1}\bigr],
+>    \]
+>    where $p_t$ is the probability that a new catastrophic event occurs in year $t$, and $\delta$ controls the persistence of damages from past events.
+> 
+> 3. **Matching the expected Howard–Sterner damages.** For each temperature trajectory and Monte Carlo run, we first compute the expected Howard–Sterner loss
+>    \[
+>    e_t = \mu\,\Delta T_t^2,
+>    \]
+>    for $t \ge 2025$. We then choose a decay factor $\delta$ and implied annual probabilities $p_t$ so that
+>    \[
+>    \mathbb{E}\bigl[C_t\bigr] \equiv e_t
+>    \quad\text{for all } t,
+>    \]
+>    while ensuring $p_t \ge 0$ in all years.
+> 
+> Re-arranging the expectation condition gives, for each scenario and year,
+> \[
+> p_t \;=\; \frac{e_t - \delta\,e_{t-1}}{L}.
+> \]
+> For each Monte Carlo run:
+> 
+> 1. We draw a coefficient $\tilde{\mu} \sim \mathcal{N}(\mu, \text{SE}^2)$, and compute the run-specific expected loss
+>    \[
+>    e_t = \tilde{\mu}\,\Delta T_t^2.
+>    \]
+> 
+> 2. We numerically search over $\delta \in [0,1]$ to find the largest value of $\delta$ such that the implied probabilities $p_t$ remain non-negative in all years (within each emissions scenario). This selects the “slowest” decay that is still consistent with a nonnegative hazard process.
+> 
+> 3. With $\delta$ fixed, we compute the annual probabilities $p_t$ and then simulate a realisation of catastrophic damages $C_t$ via
+>    \[
+>    C_t = L\,\mathbf{1}\{U_t < p_t\} + \delta\,C_{t-1},
+>    \]
+>    where $U_t \sim \text{Uniform}(0,1)$ are independent across years. This yields a time series of realised catastrophic damages that, in expectation, matches the Howard–Sterner quadratic loss but allows for discrete, persistent shocks.
+> 
+> We perform this procedure across all temperature trajectories in the climate ensemble and across multiple Monte Carlo runs, resulting in a panel of catastrophic loss paths $C_{t}^{(r,s)}$ indexed by year $t$, climate run $r$, and scenario $s$. These simulation outputs are saved as `damage.cata`, containing annual catastrophic losses (percent of GDP) for each run and scenario over 2025–2100.
+> 
+> Figure~\ref{fig:cat_model} compares, for each scenario, the ensemble mean of the simulated catastrophic damages to the corresponding expected Howard–Sterner losses. The simulated process tracks the expectation closely, while introducing year-to-year variability and occasional large jumps corresponding to catastrophic events.
+> 
+> \begin{figure}[htbp]
+>   \centering
+>   \includegraphics[width=0.9\textwidth]{channels/catastrophic/model.pdf}
+>   \caption{Comparison of simulated catastrophic damages and expected losses. The solid lines show the ensemble mean of simulated catastrophic damages as a share of global GDP, by scenario. The dashed lines show the corresponding expected damages implied by the Howard–Sterner quadratic specification, $\mu \Delta T^2$, using the central coefficient $\mu=0.260$.}
+>   \label{fig:cat_model}
+> \end{figure}
+> 
+> As with the original, deterministic specification, this reduced-form approach is calibrated from a “black-box’’ comparison of models and is best viewed as an aggregate proxy for a range of poorly understood tipping and tail risks, rather than a mechanistic representation of any particular physical or economic tipping process. More detailed discussion of the rationale and limitations of this approach is provided in \citet{rising2026comprehensive}.
+> 
+> #### Construction of summary indicators and dataset
+> 
+> From the full simulated panel of catastrophic damages, we construct a summary dataset with two types of indicators:
+> 
+> 1. **Expected annual damages (EAD).** For each scenario and each year $t \in [2025,2075]$, we compute the ensemble mean and uncertainty interval of catastrophic damages:
+>    \[
+>    \mu_{s,t} = \mathbb{E}_r\bigl[C_t^{(r,s)}\bigr], \quad
+>    \text{CI}_{5,s,t} = \text{5th percentile}_r\bigl(C_t^{(r,s)}\bigr), \quad
+>    \text{CI}_{95,s,t} = \text{95th percentile}_r\bigl(C_t^{(r,s)}\bigr).
+>    \]
+>    For the “Most Likely” case, we restrict to those climate realisations flagged as likely in an accompanying selection (`gsat.likely`). For the “High Risk” case, we use all runs under the SSP3-7.0 scenario. These statistics are labelled with `measure = "EAD"`.
+> 
+> 2. **Extreme (1‑in‑200‐year–type) outcomes.** For the “High Risk” case, we further characterise tail outcomes in three benchmark years, $t_0 \in \{2030, 2040, 2050\}$. For each $t_0$, we:
+>    - Consider the 10-year window $[t_0, t_0+9]$ under SSP3-7.0.
+>    - For each Monte Carlo run $r$, take the maximum catastrophic loss over that decade,
+>      \[
+>      M_{r,t_0} = \max_{t \in [t_0, t_0+9]} C_t^{(r,\text{ssp}370)}.
+>      \]
+>    - Summarise across runs via the mean and 5th–95th percentile interval:
+>      \[
+>      \mu_{t_0} = \mathbb{E}_r\bigl[M_{r,t_0}\bigr], \quad
+>      \text{CI}_{5,t_0} = \text{5th percentile}_r\bigl(M_{r,t_0}\bigr), \quad
+>      \text{CI}_{95,t_0} = \text{95th percentile}_r\bigl(M_{r,t_0}\bigr).
+>      \]
+>    These statistics are labelled with `measure = "Extreme"` and associated with the mid-point year $t_0$.
+> 
+> The resulting dataset is saved as `channels/catastrophic/dataset.csv`, with one row per combination of scenario, year, and measure, and columns:
+> \[
+> \{\text{scenario}, \text{year}, \text{measure}, \mu, \text{CI}_{5}, \text{CI}_{95}\},
+> \]
+> where all damages are expressed as percentages of global GDP.
+> 
+> Figure~\ref{fig:cat_dataset} illustrates these summary series. The shaded ribbons show the 5th–95th percentile range for expected annual damages (EAD) under the “Most Likely’’ and “High Risk’’ cases. Vertical error bars indicate the uncertainty in the 10‑year extreme outcomes for the “High Risk’’ case in 2030, 2040, and 2050.
+> 
+> \begin{figure}[htbp]
+>   \centering
+>   \includegraphics[width=0.9\textwidth]{channels/catastrophic/dataset.pdf}
+>   \caption{Summary indicators of catastrophic climate damages. Lines and shaded bands show the ensemble mean and 5th–95th percentile of expected annual catastrophic losses (EAD) as a share of global GDP, for the “Most Likely’’ and “High Risk’’ cases. Red error bars show the mean and 5th–95th percentile of 10‑year maximum catastrophic losses in 2030, 2040, and 2050 under the High Risk scenario.}
+>   \label{fig:cat_dataset}
+> \end{figure}
+> 
+> This stochastic implementation preserves the expected catastrophic losses implied by \citet{howard2017few}, while producing internally consistent time series of discrete catastrophic events and enabling the construction of both expected annual and extreme-loss indicators for use in downstream risk analyses.
+**user**:
+> This is quite long. Can you tighten it up?
+**assistant**:
+> ### Catastrophic climate damages
+> 
+> Catastrophic climate damages are based on the meta-analysis in \citet{howard2017few}, which finds that including explicit catastrophic risk adds a term proportional to squared global mean warming. We retain their central estimate and interpret it as an *expected* loss:
+> \[
+> \mathbb{E}\bigl[D_{\text{cat}}(\Delta T)\bigr] \;=\; \mu\,\Delta T^2, 
+> \qquad \mu = 0.260,
+> \]
+> where $D_{\text{cat}}$ is the percentage loss in global GDP and $\Delta T$ is global mean warming (°C). The reported standard error ($\text{SE}(\mu)=0.267$) implies that the coefficient is not statistically distinguishable from zero; here it serves as a stylised representation of uncertain, low-probability, high-impact climate risks. As in \citet{rising2026comprehensive}, this is a reduced-form “black-box’’ proxy for tipping and tail risks, not a mechanistic model of specific processes.
+> 
+> #### Stochastic implementation
+> 
+> Originally, the Howard–Sterner term was applied as a deterministic expected loss. In the current implementation, we keep the same expectation but model damages as discrete catastrophic events with decay.
+> 
+> For each global temperature path and Monte Carlo run $r$:
+> 
+> 1. **Expected loss path.** Draw a run-specific coefficient
+>    \[
+>    \tilde{\mu}^{(r)} \sim \mathcal{N}\bigl(\mu, \text{SE}^2\bigr)
+>    \]
+>    and compute expected catastrophic loss
+>    \[
+>    e_t^{(r)} = \tilde{\mu}^{(r)}\,\Delta T_t^2, \qquad t \ge 2025.
+>    \]
+> 
+> 2. **Event size and decay.** Assume each event causes an immediate loss of $L = 25\%$ of GDP and that past losses decay at rate $\delta \in [0,1]$. Let $C_t^{(r)}$ be realised loss (percent of GDP):
+>    \[
+>    C_t^{(r)} = L\,\mathbf{1}\{U_t^{(r)} < p_t^{(r)}\} + \delta\,C_{t-1}^{(r)},
+>    \]
+>    with $U_t^{(r)} \sim \text{Uniform}(0,1)$.
+> 
+> 3. **Matching the expectation.** For each scenario, we choose $\delta$ and implied annual event probabilities $p_t^{(r)}$ so that
+>    \[
+>    \mathbb{E}\bigl[C_t^{(r)}\bigr] = e_t^{(r)} \quad\Rightarrow\quad
+>    p_t^{(r)} = \frac{e_t^{(r)} - \delta\,e_{t-1}^{(r)}}{L},
+>    \]
+>    and numerically select the largest $\delta \in [0,1]$ for which all $p_t^{(r)} \ge 0$. We then simulate the time series $C_t^{(r)}$ using these probabilities.
+> 
+> This produces, for each scenario $s$, run $r$, and year $t$, a simulated catastrophic loss $C_{t}^{(r,s)}$ (percent of GDP) over 2025–2100, stored in `damage.cata`. Figure~\ref{fig:cat_model} shows that the ensemble mean of $C_t^{(r,s)}$ closely tracks the Howard–Sterner expected loss $\mu \Delta T_t^2$, while introducing stochastic, persistent shock realizations.
+> 
+> \begin{figure}[htbp]
+>   \centering
+>   \includegraphics[width=0.9\textwidth]{channels/catastrophic/model.pdf}
+>   \caption{Simulated catastrophic damages (solid) versus expected quadratic loss (dashed), by scenario. Lines show mean percent loss in global GDP across Monte Carlo runs.}
+>   \label{fig:cat_model}
+> \end{figure}
+> 
+> #### Summary indicators and dataset
+> 
+> From `damage.cata` we construct summary indicators:
+> 
+> 1. **Expected annual damages (EAD).** For each year $t=2025,\dots,2075$:
+>    - “Most Likely”: all runs flagged as likely.
+>    - “High Risk”: all runs under SSP3-7.0.
+>    
+>    For each case we compute the ensemble mean and 5th–95th percentiles:
+>    \[
+>    \mu_{s,t} = \mathbb{E}_r\bigl[C_t^{(r,s)}\bigr], \quad
+>    \text{CI}_{5,s,t}, \quad \text{CI}_{95,s,t},
+>    \]
+>    and label these rows as `measure = "EAD"`.
+> 
+> 2. **Extreme outcomes.** For the “High Risk’’ (SSP3-7.0) case and benchmark years $t_0 \in \{2030, 2040, 2050\}$, we consider the 10‑year window $[t_0, t_0+9]$. For each run $r$ we take
+>    \[
+>    M_{r,t_0} = \max_{t \in [t_0, t_0+9]} C_t^{(r,\text{ssp}370)},
+>    \]
+>    then summarise $\mu_{t_0}$, $\text{CI}_{5,t_0}$, and $\text{CI}_{95,t_0}$ across runs; these rows are labelled `measure = "Extreme"`.
+> 
+> All results are saved in `channels/catastrophic/dataset.csv` with columns:
+> \[
+> \{\text{scenario}, \text{year}, \text{measure}, \mu, \text{CI}_{5}, \text{CI}_{95}\},
+> \]
+> where all values are percent of global GDP.
+> 
+> Figure~\ref{fig:cat_dataset} plots the resulting series: shaded ribbons show uncertainty in EAD for “Most Likely’’ and “High Risk’’ cases; red error bars show uncertainty in the decade‑maximum “Extreme’’ outcomes for the High Risk case.
+> 
+> \begin{figure}[htbp]
+>   \centering
+>   \includegraphics[width=0.9\textwidth]{channels/catastrophic/dataset.pdf}
+>   \caption{Summary catastrophic damage indicators. Lines and shaded bands show mean and 5th–95th percentiles of expected annual damages (EAD) by scenario. Red error bars show the mean and 5th–95th percentiles of 10‑year maximum catastrophic losses in 2030, 2040, and 2050 under the High Risk scenario.}
+>   \label{fig:cat_dataset}
+> \end{figure}

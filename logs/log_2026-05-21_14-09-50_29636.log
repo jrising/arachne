@@ -1,0 +1,48 @@
+**user**:
+> From this line:
+> openworld::MatrixGeographicMap<double>* mask_coarse = openworld::MatrixGeographicMap<double>::loadDelimited(latitudes, longitudes, "mask_new.tsv", NULL, '\t');
+> I get this error:
+> main.cpp:27:45: error: cannot initialize a variable of type
+>       'openworld::MatrixGeographicMap<double> *' with an rvalue of type
+>       'GeographicMap<double> *'
+>    27 |   ...mask_coarse = openworld::MatrixGeographicMap<double>::loadDelimited(latitudes, longitudes, "mask_new.tsv", NULL, '\t');
+>       |      ^             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+> main.cpp:28:45: error: cannot initialize a variable of type
+>       'openworld::MatrixGeographicMap<double> *' with an rvalue of type
+>       'GeographicMap<bool> *'
+>    28 |   ...mask_fine = openworld::MatrixGeographicMap<bool>::loadDelimited(openworld::DividedRange::withEnds(29.74583, 33.9125, 0.008333334, openworld::Inds::lat),
+>       |      ^           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+>    29 |   ...openworld::DividedRange::withEnds(74.77084, 85.17084, 0.008333334, openworld::Inds::lon),
+>       |      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+>    30 |   ..."mask.tsv", NULL, '\t');
+>       |      ~~~~~~~~~~~~~~~~~~~~~~~
+> 
+> I think I just need a cast, but I forget what kind.
+**assistant**:
+> The error you're encountering suggests that the `loadDelimited` function is returning a pointer of type `GeographicMap<double>*`, but you're trying to store this in a variable of type `MatrixGeographicMap<double>*`. The same issue occurs with `GeographicMap<bool>*`. The compiler cannot automatically convert these pointer types because `MatrixGeographicMap` might not be derived from `GeographicMap`, or even if it is, it might not have a direct pointer conversion.
+> 
+> If you know for certain that the object returned by `loadDelimited` is indeed a `MatrixGeographicMap`, you can use a `static_cast` to perform the conversion. However, you should be very sure about this, as incorrect casting can lead to undefined behavior. Here's how you might modify your code:
+> 
+> ```cpp
+> auto* geographic_map_coarse = openworld::MatrixGeographicMap<double>::loadDelimited(latitudes, longitudes, "mask_new.tsv", NULL, '\t');
+> mask_coarse = static_cast<openworld::MatrixGeographicMap<double>*>(geographic_map_coarse);
+> 
+> auto* geographic_map_fine = openworld::MatrixGeographicMap<bool>::loadDelimited(
+>     openworld::DividedRange::withEnds(29.74583, 33.9125, 0.008333334, openworld::Inds::lat),
+>     openworld::DividedRange::withEnds(74.77084, 85.17084, 0.008333334, openworld::Inds::lon),
+>     "mask.tsv", NULL, '\t');
+> mask_fine = static_cast<openworld::MatrixGeographicMap<bool>*>(geographic_map_fine);
+> ```
+> 
+> Make sure to validate that `loadDelimited` correctly returns a pointer to a `MatrixGeographicMap`, perhaps by examining the documentation or implementation of the library you're working with.
+> 
+> If you do not have access to that, and `static_cast` does not suffice (perhaps due to inheritance issues), consider using `dynamic_cast` if `MatrixGeographicMap` is polymorphic and you want to ensure type safety:
+> 
+> ```cpp
+> mask_coarse = dynamic_cast<openworld::MatrixGeographicMap<double>*>(geographic_map_coarse);
+> mask_fine = dynamic_cast<openworld::MatrixGeographicMap<bool>*>(geographic_map_fine);
+> ```
+> 
+> With `dynamic_cast`, if the cast fails, it will set the pointer to `nullptr`. It can be a safer option as it allows you to check the validity of the cast at runtime. However, it incurs runtime overhead and requires `GeographicMap` to have at least one virtual method for polymorphism support.
+> 
+> Always handle potential failures of `dynamic_cast` by checking if the resultant pointer is `nullptr` before using it.

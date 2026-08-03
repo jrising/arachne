@@ -1,0 +1,122 @@
+**user**:
+> Why doesn't the argument to digits in xtable work for me here:
+> ```
+> > print(xtable(tbl, digits=2), include.rownames=F)
+> % latex table generated in R 4.4.2 by xtable 1.8-4 package
+> % Tue Jun 30 10:23:41 2026
+> \begin{table}[ht]
+> \centering
+> \begin{tabular}{llllllllll}
+>   \hline
+> persist & 0\% & 5\% & 50\% & 95\% & 100\% & miniso & frac.miniso & maxiso & frac.maxiso \\ 
+>   \hline
+> 0 & -14.565260342583 & -2.43522013955961 & 0 & 1.76922375676716 & 12.7445650357702 & NER & 17.2305409394077 & NOR & 42.521328226079 \\ 
+>   0.36 & -1.64014626580553 & -0.381707222319636 & 0 & 0.336604150716205 & 1.46438630763934 & SDN & 17.6210203071342 & NOR & 43.8725970620935 \\ 
+>   0.6 & -0.998501076700697 & -0.235435446833324 & 0 & 0.213900089927183 & 0.910298913089249 & NER & 17.8658742794326 & NOR & 46.5232559879375 \\ 
+>   0.78 & -0.77236816959998 & -0.182785255266193 & 0 & 0.166228263964575 & 0.715774218975526 & NER & 18.0469162640826 & NOR & 46.6828440794703 \\ 
+>   1 & -0.608655611277915 & -0.144104109628255 & 0 & 0.131483477514629 & 0.563436832554793 & NER & 18.0438051223157 & NOR & 46.8819874206802 \\ 
+>    \hline
+> \end{tabular}
+> \end{table}
+> ```
+**assistant**:
+> `xtable`’s `digits` argument is a bit quirky. In your call
+> 
+> ```r
+> print(xtable(tbl, digits=2), include.rownames=F)
+> ```
+> 
+> `digits=2` is being interpreted, but not in the way you expect.
+> 
+> ### How `digits` works in `xtable`
+> 
+> From `?xtable`:
+> 
+> - `digits` can be:
+>   - a single number, or
+>   - a vector of length `ncol(x) + 1`
+> 
+> And the **first** element corresponds to the **row names** column; the rest correspond to each column in `tbl`.
+> 
+> So:
+> 
+> - If you pass a **single** number `d`, `xtable` expands it to a vector of length `ncol(tbl) + 1`, all equal to `d`.
+> - That means all numeric *and* rowname columns get the same number of digits.
+> 
+> In your LaTeX output:
+> 
+> ```latex
+> persist & 0\% & 5\% & 50\% & 95\% & 100\% & miniso & frac.miniso & maxiso & frac.maxiso \\ 
+> ...
+> 0 & -14.565260342583 & -2.43522013955961 & ...
+> ```
+> 
+> The numbers are not rounded to 2 digits, which suggests one of these is happening:
+> 
+> 1. **Non-numeric columns are present** and `xtable` leaves them as-is (`miniso`, `maxiso` look like character).
+> 2. `digits` is being overridden at `print()` time.
+> 3. `tbl` is not a plain numeric matrix/data frame in the way you think.
+> 
+> ### Things to try
+> 
+> 1. **Specify per-column digits explicitly**
+> 
+>    Count your columns, including the (optional) rownames column. You have 10 visible columns; if `include.rownames=FALSE`, `xtable` still thinks in terms of `ncol(tbl)` and a potential rowname column at index 1 of `digits`.
+> 
+>    For your table:  
+>    - Column 1: `persist` (probably numeric)  
+>    - Columns 2–6: quantiles (numeric)  
+>    - Column 7: `miniso` (character)  
+>    - Column 8: `frac.miniso` (numeric)  
+>    - Column 9: `maxiso` (character)  
+>    - Column 10: `frac.maxiso` (numeric)
+> 
+>    You can do:
+> 
+>    ```r
+>    d <- c(
+>      0,  # rownames (even if you don't print them)
+>      2,  # persist
+>      2, 2, 2, 2, 2,  # 0%, 5%, 50%, 95%, 100%
+>      0,  # miniso (character/factor; digits ignored)
+>      2,  # frac.miniso
+>      0,  # maxiso (character/factor; digits ignored)
+>      2   # frac.maxiso
+>    )
+> 
+>    print(xtable(tbl, digits = d), include.rownames = FALSE)
+>    ```
+> 
+> 2. **Check the structure of `tbl`**
+> 
+>    ```r
+>    str(tbl)
+>    ```
+> 
+>    If some columns are `character` or `factor`, `digits` won’t apply to them; `xtable` just prints the raw string.
+> 
+> 3. **Avoid overwriting at print time**
+> 
+>    Make sure you’re not doing:
+> 
+>    ```r
+>    print(xtable(tbl), digits = 2)
+>    ```
+> 
+>    because `print.xtable` also has a `digits` argument, which can override the one stored in the `xtable` object. In your pasted line you don’t, so that’s probably fine, but it’s worth checking your actual code.
+> 
+> 4. **Test on a simple numeric example**
+> 
+>    To confirm that your version of `xtable` is behaving as documented:
+> 
+>    ```r
+>    library(xtable)
+>    m <- matrix(runif(6), ncol = 3)
+>    print(xtable(m, digits = 2), include.rownames = FALSE)
+>    ```
+> 
+>    If that gives 2 decimal places, then the issue is with the types/structure of `tbl`, not `digits` itself.
+> 
+> ---
+> 
+> If you paste the output of `str(tbl)` I can give you an exact `digits` vector that will do what you want.

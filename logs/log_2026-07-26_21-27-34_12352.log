@@ -1,0 +1,336 @@
+**user**:
+> I have a directory of TSV files formatted as follows:
+> ```
+> Country=	Brasil
+> Station=	Estirao do Repouso
+> River=	Javari
+> Area=	58107 km2
+> Lat=	-4.37
+> Lon=	-70.93
+> Source=	ANEEL
+> PointID=	1
+> Area Units=	km2
+> Discharge Units=	m3/sec
+> Starting Year=	1980
+> Ending Year=	1995
+> Total Years=	16
+> Total Usable Years=	14
+> 
+> Year	Jan	Feb	Mar	Apr	May	Jun	Jul	Aug	Sep	Oct	Nov	Dec	Avg Annual
+> 1980	-9999	-9999	-9999	-9999	-9999	-9999	-9999	-9999	-9999	-9999	2232	2555	-9999
+> 1981	2417	3128	4032	3790	3842	2904	1380	597	574	1335	1971	3126	2424.67
+> 1982	3847	3813	3728	3947	4682	2900	1732	1784	1049	1487	2421	3539	2910.75
+> 1983	3984	3440	3460	3678	3434	1576	405	193	281	755	1967	2820	2166.08
+> 1984	2828	3558	4116	3647	3932	2855	1627	838	1245	1271	1464	3196	2548.08
+> 1985	2625	1310	2766	3301	2756	1993	1643	941	1002	2267	2593	2980	2181.42
+> 1986	1704	2865	3290	4144	3971	2849	1586	815	1220	2370	2614	2890	2526.5
+> 1987	4027	4740	4570	4125	3731	1570	949	530	590	1488	1950	2506	2564.67
+> 
+> Avg	3027.4	3354.13	3773.2	3893.93	3733.47	2562.33	1475.67	737.13	914.36	1502.92	2170	2808.27	2510.93
+> 
+> Std Dev	668.94	870.19	521.45	403.77	616.06	730.02	586.85	363.88	376.28	417.82	501.69	534.37	272.34
+> ```
+> With different months/years for each station. The files are named "station-1.tsv" through "station-3000.tsv". I would like to construct a common dataset, while ensuring that the units and other assumptions are consistent throughout. Can you help me do this?
+**assistant**:
+> Yes. Let’s turn this directory into a single, consistent dataset in a way that:
+> 
+> - preserves all station metadata,  
+> - handles differences in time coverage across stations,  
+> - checks that units/assumptions are consistent,  
+> - and gives you something you can analyse with xarray/pandas later.
+> 
+> I’ll assume you’re happy with Python + pandas, but if you prefer R I can translate.
+> 
+> ---
+> 
+> ## 1. What’s in each file?
+> 
+> Each `station-*.tsv` file has:
+> 
+> 1. **Metadata block** – key–value pairs, tab‑separated:
+>    - `Country`, `Station`, `River`, `Area`, `Lat`, `Lon`, `Source`, `PointID`, `Area Units`, `Discharge Units`, `Starting Year`, `Ending Year`, `Total Years`, `Total Usable Years`
+> 2. **Monthly data table** – columns:
+>    - `Year`, `Jan` … `Dec`, `Avg Annual`
+>    - some monthly values `-9999` as missing.
+> 3. **Summary rows**:
+>    - `Avg` row (means across years)
+>    - `Std Dev` row (standard deviations across years)
+> 
+> You want a **common dataset**: essentially a long table of monthly discharge for all stations with consistent units and clear metadata.
+> 
+> ---
+> 
+> ## 2. Design for the combined dataset
+> 
+> A robust target structure (for later use with xarray or other tools):
+> 
+> **Station metadata table** (one row per station):
+> - `station_id` (from filename or `PointID`)
+> - `country`
+> - `station_name`
+> - `river`
+> - `area`
+> - `area_units`
+> - `lat`
+> - `lon`
+> - `source`
+> - `discharge_units`
+> - `starting_year`
+> - `ending_year`
+> - `total_years`
+> - `total_usable_years`
+> 
+> **Monthly time series table** (long format, one row per station–year–month):
+> - `station_id`
+> - `year`
+> - `month` (1–12)
+> - `discharge` (float, `NaN` for `-9999`)
+> - optionally: `annual_mean` (if you want to keep the `Avg Annual` column) and/or an `is_annual_row` flag
+> 
+> We’ll drop the per-station `Avg` and `Std Dev` rows by default; they can always be recomputed consistently later.
+> 
+> ---
+> 
+> ## 3. Parsing a single file (Python/pandas)
+> 
+> Below is a function that:
+> 
+> - reads metadata lines until the blank line,
+> - reads the table lines,
+> - discards `Avg` and `Std Dev` rows,
+> - replaces `-9999` with `NaN`,
+> - reshapes to long format,
+> - returns:
+>   - a `metadata` dict, and
+>   - a `DataFrame` of monthly records.
+> 
+> ```python
+> import pandas as pd
+> import numpy as np
+> from pathlib import Path
+> 
+> MISSING_VALUE = -9999
+> 
+> def parse_station_file(path: Path, station_id: int | str):
+>     # --- 1. Read all lines ---
+>     with path.open('r', encoding='utf-8') as f:
+>         lines = [line.rstrip('\n') for line in f]
+>     
+>     # --- 2. Split into metadata block and data block ---
+>     # find first blank line
+>     blank_idx = None
+>     for i, line in enumerate(lines):
+>         if line.strip() == "":
+>             blank_idx = i
+>             break
+>     if blank_idx is None:
+>         raise ValueError(f"No blank line separating metadata and data in {path}")
+>     
+>     meta_lines = lines[:blank_idx]
+>     data_lines = lines[blank_idx+1:]
+>     
+>     # --- 3. Parse metadata key–value pairs ---
+>     metadata = {"station_id": station_id}
+>     for line in meta_lines:
+>         if not line.strip():
+>             continue
+>         # Expect "Key=<tab>Value"
+>         parts = line.split('\t')
+>         if len(parts) < 2:
+>             continue  # or raise, depending on how strict you want to be
+>         key = parts[0].strip().rstrip(':=')
+>         value = parts[1].strip()
+>         metadata[key] = value
+>     
+>     # --- 4. Convert selected metadata to numeric where appropriate ---
+>     def to_float_safe(x):
+>         try:
+>             return float(x)
+>         except Exception:
+>             return np.nan
+>     
+>     def to_int_safe(x):
+>         try:
+>             return int(float(x))
+>         except Exception:
+>             return np.nan
+>     
+>     # Normalise some keys to consistent names
+>     meta_norm = {
+>         "station_id": station_id,
+>         "country": metadata.get("Country"),
+>         "station_name": metadata.get("Station"),
+>         "river": metadata.get("River"),
+>         "area": to_float_safe(metadata.get("Area", "").split()[0]) if metadata.get("Area") else np.nan,
+>         "area_units": metadata.get("Area Units") or (metadata.get("Area", "").split()[1] if metadata.get("Area") else None),
+>         "lat": to_float_safe(metadata.get("Lat")),
+>         "lon": to_float_safe(metadata.get("Lon")),
+>         "source": metadata.get("Source"),
+>         "point_id": to_int_safe(metadata.get("PointID")),
+>         "discharge_units": metadata.get("Discharge Units"),
+>         "starting_year": to_int_safe(metadata.get("Starting Year")),
+>         "ending_year": to_int_safe(metadata.get("Ending Year")),
+>         "total_years": to_int_safe(metadata.get("Total Years")),
+>         "total_usable_years": to_int_safe(metadata.get("Total Usable Years")),
+>     }
+>     
+>     # --- 5. Parse the tabular data section with pandas ---
+>     # Join lines into a single TSV text block
+>     data_text = "\n".join(data_lines)
+>     df = pd.read_csv(
+>         pd.compat.StringIO(data_text),
+>         sep='\t',
+>         engine='python'
+>     )
+>     
+>     # Clean column names (strip whitespace)
+>     df.columns = [c.strip() for c in df.columns]
+>     
+>     # --- 6. Drop summary rows ('Avg', 'Std Dev') and keep only numeric years ---
+>     # Year column may be string or numeric; coerce to numeric where possible
+>     df['Year_str'] = df['Year'].astype(str).str.strip()
+>     mask_year_rows = df['Year_str'].str.match(r'^\d{4}$')
+>     df_years = df[mask_year_rows].copy()
+>     
+>     # Convert Year to int
+>     df_years['Year'] = df_years['Year_str'].astype(int)
+>     df_years = df_years.drop(columns=['Year_str'])
+>     
+>     # --- 7. Convert '-9999' to NaN in monthly columns ---
+>     month_cols = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+>     # Some files may have fewer months; intersect with existing columns
+>     month_cols = [m for m in month_cols if m in df_years.columns]
+>     
+>     # Convert all relevant columns to float
+>     for col in month_cols + (['Avg Annual'] if 'Avg Annual' in df_years.columns else []):
+>         df_years[col] = pd.to_numeric(df_years[col], errors='coerce')
+>     
+>     df_years.replace(MISSING_VALUE, np.nan, inplace=True)
+>     
+>     # --- 8. Reshape to long format: station_id, year, month, discharge ---
+>     df_long = df_years.melt(
+>         id_vars=['Year'],
+>         value_vars=month_cols,
+>         var_name='month_name',
+>         value_name='discharge'
+>     )
+>     
+>     # Map month names to numbers
+>     month_map = {m: i+1 for i, m in enumerate(
+>         ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+>     )}
+>     df_long['month'] = df_long['month_name'].map(month_map)
+>     df_long.drop(columns=['month_name'], inplace=True)
+>     
+>     df_long['station_id'] = station_id
+>     
+>     # Reorder columns
+>     df_long = df_long[['station_id', 'Year', 'month', 'discharge']]
+>     df_long.rename(columns={'Year': 'year'}, inplace=True)
+>     
+>     return meta_norm, df_long
+> ```
+> 
+> If your pandas version does not support `pd.compat.StringIO`, just do:
+> 
+> ```python
+> from io import StringIO
+> # ...
+> df = pd.read_csv(StringIO(data_text), sep='\t', engine='python')
+> ```
+> 
+> ---
+> 
+> ## 4. Loop over all 3000 files
+> 
+> Now we walk the directory, parse each file, and assemble two dataframes: metadata and monthly series.
+> 
+> ```python
+> from tqdm import tqdm  # optional progress bar
+> 
+> def build_all_stations_dataset(directory: str | Path):
+>     directory = Path(directory)
+>     
+>     all_meta = []
+>     all_data = []
+>     
+>     for path in tqdm(sorted(directory.glob("station-*.tsv"))):
+>         # Extract station id from filename, e.g. station-1234.tsv -> 1234
+>         name = path.stem  # 'station-1234'
+>         try:
+>             station_id = int(name.split('-')[1])
+>         except Exception:
+>             station_id = name  # fallback
+>     
+>         meta, df_long = parse_station_file(path, station_id)
+>         all_meta.append(meta)
+>         all_data.append(df_long)
+>     
+>     meta_df = pd.DataFrame(all_meta)
+>     data_df = pd.concat(all_data, ignore_index=True)
+>     
+>     return meta_df, data_df
+> 
+> # Use it:
+> meta_df, data_df = build_all_stations_dataset("/path/to/tsv/directory")
+> ```
+> 
+> At this point:
+> 
+> - `meta_df` is one row per station.
+> - `data_df` is long-format monthly data for all stations.
+> 
+> ---
+> 
+> ## 5. Check / enforce consistency of units and assumptions
+> 
+> Now we explicitly test that all stations use the same units and flag any outliers.
+> 
+> ```python
+> # 1. Discharge units
+> print(meta_df['discharge_units'].value_counts(dropna=False))
+> 
+> # 2. Area units
+> print(meta_df['area_units'].value_counts(dropna=False))
+> ```
+> 
+> If all entries are e.g. `m3/sec` and `km2`, then you’re consistent.
+> 
+> If there are variants like `m3/s` vs `m3/sec` or `km2` vs `km^2`, you can normalise:
+> 
+> ```python
+> def normalize_units(u):
+>     if u is None or pd.isna(u):
+>         return None
+>     u = u.strip().lower().replace(" ", "")
+>     if u in ["m3/sec", "m3/s", "m^3/s", "m^3/sec"]:
+>         return "m3/s"
+>     if u in ["km2", "km^2"]:
+>         return "km2"
+>     return u
+> 
+> meta_df['discharge_units_norm'] = meta_df['discharge_units'].map(normalize_units)
+> meta_df['area_units_norm'] = meta_df['area_units'].map(normalize_units)
+> 
+> print(meta_df['discharge_units_norm'].value_counts(dropna=False))
+> print(meta_df['area_units_norm'].value_counts(dropna=False))
+> ```
+> 
+> If you find some stations with different units (e.g. `ft3/s`), you have options:
+> 
+> - convert to common units everywhere (preferred),
+> - or exclude them from the unified dataset.
+> 
+> ---
+> 
+> ## 6. Handle missing values and varying year coverage
+> 
+> By default in `data_df`:
+> 
+> - missing monthly discharges are `NaN`,
+> - stations naturally differ in their range of `year`, so the combined table just has sparser coverage.
+> 
+> You can compute annual means yourself if you don’t trust the `Avg Annual` column, using only non‑missing months:
+> 
+> ```python
+> annual_means = (

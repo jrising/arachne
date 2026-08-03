@@ -1,0 +1,717 @@
+**user**:
+> I have some code that is meant to assign gridded weather data to each observation in a station data dataset:
+> ```
+> import numpy as np
+> import pandas as pd
+> import xarray as xr
+> 
+> # ---- Station metadata ----
+> meta = pd.read_csv("grdd-meta.csv")
+> meta["station_id"] = meta["station_id"].astype(int)
+> 
+> # ---- Monthly discharge data ----
+> discharge = pd.read_csv("grdd-data.csv")
+> discharge["station_id"] = discharge["station_id"].astype(int)
+> discharge["year"] = discharge["year"].astype(int)
+> discharge["month"] = discharge["month"].astype(int)
+> discharge["discharge"] = pd.to_numeric(discharge["discharge"], errors="coerce")
+> 
+> # Combine
+> obs = discharge.merge(
+>     meta[["station_id", "country", "lat", "lon"]],
+>     on="station_id",
+>     how="left",
+> )
+> 
+> import os
+> 
+> regions = ['asia_east', 'australia', 'brazil', 'europe',
+>            'india', 'latam', 'mexico_south', 'usa']
+> 
+> root = "/project/cil/gcp/climate/ERA5-LAND/processed/monthly"
+> 
+> ttp_datasets = []
+> runoff_datasets = []
+> flow_datasets = []
+> 
+> for region in regions:
+>     # ---- ttp ----
+>     f_ttp = os.path.join(root, f"{region}_monthly_ttp.nc4")
+>     if os.path.exists(f_ttp):
+>         ds_ttp = xr.open_dataset(f_ttp, chunks={"valid_time": 100})
+>         ds_ttp = ds_ttp.assign_coords(region=region)
+>         ttp_datasets.append(ds_ttp[["tp", "tmean"]])
+>         
+>     # ---- runoff ----
+>     f_runoff = os.path.join(root, f"{region}_monthly.nc4")
+>     if os.path.exists(f_runoff):
+>         ds_runoff = xr.open_dataset(f_runoff, chunks={"valid_time": 100})
+>         ds_runoff = ds_runoff.assign_coords(region=region)
+>         runoff_datasets.append(ds_runoff[["rainfall", "era5melt", "tempmelt"]])
+>         
+>     # ---- flow ----
+>     f_flow = os.path.join(root, f"{region}_monthly_flow.nc4")
+>     if os.path.exists(f_flow):
+>         ds_flow = xr.open_dataset(f_flow, chunks={"time": 100})
+>         ds_flow = ds_flow.assign_coords(region=region)
+>         flow_datasets.append(ds_flow[["rainfall_flow",
+>                                       "era5melt_flow",
+>                                       "tempmelt_flow"]])
+> 
+> ds_ttp_global    = xr.concat(ttp_datasets,    dim="region", coords='minimal') if ttp_datasets    else None
+> ds_runoff_global = xr.concat(runoff_datasets, dim="region", coords='minimal') if runoff_datasets else None
+> ds_flow_global   = xr.concat(flow_datasets,   dim="region", coords='minimal') if flow_datasets   else None
+> 
+> def extract_values_for_obs_row(
+>     row,
+>     ds_ttp=None,
+>     ds_runoff=None,
+>     ds_flow=None,
+> ):
+>     lat = float(row["lat"])
+>     lon = float(row["lon"])
+>     year = int(row["year"])
+>     month = int(row["month"])
+>     
+>     result = {
+>         "tp": np.nan,
+>         "tmean": np.nan,
+>         "rainfall": np.nan,
+>         "era5melt": np.nan,
+>         "tempmelt": np.nan,
+>         "rainfall_flow": np.nan,
+>         "era5melt_flow": np.nan,
+>         "tempmelt_flow": np.nan,
+>     }
+>     
+>     # build the target month start as a pandas Timestamp
+>     import pandas as pd
+>     target_time = pd.Timestamp(year=year, month=month, day=1)
+>     
+>     # helper closure
+>     def _time_filter(da):
+>         # exact equality on year/month
+>         t = da["valid_time"]
+>         mask = (t.dt.year == year) & (t.dt.month == month)
+>         da_tm = da.where(mask, drop=True)
+>         if da_tm.sizes.get("valid_time", 0) == 0:
+>             raise KeyError("No matching time")
+>         return da_tm.isel(valid_time=0)  # if there are multiple, just take first
+>     
+>     # --- tp, tmean ---
+>     if ds_ttp is not None:
+>         try:
+>             da = ds_ttp.sel(latitude=lat, longitude=lon, method="nearest")
+>             da_t = _time_filter(da)
+>             result["tp"]    = float(da_t["tp"].values.mean())
+>             result["tmean"] = float(da_t["tmean"].values.mean())
+>         except Exception:
+>             pass
+>         
+>     # --- runoff rainfall, era5melt, tempmelt ---
+>     if ds_runoff is not None:
+>         try:
+>             da = ds_runoff.sel(latitude=lat, longitude=lon, method="nearest")
+>             da_t = _time_filter(da)
+>             result["rainfall"] = float(da_t["rainfall"].values.mean())
+>             result["era5melt"] = float(da_t["era5melt"].values.mean())
+>             result["tempmelt"] = float(da_t["tempmelt"].values.mean())
+>         except Exception:
+>             pass
+>         
+>     # --- flow rainfall_flow, era5melt_flow, tempmelt_flow ---
+>     if ds_flow is not None:
+>         try:
+>             da = ds_flow.sel(latitude=lat, longitude=lon, method="nearest")
+>             da_t = _time_filter(da)
+>             result["rainfall_flow"] = float(da_t["rainfall_flow"].values.mean())
+>             result["era5melt_flow"] = float(da_t["era5melt_flow"].values.mean())
+>             result["tempmelt_flow"] = float(da_t["tempmelt_flow"].values.mean())
+>         except Exception:
+>             pass
+>         
+>     return result
+> 
+> from tqdm import tqdm  # optional
+> 
+> def attach_model_values(
+>     obs_df,
+>     ds_ttp_global=None,
+>     ds_runoff_global=None,
+>     ds_flow_global=None,
+> ):
+>     records = []
+>     for _, row in tqdm(obs_df.iterrows(), total=len(obs_df)):
+>         vals = extract_values_for_obs_row(
+>             row,
+>             ds_ttp=ds_ttp_global,
+>             ds_runoff=ds_runoff_global,
+>             ds_flow=ds_flow_global,
+>         )
+>         records.append(vals)
+>         
+>     model_df = pd.DataFrame(records, index=obs_df.index)
+>     return pd.concat(
+>         [obs_df.reset_index(drop=True),
+>          model_df.reset_index(drop=True)],
+>         axis=1,
+>     )
+> 
+> combined = attach_model_values(
+>     obs,
+>     ds_ttp_global=ds_ttp_global,
+>     ds_runoff_global=ds_runoff_global,
+>     ds_flow_global=ds_flow_global,
+> )
+> 
+> combined.to_csv("streamflow_model_monthly_combined.csv", index=False)
+> ```
+> It keeps crashing because it's too much data when dask goes to compute things. I think part of the problem is that we're combining all the regions, when actually we can put each station into 1 region, based on that region's bounding box. Can you make the following edits:
+> 1. Don't combine up the regions into one dataset.
+> 2. When going through the data, first split on the station ID. All entries with the same station ID will have the same lat,lon.
+> 3. Find which region this lat,lon is contained in, using the latitude, longitude values to get its bounding box (plus 0.05 degrees on any side, since the grid resolution is 0.1).
+> 4.. Just do the extraction using the data from the region that each station is within.
+**assistant**:
+> Here’s a refactor that does what you described:
+> 
+> - Keeps regional datasets separate (no global concat).
+> - Groups observations by `station_id`.
+> - For each station, finds which region contains its `(lat, lon)` using that region’s dataset lat/lon bounds (with a ±0.05° buffer).
+> - Extracts values only from that region’s dataset for all rows of that station.
+> 
+> I’ll assume that each region file has `latitude` and `longitude` coordinates that define its coverage.
+> 
+> ```python
+> import numpy as np
+> import pandas as pd
+> import xarray as xr
+> import os
+> from tqdm import tqdm
+> 
+> # ---- Station metadata ----
+> meta = pd.read_csv("grdd-meta.csv")
+> meta["station_id"] = meta["station_id"].astype(int)
+> 
+> # ---- Monthly discharge data ----
+> discharge = pd.read_csv("grdd-data.csv")
+> discharge["station_id"] = discharge["station_id"].astype(int)
+> discharge["year"] = discharge["year"].astype(int)
+> discharge["month"] = discharge["month"].astype(int)
+> discharge["discharge"] = pd.to_numeric(discharge["discharge"], errors="coerce")
+> 
+> # Combine
+> obs = discharge.merge(
+>     meta[["station_id", "country", "lat", "lon"]],
+>     on="station_id",
+>     how="left",
+> )
+> 
+> regions = ['asia_east', 'australia', 'brazil', 'europe',
+>            'india', 'latam', 'mexico_south', 'usa']
+> 
+> root = "/project/cil/gcp/climate/ERA5-LAND/processed/monthly"
+> 
+> # We'll keep per-region datasets separate, in dicts keyed by region
+> ttp_dsets = {}
+> runoff_dsets = {}
+> flow_dsets = {}
+> 
+> # Also store region bounding boxes (lat/lon min/max) as we open datasets
+> region_bounds = {}
+> 
+> for region in regions:
+>     f_ttp = os.path.join(root, f"{region}_monthly_ttp.nc4")
+>     f_runoff = os.path.join(root, f"{region}_monthly.nc4")
+>     f_flow = os.path.join(root, f"{region}_monthly_flow.nc4")
+> 
+>     ds_ttp = xr.open_dataset(f_ttp, chunks={"valid_time": 100}) if os.path.exists(f_ttp) else None
+>     ds_runoff = xr.open_dataset(f_runoff, chunks={"valid_time": 100}) if os.path.exists(f_runoff) else None
+>     ds_flow = xr.open_dataset(f_flow, chunks={"time": 100}) if os.path.exists(f_flow) else None
+> 
+>     # Store only if present
+>     if ds_ttp is not None:
+>         ttp_dsets[region] = ds_ttp[["tp", "tmean"]]
+>     if ds_runoff is not None:
+>         runoff_dsets[region] = ds_runoff[["rainfall", "era5melt", "tempmelt"]]
+>     if ds_flow is not None:
+>         flow_dsets[region] = ds_flow[["rainfall_flow",
+>                                       "era5melt_flow",
+>                                       "tempmelt_flow"]]
+> 
+>     # Determine region bounds from any dataset we have
+>     ds_for_bounds = ds_ttp or ds_runoff or ds_flow
+>     if ds_for_bounds is not None:
+>         lats = ds_for_bounds["latitude"]
+>         lons = ds_for_bounds["longitude"]
+>         # Use compute-free min/max; .min() / .max() on dask arrays stay lazy
+>         lat_min = float(lats.min())
+>         lat_max = float(lats.max())
+>         lon_min = float(lons.min())
+>         lon_max = float(lons.max())
+>         region_bounds[region] = {
+>             "lat_min": lat_min,
+>             "lat_max": lat_max,
+>             "lon_min": lon_min,
+>             "lon_max": lon_max,
+>         }
+> 
+> # Small helper: find which region a given (lat, lon) belongs to,
+> # using bounding boxes + 0.05° buffer
+> def find_region_for_latlon(lat, lon, region_bounds, buffer_deg=0.05):
+>     for region, b in region_bounds.items():
+>         if (
+>             (b["lat_min"] - buffer_deg) <= lat <= (b["lat_max"] + buffer_deg)
+>             and (b["lon_min"] - buffer_deg) <= lon <= (b["lon_max"] + buffer_deg)
+>         ):
+>             return region
+>     return None
+> 
+> 
+> def extract_values_for_obs_row(
+>     row,
+>     ds_ttp=None,
+>     ds_runoff=None,
+>     ds_flow=None,
+> ):
+>     lat = float(row["lat"])
+>     lon = float(row["lon"])
+>     year = int(row["year"])
+>     month = int(row["month"])
+> 
+>     result = {
+>         "tp": np.nan,
+>         "tmean": np.nan,
+>         "rainfall": np.nan,
+>         "era5melt": np.nan,
+>         "tempmelt": np.nan,
+>         "rainfall_flow": np.nan,
+>         "era5melt_flow": np.nan,
+>         "tempmelt_flow": np.nan,
+>     }
+> 
+>     target_time_year = year
+>     target_time_month = month
+> 
+>     def _time_filter_valid(da):
+>         t = da["valid_time"]
+>         mask = (t.dt.year == target_time_year) & (t.dt.month == target_time_month)
+>         da_tm = da.where(mask, drop=True)
+>         if da_tm.sizes.get("valid_time", 0) == 0:
+>             raise KeyError("No matching time")
+>         return da_tm.isel(valid_time=0)
+> 
+>     def _time_filter_time(da):
+>         t = da["time"]
+>         mask = (t.dt.year == target_time_year) & (t.dt.month == target_time_month)
+>         da_tm = da.where(mask, drop=True)
+>         if da_tm.sizes.get("time", 0) == 0:
+>             raise KeyError("No matching time")
+>         return da_tm.isel(time=0)
+> 
+>     # --- tp, tmean ---
+>     if ds_ttp is not None:
+>         try:
+>             da = ds_ttp.sel(latitude=lat, longitude=lon, method="nearest")
+>             da_t = _time_filter_valid(da)
+>             # These should be scalars or tiny; .item() avoids loading big arrays
+>             result["tp"] = float(da_t["tp"].values)
+>             result["tmean"] = float(da_t["tmean"].values)
+>         except Exception:
+>             pass
+> 
+>     # --- runoff rainfall, era5melt, tempmelt ---
+>     if ds_runoff is not None:
+>         try:
+>             da = ds_runoff.sel(latitude=lat, longitude=lon, method="nearest")
+>             da_t = _time_filter_valid(da)
+>             result["rainfall"] = float(da_t["rainfall"].values)
+>             result["era5melt"] = float(da_t["era5melt"].values)
+>             result["tempmelt"] = float(da_t["tempmelt"].values)
+>         except Exception:
+>             pass
+> 
+>     # --- flow rainfall_flow, era5melt_flow, tempmelt_flow ---
+>     if ds_flow is not None:
+>         try:
+>             da = ds_flow.sel(latitude=lat, longitude=lon, method="nearest")
+>             da_t = _time_filter_time(da)
+>             result["rainfall_flow"] = float(da_t["rainfall_flow"].values)
+>             result["era5melt_flow"] = float(da_t["era5melt_flow"].values)
+>             result["tempmelt_flow"] = float(da_t["tempmelt_flow"].values)
+>         except Exception:
+>             pass
+> 
+>     return result
+> 
+> 
+> def attach_model_values_by_station(
+>     obs_df,
+>     ttp_dsets,
+>     runoff_dsets,
+>     flow_dsets,
+>     region_bounds,
+> ):
+>     # Prepare result container aligned with obs_df.index
+>     out = pd.DataFrame(
+>         {
+>             "tp": np.nan,
+>             "tmean": np.nan,
+>             "rainfall": np.nan,
+>             "era5melt": np.nan,
+>             "tempmelt": np.nan,
+>             "rainfall_flow": np.nan,
+>             "era5melt_flow": np.nan,
+>             "tempmelt_flow": np.nan,
+>         },
+>         index=obs_df.index,
+>     )
+> 
+>     # Group by station so we only do region lookup and dataset selection once per station
+>     grouped = obs_df.groupby("station_id", sort=False)
+> 
+>     for station_id, g in tqdm(grouped, total=len(grouped)):
+>         # Same lat/lon for each station
+>         lat = float(g["lat"].iloc[0])
+>         lon = float(g["lon"].iloc[0])
+> 
+>         region = find_region_for_latlon(lat, lon, region_bounds)
+>         if region is None:
+>             # No matching region; leave NaNs
+>             continue
+> 
+>         ds_ttp = ttp_dsets.get(region, None)
+>         ds_runoff = runoff_dsets.get(region, None)
+>         ds_flow = flow_dsets.get(region, None)
+> 
+>         # Apply extraction row-wise for this station subset
+>         for idx, row in g.iterrows():
+>             vals = extract_values_for_obs_row(
+>                 row,
+>                 ds_ttp=ds_ttp,
+>                 ds_runoff=ds_runoff,
+>                 ds_flow=ds_flow,
+>             )
+>             for k, v in vals.items():
+>                 out.at[idx, k] = v
+> 
+>     # Concatenate with original obs_df
+>     out = out.reset_index(drop=True)
+>     obs_reset = obs_df.reset_index(drop=True)
+>     combined = pd.concat([obs_reset, out], axis=1)
+>     return combined
+> 
+> 
+> combined = attach_model_values_by_station(
+>     obs,
+>     ttp_dsets=ttp_dsets,
+>     runoff_dsets=runoff_dsets,
+>     flow_dsets=flow_dsets,
+>     region_bounds=region_bounds,
+> )
+> 
+> combined.to_csv("streamflow_model_monthly_combined.csv", index=False)
+> ```
+> 
+> Key changes relative to your original:
+> 
+> 1. **No global concat**: `ds_ttp_global`, `ds_runoff_global`, `ds_flow_global` are gone. Instead we have `ttp_dsets[region]`, etc.
+> 2. **Group by station**: `attach_model_values_by_station` loops over `obs_df.groupby("station_id")`.
+> 3. **Region detection via bounding boxes**:
+>    - `region_bounds` is built from each region’s dataset lat/lon min/max.
+>    - `find_region_for_latlon` uses these bounds with a ±0.05° buffer.
+> 4. **Per-station, per-region extraction**:
+>    - For each station, we look up its region once.
+>    - All its rows use only that region’s datasets.
+> 5. **Time handling**:
+>    - `valid_time` for ttp/runoff; `time` for flow.
+>    - Uses year/month equality as you had, but avoiding `.values.mean()`; we index down to a scalar and then cast to `float`.
+> 
+> If you like, next step can be to swap the inner row loop for a vectorized/month-wise extraction per station to reduce the number of Dask tasks further, but this should already avoid the huge global computation that was crashing.
+**user**:
+> The code is quite slow. Can it go faster? And can I get the stations into my file as they're produced, one at a time?
+**assistant**:
+> Yes to both: you can make it much faster and stream out station results one at a time.
+> 
+> The two big speed killers are:
+> 
+> - per-row `sel()` + `where()` (thousands of tiny dask tasks)
+> - building a big `DataFrame` in memory only at the end
+> 
+> Below is a more vectorized, station-wise approach that:
+> 
+> 1. Processes one station at a time (grouped by `station_id`).
+> 2. For the station, computes its nearest grid indices *once* and reuses them for all months.
+> 3. Uses boolean year/month masks once per dataset, not per row.
+> 4. Appends results to the CSV file station-by-station (first station writes header, others append).
+> 
+> This keeps memory use low and gives you a growing output file.
+> 
+> ---
+> 
+> ### Core idea
+> 
+> For each station:
+> 
+> - Find region via bounding boxes.
+> - Precompute nearest `lat_idx`, `lon_idx` (so no more `method="nearest"` per row).
+> - Precompute month-wise slices over `valid_time` / `time` and read as scalars.
+> - Assemble a small `DataFrame` for that station and write immediately to CSV (append mode).
+> 
+> ---
+> 
+> ### Revised code
+> 
+> ```python
+> import numpy as np
+> import pandas as pd
+> import xarray as xr
+> import os
+> from tqdm import tqdm
+> 
+> # ---- Station metadata ----
+> meta = pd.read_csv("grdd-meta.csv")
+> meta["station_id"] = meta["station_id"].astype(int)
+> 
+> # ---- Monthly discharge data ----
+> discharge = pd.read_csv("grdd-data.csv")
+> discharge["station_id"] = discharge["station_id"].astype(int)
+> discharge["year"] = discharge["year"].astype(int)
+> discharge["month"] = discharge["month"].astype(int)
+> discharge["discharge"] = pd.to_numeric(discharge["discharge"], errors="coerce")
+> 
+> # Combine
+> obs = discharge.merge(
+>     meta[["station_id", "country", "lat", "lon"]],
+>     on="station_id",
+>     how="left",
+> )
+> 
+> regions = ['asia_east', 'australia', 'brazil', 'europe',
+>            'india', 'latam', 'mexico_south', 'usa']
+> 
+> root = "/project/cil/gcp/climate/ERA5-LAND/processed/monthly"
+> 
+> # ---- Load per-region datasets & bounds ----
+> 
+> ttp_dsets = {}
+> runoff_dsets = {}
+> flow_dsets = {}
+> region_bounds = {}
+> 
+> for region in regions:
+>     f_ttp = os.path.join(root, f"{region}_monthly_ttp.nc4")
+>     f_runoff = os.path.join(root, f"{region}_monthly.nc4")
+>     f_flow = os.path.join(root, f"{region}_monthly_flow.nc4")
+> 
+>     ds_ttp = xr.open_dataset(f_ttp, chunks={"valid_time": 100}) if os.path.exists(f_ttp) else None
+>     ds_runoff = xr.open_dataset(f_runoff, chunks={"valid_time": 100}) if os.path.exists(f_runoff) else None
+>     ds_flow = xr.open_dataset(f_flow, chunks={"time": 100}) if os.path.exists(f_flow) else None
+> 
+>     if ds_ttp is not None:
+>         ttp_dsets[region] = ds_ttp[["tp", "tmean"]]
+>     if ds_runoff is not None:
+>         runoff_dsets[region] = ds_runoff[["rainfall", "era5melt", "tempmelt"]]
+>     if ds_flow is not None:
+>         flow_dsets[region] = ds_flow[["rainfall_flow", "era5melt_flow", "tempmelt_flow"]]
+> 
+>     ds_for_bounds = ds_ttp or ds_runoff or ds_flow
+>     if ds_for_bounds is not None:
+>         lats = ds_for_bounds["latitude"]
+>         lons = ds_for_bounds["longitude"]
+>         region_bounds[region] = {
+>             "lat_min": float(lats.min()),
+>             "lat_max": float(lats.max()),
+>             "lon_min": float(lons.min()),
+>             "lon_max": float(lons.max()),
+>         }
+> 
+> # ---- Helper: region lookup ----
+> 
+> def find_region_for_latlon(lat, lon, region_bounds, buffer_deg=0.05):
+>     for region, b in region_bounds.items():
+>         if (
+>             (b["lat_min"] - buffer_deg) <= lat <= (b["lat_max"] + buffer_deg)
+>             and (b["lon_min"] - buffer_deg) <= lon <= (b["lon_max"] + buffer_deg)
+>         ):
+>             return region
+>     return None
+> 
+> 
+> # ---- Faster station-wise extraction ----
+> 
+> def get_grid_indices(ds, lat, lon):
+>     """Return nearest (lat_idx, lon_idx) for a dataset."""
+>     # We only compute index selection once, then reuse as integers
+>     lat_idx = int(abs(ds["latitude"] - lat).argmin())
+>     lon_idx = int(abs(ds["longitude"] - lon).argmin())
+>     return lat_idx, lon_idx
+> 
+> 
+> def build_time_lookup(ds, time_dim="valid_time"):
+>     """
+>     Build a dict mapping (year, month) -> integer index along time_dim.
+>     Assumes one entry per month; if multiple exist, takes the first.
+>     """
+>     if ds is None or time_dim not in ds.coords:
+>         return {}
+> 
+>     t = ds[time_dim]
+>     years = t.dt.year.values
+>     months = t.dt.month.values
+> 
+>     lookup = {}
+>     for i, (y, m) in enumerate(zip(years, months)):
+>         key = (int(y), int(m))
+>         if key not in lookup:
+>             lookup[key] = i
+>     return lookup
+> 
+> 
+> def extract_for_station(station_df, ds_ttp, ds_runoff, ds_flow):
+>     """
+>     station_df: subset of obs for a single station_id.
+>     ds_*: regional datasets for that station's region (can be None).
+>     Returns a DataFrame with model columns for this station.
+>     """
+> 
+>     lat = float(station_df["lat"].iloc[0])
+>     lon = float(station_df["lon"].iloc[0])
+> 
+>     # Precompute grid indices per dataset (if present)
+>     if ds_ttp is not None:
+>         ttp_lat_idx, ttp_lon_idx = get_grid_indices(ds_ttp, lat, lon)
+>         ttp_time_lookup = build_time_lookup(ds_ttp, time_dim="valid_time")
+>     else:
+>         ttp_lat_idx = ttp_lon_idx = None
+>         ttp_time_lookup = {}
+> 
+>     if ds_runoff is not None:
+>         ro_lat_idx, ro_lon_idx = get_grid_indices(ds_runoff, lat, lon)
+>         ro_time_lookup = build_time_lookup(ds_runoff, time_dim="valid_time")
+>     else:
+>         ro_lat_idx = ro_lon_idx = None
+>         ro_time_lookup = {}
+> 
+>     if ds_flow is not None:
+>         fl_lat_idx, fl_lon_idx = get_grid_indices(ds_flow, lat, lon)
+>         fl_time_lookup = build_time_lookup(ds_flow, time_dim="time")
+>     else:
+>         fl_lat_idx = fl_lon_idx = None
+>         fl_time_lookup = {}
+> 
+>     # Prepare result table for this station
+>     res = pd.DataFrame(
+>         {
+>             "tp": np.nan,
+>             "tmean": np.nan,
+>             "rainfall": np.nan,
+>             "era5melt": np.nan,
+>             "tempmelt": np.nan,
+>             "rainfall_flow": np.nan,
+>             "era5melt_flow": np.nan,
+>             "tempmelt_flow": np.nan,
+>         },
+>         index=station_df.index,
+>     )
+> 
+>     # Loop rows for this station, but using cheap integer indexing + prebuilt time lookups
+>     for idx, row in station_df.iterrows():
+>         y = int(row["year"])
+>         m = int(row["month"])
+> 
+>         # ttp
+>         if ds_ttp is not None:
+>             ti = ttp_time_lookup.get((y, m), None)
+>             if ti is not None:
+>                 # integer-based selection: tiny task
+>                 sub = ds_ttp.isel(valid_time=ti,
+>                                   latitude=ttp_lat_idx,
+>                                   longitude=ttp_lon_idx)
+>                 # sub["tp"] and sub["tmean"] should be scalar
+>                 res.at[idx, "tp"] = float(sub["tp"].values)
+>                 res.at[idx, "tmean"] = float(sub["tmean"].values)
+> 
+>         # runoff
+>         if ds_runoff is not None:
+>             ti = ro_time_lookup.get((y, m), None)
+>             if ti is not None:
+>                 sub = ds_runoff.isel(valid_time=ti,
+>                                      latitude=ro_lat_idx,
+>                                      longitude=ro_lon_idx)
+>                 res.at[idx, "rainfall"] = float(sub["rainfall"].values)
+>                 res.at[idx, "era5melt"] = float(sub["era5melt"].values)
+>                 res.at[idx, "tempmelt"] = float(sub["tempmelt"].values)
+> 
+>         # flow
+>         if ds_flow is not None:
+>             ti = fl_time_lookup.get((y, m), None)
+>             if ti is not None:
+>                 sub = ds_flow.isel(time=ti,
+>                                    latitude=fl_lat_idx,
+>                                    longitude=fl_lon_idx)
+>                 res.at[idx, "rainfall_flow"] = float(sub["rainfall_flow"].values)
+>                 res.at[idx, "era5melt_flow"] = float(sub["era5melt_flow"].values)
+>                 res.at[idx, "tempmelt_flow"] = float(sub["tempmelt_flow"].values)
+> 
+>     return res
+> 
+> 
+> # ---- Streaming to CSV station-by-station ----
+> 
+> output_file = "streamflow_model_monthly_combined.csv"
+> first = True  # to control header writing
+> 
+> grouped = obs.groupby("station_id", sort=False)
+> 
+> for station_id, g in tqdm(grouped, total=len(grouped)):
+>     lat = float(g["lat"].iloc[0])
+>     lon = float(g["lon"].iloc[0])
+> 
+>     region = find_region_for_latlon(lat, lon, region_bounds)
+>     if region is None:
+>         # No matching region: write station rows with NaNs in model columns
+>         model_vals = pd.DataFrame(
+>             {
+>                 "tp": np.nan,
+>                 "tmean": np.nan,
+>                 "rainfall": np.nan,
+>                 "era5melt": np.nan,
+>                 "tempmelt": np.nan,
+>                 "rainfall_flow": np.nan,
+>                 "era5melt_flow": np.nan,
+>                 "tempmelt_flow": np.nan,
+>             },
+>             index=g.index,
+>         )
+>     else:
+>         ds_ttp = ttp_dsets.get(region, None)
+>         ds_runoff = runoff_dsets.get(region, None)
+>         ds_flow = flow_dsets.get(region, None)
+> 
+>         model_vals = extract_for_station(g, ds_ttp, ds_runoff, ds_flow)
+> 
+>     # combine for this station
+>     station_combined = pd.concat(
+>         [g.reset_index(drop=True), model_vals.reset_index(drop=True)],
+>         axis=1,
+>     )
+> 
+>     # append to CSV
+>     mode = "w" if first else "a"
+>     header = first
+>     station_combined.to_csv(output_file, mode=mode, header=header, index=False)
+>     first = False
+> ```
+> 
+> ---
+> 
+> ### What changed vs the previous version
+> 
+> - **No per-row `.sel(..., method="nearest")`**  
+>   Nearest grid point is computed once per station via `get_grid_indices`, using integer indices thereafter.
+> 
+> - **No per-row `.where(...)`**  
+>   Instead, `build_time_lookup` builds a `(year, month) → time_index` mapping once per dataset.
+> 
+> - **Many fewer dask tasks**  
+>   Each row now triggers at most three scalar `.isel(...)` reads, with the chunking aligned along `valid_time`/`time

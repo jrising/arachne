@@ -51,6 +51,7 @@ function speak_ui(text, $select, pitch, rate, onend) {
 }
 
 async function speakStream($render, reader, voice, pitch, rate) {
+    console.log("speakStream");
     const synth = window.speechSynthesis;
     const decoder = new TextDecoder();
     let buffer = '';
@@ -58,14 +59,19 @@ async function speakStream($render, reader, voice, pitch, rate) {
     let speaking = false;
 
     var lastutterance = null;
+    cancelStream = false;
+    console.log("here");
     while (true) {
+	console.log(cancelStream);
 	if (cancelStream) {
 	    cancelStream = false;
 	    window.speechSynthesis.cancel();
 	    return;
 	}
 	
+	console.log("wait");
         const { done, value } = await reader.read();
+	console.log("got");
         
         if (done) {
             break;

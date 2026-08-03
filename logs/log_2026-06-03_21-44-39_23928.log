@@ -1,0 +1,147 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> I am making a shiny app, and there are data files for internal use in subfolders of the project. How do I get these to be sent up when I deploy the app?
+**assistant**:
+> When deploying a Shiny app, you need to ensure that all necessary files and data are included in the deployment. Here’s a step-by-step guide to ensure your data files are uploaded with your app:
+> 
+> 1. **Organize Your Project:**  
+>    Make sure your project folder is well-organized. Place your data files in a subdirectory to keep things tidy. For instance, you might have a structure like this:
+>    ```
+>    /my-shiny-app/
+>      ├── app.R
+>      ├── data/
+>      │   ├── file1.csv
+>      │   ├── subfolder/
+>      │   │   ├── file2.csv
+>    ```
+> 
+> 2. **Use Relative Paths:**  
+>    In your app code, use relative paths to reference your data files. For example, if your `app.R` is in the main folder, you might load a file like this:
+>    ```r
+>    data <- read.csv("data/file1.csv")
+>    ```
+> 
+> 3. **Check .gitignore or .Rbuildignore Files:**  
+>    If you are using version control or build tools, make sure no essential files are being ignored by these configurations. For instance, ensure that your `.gitignore` or `.Rbuildignore` files do not inadvertently exclude the `data/` directory.
+> 
+> 4. **Deploying with RStudio Connect, ShinyApps.io, or Docker:**  
+>    - If you are using **RStudio Connect** or **ShinyApps.io**, these platforms will automatically bundle your app directory and its contents (except those in `.gitignore` or `.Rbuildignore`).
+>    - With **Docker**, you’ll need to ensure that your `Dockerfile` copies the entire project directory into the Docker image like this:
+>      ```dockerfile
+>      COPY . /app
+>      WORKDIR /app
+>      ```
+> 
+> 5. **Testing Deployment:**  
+>    After deploying, run your app on the server and check if it can load the data files. Look for any errors related to file paths or missing files.
+> 
+> By following these steps, your data files should be correctly included when you deploy your Shiny app. If you're still having issues, let me know the specifics, and we can troubleshoot further!
+**user**:
+> I'm using `rsconnect`:
+> ```
+> deployApp(appTitle='PROSPER - UK Adapatation Support', appName='prosper',
+>           appFiles = c("lib/adaptation.R", "lib/synthesis.R", "lib/find_distribution.R",
+>                        "app.R"))
+> ```
+> But it doesn't seem to include things that aren't in my appFiles list.
+**assistant**:
+> When using `rsconnect::deployApp()`, the `appFiles` parameter specifies exactly which files to include during deployment. If there are additional data files or folders that your app needs, you’ll need to explicitly include them in the `appFiles` list. Here’s how to do that:
+> 
+> ### Steps to Include Additional Files
+> 
+> 1. **Add Data Files to `appFiles`:**  
+>    You can add your data files and directories directly to the `appFiles` vector. For example, if you have a `data` directory, modify your `deployApp` call like this:
+>    ```r
+>    deployApp(appTitle = 'PROSPER - UK Adaptation Support', appName = 'prosper',
+>              appFiles = c("lib/adaptation.R", "lib/synthesis.R", "lib/find_distribution.R",
+>                           "app.R", "data/file1.csv", "data/subfolder/file2.csv"))
+>    ```
+> 
+> 2. **Use Wildcards (if appropriate):**  
+>    If you have many files in a directory and want to include all of them without listing each one, you might consider using a wildcard (typically, this would be handled in a custom function as `rsconnect::deployApp()` does not natively support wildcards). For example:
+>    ```r
+>    data_files <- list.files("data", full.names = TRUE, recursive = TRUE)
+>    app_files <- c("lib/adaptation.R", "lib/synthesis.R", "lib/find_distribution.R", "app.R", data_files)
+> 
+>    deployApp(appTitle = 'PROSPER - UK Adaptation Support', appName = 'prosper', appFiles = app_files)
+>    ```
+> 
+> 3. **Verify Your Path:**  
+>    Make sure that the paths you specify correctly reflect where the files are located relative to your project directory.
+> 
+> 4. **Check `options(rsconnect.verbose = TRUE)`:**  
+>    For more information during deployment, you can enable verbose mode to see which files are being considered during the deploy process:
+>    ```r
+>    options(rsconnect.verbose = TRUE)
+>    deployApp(appTitle = 'PROSPER - UK Adaptation Support', appName = 'prosper', appFiles = app_files)
+>    ```
+> 
+> ### Example of Full Code
+> Here’s how your deployment code might look after including additional files:
+> 
+> ```r
+> # List all data files to include
+> data_files <- list.files("data", full.names = TRUE, recursive = TRUE)
+> # Combine all needed files into one list
+> app_files <- c("lib/adaptation.R", "lib/synthesis.R", "lib/find_distribution.R", "app.R", data_files)
+> 
+> # Enable verbose output for debugging
+> options(rsconnect.verbose = TRUE)
+> 
+> # Deploy the app
+> deployApp(appTitle = 'PROSPER - UK Adaptation Support', appName = 'prosper', appFiles = app_files)
+> ```
+> 
+> By following these steps, ensure your necessary internal files are included in the deployment. If you continue to experience issues, let me know!
+**user**:
+> How do I do wildcards in list.files?
+**assistant**:
+> In R, you can use the `pattern` argument of the `list.files()` function to specify a regular expression that acts like a wildcard. This allows you to filter the files you want to include. Here's how to do it:
+> 
+> ### Syntax
+> 
+> ```r
+> list.files(path = "your_directory", pattern = "your_pattern", full.names = TRUE, recursive = TRUE)
+> ```
+> 
+> ### Examples
+> 
+> 1. **Including All Files in a Directory:**
+>    If you want to include all files in a directory (e.g., all CSV files), you can use:
+>    ```r
+>    all_files <- list.files("data", full.names = TRUE, recursive = TRUE)
+>    ```
+> 
+> 2. **Including Specific File Types:**
+>    For example, to include only CSV files:
+>    ```r
+>    csv_files <- list.files("data", pattern = "\\.csv$", full.names = TRUE, recursive = TRUE)
+>    ```
+> 
+>    - `pattern = "\\.csv$"`: This regex matches any file ending with `.csv`.
+> 
+> 3. **Including All Files Matching a Multiple Patterns:**
+>    If you want to include all files that start with "file" and have any extension:
+>    ```r
+>    specific_files <- list.files("data", pattern = "^file.*", full.names = TRUE, recursive = TRUE)
+>    ```
+> 
+>    - `pattern = "^file.*"`: This regex matches any file starting with `file`.
+> 
+> ### Full Example in the Context of Your Shiny App
+> 
+> If you want to include all data files in the `data` subdirectory when deploying your Shiny app, you might write:
+> 
+> ```r
+> # List all files in the data directory
+> data_files <- list.files("data", full.names = TRUE, recursive = TRUE)
+> 
+> # Combine all needed files into one list for deployment
+> app_files <- c("lib/adaptation.R", "lib/synthesis.R", "lib/find_distribution.R", "app.R", data_files)
+> 
+> # Deploy
+> deployApp(appTitle = 'PROSPER - UK Adaptation Support', appName = 'prosper', appFiles = app_files)
+> ```
+> 
+> This usage will ensure all files within the `data` folder (and its subfolders) are included in the deployment. If you have specific file types or naming conventions, you can always adjust the `pattern` argument accordingly. Let me know if you have any other questions!

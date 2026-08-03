@@ -1,0 +1,194 @@
+**user**:
+> On Mac OS, how can I set up a program to be run every day at a particular time, and pipe its results into a log file (ideally, named for that days date in a folder of them)?
+**assistant**:
+> You can accomplish this by using the `launchd` daemon, which is the recommended way to schedule tasks on macOS. Here’s a step-by-step guide to set up a daily task:
+> 
+> 1. **Create a Launch Daemon Property List (plist) File**: You will need to create a `.plist` file that describes the scheduled task. Here's an example `com.yourusername.dailyprogram.plist` file that runs a script every day at 7:00 AM:
+> 
+>     ```xml
+>     <?xml version="1.0" encoding="UTF-8"?>
+>     <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+>     <plist version="1.0">
+>     <dict>
+>         <key>Label</key>
+>         <string>com.yourusername.dailyprogram</string>
+> 
+>         <key>ProgramArguments</key>
+>         <array>
+>             <string>/path/to/your/script.sh</string>
+>         </array>
+> 
+>         <key>StartCalendarInterval</key>
+>         <dict>
+>             <key>Hour</key>
+>             <integer>7</integer>
+>             <key>Minute</key>
+>             <integer>0</integer>
+>         </dict>
+> 
+>         <key>StandardOutPath</key>
+>         <string>/path/to/log/folder/$(date '+%Y-%m-%d').log</string>
+>         
+>         <key>StandardErrorPath</key>
+>         <string>/path/to/log/folder/$(date '+%Y-%m-%d').log</string>
+>     </dict>
+>     </plist>
+>     ```
+> 
+>     - Replace `/path/to/your/script.sh` with the path to the script or program you want to run.
+>     - Replace `/path/to/log/folder/` with the path to the folder where you want the log files to be saved.
+> 
+> 2. **Place the PLIST File in the Proper Directory**: 
+> 
+>     - For user-specific tasks, place this file in `~/Library/LaunchAgents/`.
+>     - For system-wide tasks, use `/Library/LaunchDaemons/`. You’ll need administrative privileges for this.
+> 
+> 3. **Ensure the Script Is Executable**: If your program is a script, make sure it is executable:
+> 
+>     ```bash
+>     chmod +x /path/to/your/script.sh
+>     ```
+> 
+> 4. **Load the PLIST File with launchctl**: After placing the plist file in the correct directory, load it with:
+> 
+>     ```bash
+>     launchctl load ~/Library/LaunchAgents/com.yourusername.dailyprogram.plist
+>     ```
+> 
+> 5. **Verify and Troubleshoot**: Check if your job is loaded and working properly with:
+> 
+>     ```bash
+>     launchctl list | grep com.yourusername.dailyprogram
+>     ```
+> 
+> If you need to edit the plist file and reload it, remember to unload it first:
+> 
+> ```bash
+> launchctl unload ~/Library/LaunchAgents/com.yourusername.dailyprogram.plist
+> ```
+> 
+> Note that in the plist file, `$(date '+%Y-%m-%d')` is a shell command and won't work directly within the `plist` file. You would usually handle date-based naming within the script itself:
+> 
+> ```bash
+> #!/bin/bash
+> log_directory="/path/to/log/folder"
+> log_filename="$(date '+%Y-%m-%d').log"
+> # Your program/command here
+> echo "Running your program..." > "$log_directory/$log_filename"
+> ```
+> 
+> You would replace the `echo "Running your program..."` line with the actual command you want to execute. This approach ensures the log file is named according to the date on each run.
+**user**:
+> Can you fill this out with the following information:
+> The script is called `~/projects/justeco/stockings/combo.jl`. It's a julia script, so maybe I need a bash script to go around it. My ~ is `/Users/admin`.
+> 
+> The program should be called "Just Economy Trading".
+> It should happen at 2pm every week day.
+> 
+> The logs can go into a folder ~/projects/justeco/stockings/logs.
+**assistant**:
+> Sure! Below are the detailed steps tailored to your specific needs:
+> 
+> ### 1. Create the Bash Wrapper Script
+> 
+> Since your program is written in Julia, you'll want to create a Bash script that runs your Julia script. 
+> 
+> - Create a new file called `run_combo.sh` in your `~/projects/justeco/stockings/` directory.
+> 
+> ```bash
+> nano ~/projects/justeco/stockings/run_combo.sh
+> ```
+> 
+> - Add the following to the script:
+> 
+> ```bash
+> #!/bin/bash
+> 
+> # Define the log directory and filename
+> log_directory="/Users/admin/projects/justeco/stockings/logs"
+> log_filename="$(date '+%Y-%m-%d').log"
+> 
+> # Create the log directory if it doesn't exist
+> mkdir -p "$log_directory"
+> 
+> # Run the Julia script and pipe output to the log file
+> julia ~/projects/justeco/stockings/combo.jl >> "$log_directory/$log_filename" 2>&1
+> ```
+> 
+> - Make it executable:
+> 
+> ```bash
+> chmod +x ~/projects/justeco/stockings/run_combo.sh
+> ```
+> 
+> ### 2. Create the Launch Daemon Property List (plist) File
+> 
+> Next, create a plist file to schedule the task.
+> 
+> - Create the plist file:
+> 
+> ```bash
+> nano ~/Library/LaunchAgents/com.admin.justeco.trading.plist
+> ```
+> 
+> - Add the following content:
+> 
+> ```xml
+> <?xml version="1.0" encoding="UTF-8"?>
+> <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+> <plist version="1.0">
+> <dict>
+>     <key>Label</key>
+>     <string>com.admin.justeco.trading</string>
+> 
+>     <key>ProgramArguments</key>
+>     <array>
+>         <string>/Users/admin/projects/justeco/stockings/run_combo.sh</string>
+>     </array>
+> 
+>     <key>StartCalendarInterval</key>
+>     <dict>
+>         <key>Hour</key>
+>         <integer>14</integer>
+>         <key>Minute</key>
+>         <integer>0</integer>
+>     </dict>
+> 
+>     <key>StandardOutPath</key>
+>     <string>/Users/admin/projects/justeco/stockings/logs/$(date '+%Y-%m-%d').log</string>
+>     
+>     <key>StandardErrorPath</key>
+>     <string>/Users/admin/projects/justeco/stockings/logs/$(date '+%Y-%m-%d').log</string>
+> 
+>     <key>RunAtLoad</key>
+>     <true/>
+>     <key>KeepAlive</key>
+>     <false/>
+> </dict>
+> </plist>
+> ```
+> 
+> ### 3. Load the PLIST File
+> 
+> - Load the newly created plist file with the following command:
+> 
+> ```bash
+> launchctl load ~/Library/LaunchAgents/com.admin.justeco.trading.plist
+> ```
+> 
+> ### 4. Verify and Troubleshoot
+> 
+> - Check if your job is loaded correctly:
+> 
+> ```bash
+> launchctl list | grep com.admin.justeco.trading
+> ```
+> 
+> ### Summary
+> 
+> - **Script to Run**: `~/projects/justeco/stockings/run_combo.sh`
+> - **Log Directory**: `~/projects/justeco/stockings/logs`
+> - **Scheduled Time**: 2 PM every weekday
+> - **Log File Naming**: Based on the date, e.g., `2023-02-10.log`
+> 
+> With this setup, your Julia script will run every weekday at 2 PM, and output will be logged in a dated log file inside the specified logs folder. If you ever want to edit the plist file, remember to unload it first using the `launchctl unload` command.

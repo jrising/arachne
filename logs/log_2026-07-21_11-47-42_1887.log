@@ -1,0 +1,1052 @@
+**user**:
+> Here is some code I wrote to model hydrology:
+> ```
+> #ifndef HYDRONET_H
+> #define HYDRONET_H
+> 
+> #include <float.h>
+> #include <fstream>
+> #include <cassert>
+> #include <utils/ToString.h>
+> #include <memory/SerializationTools.h>
+> #include <list>
+> #include <queue>
+> #include <measure/Measure.h>
+> #include <datastr/GeographicMap.h>
+> #include <tools/hydro/DInfinityMap.h>
+> 
+> using namespace std;
+> 
+> namespace openworld {
+>   void* nodeListConstructor(istream& in, PointerReference& reference);
+>   void* hydronodeConstructor(istream& in, PointerReference& reference);
+> 
+>   class HydroNode : public IPointerSerializable {
+>   protected:
+>     // structural
+>     list< pair<double, HydroNode*> > edges;
+> 
+>     double nodeArea;
+>     double distAlong;
+>     double distAcross;
+>     double slope;
+>     double minToFlow;
+>     double maxVelocity;
+> 
+>     // meta-data
+>     Measure latitude;
+>     Measure longitude;
+> 
+>     HydroNode(double nodeArea, double distAlong, double distAcross, double slope, double minToFlow, double maxVelocity, Measure latitude, Measure longitude)
+>       : latitude(latitude), longitude(longitude) {
+>       this->nodeArea = nodeArea;
+>       this->distAlong = distAlong;
+>       this->distAcross = distAcross;
+>       this->slope = slope;
+>       this->minToFlow = minToFlow;
+>       this->maxVelocity = maxVelocity;
+>     }
+> 
+>   public:
+>     virtual HydroNode* clone(map<HydroNode*, HydroNode*>& translate, list<HydroNode*>& created) = 0;
+> 
+>     virtual ~HydroNode() {}
+>     
+>     Measure getLatitude() {
+>       return latitude;
+>     }
+> 
+>     Measure getLongitude() {
+>       return longitude;
+>     }
+> 
+>     // ignore keys of map
+>     void setEdges(map<unsigned, pair<double, HydroNode*> >& edges, double divide = 1.0) {
+>       this->edges.clear();
+>       if (divide == 0)
+>         return;
+> 
+>       double total = 0;
+>       map<unsigned, pair<double, HydroNode*> >::iterator it;
+>       for (it = edges.begin(); it != edges.end(); it++) {
+>         this->edges.push_back(pair<double, HydroNode*>(it->second.first / divide, it->second.second));
+>         total += it->second.first / divide;
+>       }
+> 
+>       if (total < 1.0 - FLT_EPSILON * edges.size() || total > 1.0 + FLT_EPSILON * edges.size())
+>         throw runtime_error("Edges do not sum to 1: " + ToString::flong(total) + " for " + ToString::base10(divide));
+>     }
+> 
+>     // Slope is drop / run
+>     static double calcManning(double coeff, double radius, double slope) {
+>       if (radius <= 0 || slope <= 0)
+>         return 0.0;
+>       double vel = (1 / coeff) * pow(radius, 2.0/3.0) * sqrt(slope);
+> 
+>       return vel;
+>     }
+> 
+>     // From "Simpliﬁed versions for the Penman evaporation equation using routine weather data" by Valiantzas, 2006
+>     // temp in C, relhum between 0 and 1, light between 0 and 1 (portion of daylight hours light), lat in degrees, month = 1 for jan
+>     // the result is mm/day
+>     static double calcEvaporation(double temp, double relhum, double light, Measure lat, int month) {
+>       return 11.63 * exp(0.077 * temp) / 30;
+>     }
+> 
+>     void translateEdges(HydroNode& copy, map<HydroNode*, HydroNode*>& translate, list<HydroNode*>& created) {
+>       edges.clear();
+> 
+>       for (list< pair<double, HydroNode*> >::iterator it = copy.edges.begin(); it != copy.edges.end(); it++)
+>         edges.push_back(pair<double, HydroNode*>(it->first, HydroNode::getCopy(it->second, translate, created)));
+>     }
+> 
+>     static HydroNode* getCopy(HydroNode* node, map<HydroNode*, HydroNode*>& translate, list<HydroNode*>& created) {
+>       map<HydroNode*, HydroNode*>::iterator it = translate.find(node);
+>       if (it != translate.end())
+>         return it->second;
+> 
+>       HydroNode* copy = node->clone(translate, created);
+>       translate[node] = copy;
+>       created.push_back(copy);
+> 
+>       return copy;
+>     }
+> 
+>     // Serializable protocol
+> 
+>     virtual ostream& streamInsert(ostream& os, PointerTracker& tracker) const {
+>       latitude.streamInsert(os) << " ";
+>       longitude.streamInsert(os) << " ";
+>       os << nodeArea << " " << distAlong << " " <<
+> 	distAcross << " " << slope << " " << minToFlow << " " << maxVelocity << endl;
+>       os << edges.size() << endl;
+>       for (list< pair<double, HydroNode*> >::const_iterator it = edges.begin(); it != edges.end(); it++) {
+> 	os << it->first << " ";
+> 	if (tracker.streamInsertPointer(os, it->second))
+> 	  it->second->streamInsert(os, tracker);
+>       }
+>       return os;
+>     }
+> 
+>     virtual istream& streamExtract(istream& in, PointerReference& reference) {
+>       latitude = Measure::streamExtract(in);
+>       longitude = Measure::streamExtract(in);
+>       in >> nodeArea >> distAlong >>
+> 	distAcross >> slope >> minToFlow >> maxVelocity;
+> 
+>       cout << "AAA" << endl;
+>       
+>       uint size;
+>       double first;
+>       in >> size;
+>       edges.clear();
+>       for (uint ii = 0; ii < size; ii++) {
+> 	in >> first;
+> 	HydroNode* second = (HydroNode*) reference.streamExtractPointer(in, hydronodeConstructor);
+> 	edges.push_back(pair<double, HydroNode*>(first, second));
+>       }
+>       cout << "BBB" << endl;
+>       return in;
+>     }
+> 
+>     static void* streamExtractPointer(istream& in, PointerReference& reference) {
+> 	throw logic_error("HydroNode::streamExtractPointer not implemented; use hydronodeConstructor.");
+>     }
+>   };
+> 
+>   class HydroSurfaceNode : public HydroNode {
+>   private:
+>     static const double minSurfaceToFlow;
+>     static const double maxSurfaceVelocity;
+> 
+>   public:
+>     HydroSurfaceNode(double nodeArea, double distAlong, double distAcross, double slope,
+> 		     Measure latitude, Measure longitude)
+>       : HydroNode(nodeArea, distAlong, distAcross, slope, minSurfaceToFlow, maxSurfaceVelocity, latitude, longitude) {
+>     }
+> 
+>     virtual HydroNode* clone(map<HydroNode*, HydroNode*>& translate, list<HydroNode*>& created) {
+>       HydroNode* copy = new HydroSurfaceNode(*this);
+>       copy->translateEdges(*this, translate, created);
+> 
+>       return copy;
+>     }
+> 
+>     virtual double calcEvaporationRate(GeographicMap<double>& temps, GeographicMap<double>& snowCover, GeographicMap<double>& relhums, GeographicMap<double>& lights, double fracyear, double surfaceEvaporationFactor, double riverEvaporationFactor) {
+>       double evapRate = HydroNode::calcEvaporation(temps.getDouble(latitude, longitude) - 273.15, relhums.getDouble(latitude, longitude), lights.getDouble(latitude, longitude), latitude, max(fracyear * 12 + 1, 12.0));
+>       return surfaceEvaporationFactor * evapRate * (1.0 - snowCover.getDouble(latitude, longitude));
+>     }
+> 
+>     double calcManningSurface(double volume) {
+>       if (volume < minToFlow)
+>         return 0;
+> 
+>       double height = volume / nodeArea;
+>       double vel = calcManning(.025, height, max(height / (2 * distAlong), slope));
+>       return min(vel, maxVelocity); //90 * sqrt(height / 2)); //(water terminal velocity)
+>     }
+> 
+>     // Serializable protocol
+> 
+>     virtual ostream& streamInsert(ostream& os, PointerTracker& tracker) const {
+>       os << "HydroSurfaceNode" << endl;
+>       HydroNode::streamInsert(os, tracker);
+>       return os;
+>     }
+> 
+>     virtual istream& streamExtract(istream& in, PointerReference& reference) {
+>       return HydroNode::streamExtract(in, reference);
+>     }
+> 
+>     static void* streamExtractPointer(istream& in, PointerReference& reference) {
+>       HydroSurfaceNode* node = new HydroSurfaceNode(0., 0., 0., 0., Measure(0., Inds::lat), Measure(0., Inds::lon));
+>       node->streamExtract(in, reference);
+>       return node;
+>     }
+>   };
+> 
+>   class HydroRiverNode : public HydroNode  {
+>   private:
+>     static const double minRiverToFlow;
+>     static const double maxRiverVelocity;
+> 
+>   public:
+>     HydroRiverNode(double nodeArea, double distAlong, double distAcross, double slope,
+> 		   Measure latitude, Measure longitude)
+>       : HydroNode(nodeArea, distAlong, distAcross, slope, minRiverToFlow, maxRiverVelocity, latitude, longitude) {
+>     }
+> 
+>     virtual HydroNode* clone(map<HydroNode*, HydroNode*>& translate, list<HydroNode*>& created) {
+>       HydroNode* copy = new HydroRiverNode(*this);
+>       copy->translateEdges(*this, translate, created);
+> 
+>       return copy;
+>     }
+> 
+>     virtual double calcEvaporationRate(GeographicMap<double>& temps, GeographicMap<double>& snowCover, GeographicMap<double>& relhums, GeographicMap<double>& lights, double fracyear, double surfaceEvaporationFactor, double riverEvaporationFactor) {
+>       return riverEvaporationFactor * HydroNode::calcEvaporation(temps.getDouble(latitude, longitude) - 273.15, relhums.getDouble(latitude, longitude), lights.getDouble(latitude, longitude), latitude, max(fracyear * 12 + 1, 12.0));
+>     }
+> 
+>     double calcRiverWidth(double volume) {
+>       return 2 * sqrt((3 / M_PI) * volume / distAlong);
+>     }
+> 
+>     double calcManningRiver(double volume) {
+>       if (volume < minToFlow)
+>         return 0;
+> 
+>       // 1/3 of circle calculation
+>       double width = calcRiverWidth(volume);
+>       if (width <= 0)
+>         return 0;
+> 
+>       double r, height;
+>       if (width > distAcross) {
+>         r = volume / nodeArea;
+>         height = r;
+>       } else {
+>         r = (volume / distAlong) / (M_PI * width / 3);
+>         height = width / 2;
+>       }
+> 
+>       double vel = calcManning(.033, r, max(height / (2 * distAlong), slope));
+>       return min(vel, maxVelocity); //90 * sqrt(height)); // terminal velocity
+>     }
+> 
+>     // Serializable protocol
+> 
+>     virtual ostream& streamInsert(ostream& os, PointerTracker& tracker) const {
+>       os << "HydroRiverNode" << endl;
+>       HydroNode::streamInsert(os, tracker);
+>       return os;
+>     }
+> 
+>     virtual istream& streamExtract(istream& in, PointerReference& reference) {
+>       return HydroNode::streamExtract(in, reference);
+>     }
+> 
+>     static void* streamExtractPointer(istream& in, PointerReference& reference) {
+>       HydroRiverNode* node = new HydroRiverNode(0., 0., 0., 0., Measure(0., Inds::lat), Measure(0., Inds::lon));
+>       node->streamExtract(in, reference);
+>       return node;
+>     }
+>   };
+> 
+>   class HydroOutputNode : public HydroNode  {
+>   public:
+>     HydroOutputNode()
+>       : HydroNode(0, 0, 0, 0, 0, 0, Measure(0, Inds::lat), Measure(0, Inds::lon)) {
+>     }
+> 
+>     virtual HydroNode* clone(map<HydroNode*, HydroNode*>& translate, list<HydroNode*>& created) {
+>       HydroNode* copy = new HydroOutputNode(*this);
+>       copy->translateEdges(*this, translate, created);
+> 
+>       return copy;
+>     }
+> 
+>     virtual void stepModel(double dt) {
+>       // ignore
+>     }
+> 
+>     virtual void stepPost() {
+>       // ignore
+>     }
+> 
+>     virtual double calcVelocity() {
+>       return 0;
+>     }
+> 
+>     virtual double calcEvaporationRate(GeographicMap<double>& temps, GeographicMap<double>& snowCover, GeographicMap<double>& relhums, GeographicMap<double>& lights, double fracyear, double surfaceEvaporationFactor, double riverEvaporationFactor) {
+>       return 0;
+>     }
+> 
+>     // Serialization
+> 
+>     virtual ostream& streamInsert(ostream& os, PointerTracker& tracker) const {
+>       os << "HydroOutputNode" << endl;
+>       HydroNode::streamInsert(os, tracker);
+>       return os;
+>     }
+> 
+>     virtual istream& streamExtract(istream& in, PointerReference& reference) {
+>       HydroNode::streamExtract(in, reference);
+>       return in;
+>     }
+> 
+>     static void* streamExtractPointer(istream& in, PointerReference& reference) {
+>       HydroOutputNode* node = new HydroOutputNode();
+>       node->streamExtract(in, reference);
+>       return node;
+>     }
+> 
+>   };
+> 
+>   class HydroNet {
+>   protected:
+>     GeographicMap<double> mask_coarse;
+>     map<unsigned, HydroNode*> surfaces_coarse; // mask_coarse index -> surface node
+>     map<unsigned, list<HydroNode*>*> nodemap_coarse; // mask_coarse index -> many nodes
+> 
+>     // List of nodes created (currently just during copy)
+>     list<HydroNode*> created;
+>     
+>   public:
+>     HydroNet(GeographicMap<double>& mask_coarse)
+>       : mask_coarse(mask_coarse) {
+>     }
+> 
+>     HydroNet(HydroNet& copy, map<HydroNode*, HydroNode*>& translate)
+>       : mask_coarse(copy.mask_coarse) {
+> 
+>       for (map<unsigned, HydroNode*>::iterator it = copy.surfaces_coarse.begin(); it != copy.surfaces_coarse.end(); it++) {
+>         surfaces_coarse[it->first] = HydroNode::getCopy(it->second, translate, created);
+>       }
+>       for (map<unsigned, list<HydroNode*>*>::iterator it = copy.nodemap_coarse.begin(); it != copy.nodemap_coarse.end(); it++) {
+>         list<HydroNode*>* nodes = new list<HydroNode*>();
+>         for (list<HydroNode*>::iterator lit = it->second->begin(); lit != it->second->end(); lit++)
+>           nodes->push_back(HydroNode::getCopy(*lit, translate, created));
+> 
+>         nodemap_coarse[it->first] = nodes;
+>       }
+>     }
+> 
+>     virtual ~HydroNet() {
+>       for (list<HydroNode*>::iterator lit = created.begin(); lit != created.end(); lit++)
+> 	delete *lit;
+>     }
+>     
+>     HydroOutputNode* test(DInfinityMap& direction_fine) {
+>       return NULL;
+>     }
+> 
+>     HydroOutputNode* generate(DInfinityMap& direction_fine, GeographicMap<bool>& mask_fine, GeographicMap<double>& slope_fine, double min_dist) {
+>       HydroOutputNode* out = new HydroOutputNode();
+>       HydroOutputNode* ignore = new HydroOutputNode();
+> 
+>       map<unsigned, HydroNode*> rivers;
+> 
+>       surfaces_coarse.clear();
+>       nodemap_coarse.clear();
+> 
+>       // Loop over all surface cells
+>       for (unsigned rr = 0; rr < mask_coarse.getLatitudes().count(); rr++)
+>         for (unsigned cc = 0; cc < mask_coarse.getLongitudes().count(); cc++) {
+>           cout << "Generating cell " << rr << ", " << cc << endl;
+> 
+>           HydroNode* surface = generateSurfaceNode(rr, cc, out, ignore, rivers, direction_fine, mask_fine, slope_fine, min_dist);
+> 	  
+>           surfaces_coarse[mask_coarse.getIndex(rr, cc)] = surface;
+>           addToNodeMap(surface, mask_coarse.getIndex(rr, cc));
+>         }
+> 
+>       return out;
+>     }
+> 
+>     void generateSurfaceNodeFiles(DInfinityMap& direction_fine, GeographicMap<bool>& mask_fine, GeographicMap<double>& slope_fine, double min_dist) {
+>       surfaces_coarse.clear();
+>       nodemap_coarse.clear();
+> 
+>       // Loop over all surface cells
+>       for (unsigned rr = 0; rr < mask_coarse.getLatitudes().count(); rr++)
+>         for (unsigned cc = 0; cc < mask_coarse.getLongitudes().count(); cc++) {
+> 	  std::ifstream file("outputnode-" + std::to_string(rr) + "-" + std::to_string(cc) + ".dat");
+> 	  if (file.good())
+> 	    continue;
+>           cout << "Generating cell " << rr << ", " << cc << endl;
+> 
+> 	  HydroOutputNode* out = new HydroOutputNode();
+> 	  HydroOutputNode* ignore = new HydroOutputNode();
+> 	  
+> 	  map<unsigned, HydroNode*> rivers;
+> 
+>           HydroNode* surface = generateSurfaceNode(rr, cc, out, ignore, rivers, direction_fine, mask_fine, slope_fine, min_dist);
+> 
+> 	  std::ofstream binaryFile("outputnode-" + std::to_string(rr) + "-" + std::to_string(cc) + ".dat", std::ios::binary);
+> 	  PointerTracker tracker;
+> 	  surface->streamInsert(binaryFile, tracker);
+> 	  out->streamInsert(binaryFile, tracker);
+> 	  ignore->streamInsert(binaryFile, tracker);
+> 	  binaryFile << endl;
+> 	  binaryFile.close();
+>         }
+>     }
+> 
+>     HydroOutputNode* generateFromSurfaceNodeFiles() {
+>       HydroOutputNode* out = new HydroOutputNode();
+>       // HydroOutputNode* ignore = new HydroOutputNode();
+> 
+>       // TODO: Merge together out and ignores?
+> 
+>       map<unsigned, HydroNode*> rivers;
+> 
+>       surfaces_coarse.clear();
+>       nodemap_coarse.clear();
+> 
+>       // Loop over all surface cells
+>       for (unsigned rr = 0; rr < mask_coarse.getLatitudes().count(); rr++)
+>         for (unsigned cc = 0; cc < mask_coarse.getLongitudes().count(); cc++) {
+> 	  cout << rr << ", " << cc << endl;
+> 	  std::ifstream binaryFile("outputnode-" + std::to_string(rr) + "-" + std::to_string(cc) + ".dat", std::ios::binary);
+> 	  PointerReference tracker;
+> 
+> 	  string subclass;
+> 	  getline(binaryFile, subclass);
+> 	  assert(subclass == "HydroSurfaceNode");
+> 
+> 	  HydroNode* surface = (HydroNode*) HydroSurfaceNode::streamExtractPointer(binaryFile, tracker);
+> 	  binaryFile.close();
+> 	  
+>           surfaces_coarse[mask_coarse.getIndex(rr, cc)] = surface;
+>           addToNodeMap(surface, mask_coarse.getIndex(rr, cc));
+>         }
+> 
+>       return out;
+>     }
+> 
+> 
+>     HydroSurfaceNode* generateSurfaceNode(unsigned rr, unsigned cc, HydroOutputNode* out, HydroOutputNode* ignore, map<unsigned, HydroNode*> rivers, DInfinityMap& direction_fine, GeographicMap<bool>& mask_fine, GeographicMap<double>& slope_fine, double min_dist) {
+>       double total_dist = 0, total_slope = 0, weight_slope = 0;
+>       unsigned paths = 0;
+> 
+>       map<unsigned, pair<double, HydroNode*> > edges;
+> 
+>       // Loop over all elevation cells within
+>       for (Measure lat = mask_coarse.getLatitudes().getCellMin(rr) + mask_fine.getLatitudes().getWidths() / 2;
+> 	   lat < mask_coarse.getLatitudes().getCellMax(rr); lat += mask_fine.getLatitudes().getWidths())
+> 	for (Measure lon = mask_coarse.getLongitudes().getCellMin(cc) + mask_fine.getLongitudes().getWidths() / 2;
+> 	     lon < mask_coarse.getLongitudes().getCellMax(cc); lon += mask_fine.getLongitudes().getWidths()) {
+> 	  
+> 	  if (lat < mask_fine.getLatitudes().getMin() || lat >= mask_fine.getLatitudes().getMax() ||
+> 	      lon < mask_fine.getLongitudes().getMin() || lon >= mask_fine.getLongitudes().getMax() ||
+> 	      mask_fine.getDouble(lat, lon) == 0)
+> 	    continue;
+> 	  
+> 	  paths++;
+> 	  
+> 	  // Follow this out of the cell
+> 	  queue< pair< pair<Measure, Measure>, double> > pending;
+> 	  pending.push(pair< pair<Measure, Measure>, double>(pair<Measure, Measure>(lat, lon), 1.0));
+> 	  
+> 	  while (!pending.empty()) {
+> 	    pair< pair<Measure, Measure>, double> llp = pending.front();
+> 	    pair<Measure, Measure> ll = llp.first;
+> 	    if (ll.first < mask_coarse.getLatitudes().getCellMin(rr) ||
+> 		ll.first >= mask_coarse.getLatitudes().getCellMax(rr) ||
+> 		ll.second < mask_coarse.getLongitudes().getCellMin(cc) ||
+> 		ll.second >= mask_coarse.getLongitudes().getCellMax(cc)) {
+> 	      // connect this to the river out
+> 	      if (rivers.find(mask_fine.getIndex(ll.first, ll.second)) == rivers.end())
+> 		generateRiver(ll.first, ll.second, rivers, direction_fine, mask_fine, slope_fine, out, ignore, min_dist);
+> 	      
+> 	      addEdge(edges, mask_fine.getIndex(ll.first, ll.second), llp.second, rivers[mask_fine.getIndex(ll.first, ll.second)]);
+> 	    } else {
+> 	      total_dist += llp.second * mask_fine.calcCellSpan(lat, lon);
+> 	      total_slope += llp.second * slope_fine.getDouble(lat, lon);
+> 	      weight_slope += llp.second;
+> 	      
+> 	      followRiver(ll.first, ll.second, llp.second, pending, edges, direction_fine, mask_fine, out, ignore);
+> 	    }
+> 	    
+> 	    pending.pop();
+> 	  }
+> 	}
+> 
+>       Measure latitude(Inds::lat), longitude(Inds::lon);
+>       mask_coarse.calcLatitudeLongitude(rr, cc, latitude, longitude);
+>       
+>       HydroSurfaceNode* surface = new HydroSurfaceNode(mask_coarse.calcArea(rr, cc) * mask_coarse.getCellConst(rr, cc),
+> 						       max(total_dist / paths, min_dist / 4), mask_coarse.calcDistance(rr - 1, cc - 1, rr + 1, cc + 1) / (2 * M_SQRT2),
+> 						       total_slope / weight_slope, latitude, longitude);
+>       // divide edges weights by #paths
+>       surface->setEdges(edges, paths);
+>       return surface;
+>     }
+> 
+>     // generate a river out of this cell
+>     void generateRiver(Measure lat, Measure lon, map<unsigned, HydroNode*>& rivers, DInfinityMap& direction_fine, GeographicMap<bool>& mask_fine, GeographicMap<double>& slope_fine, HydroOutputNode* out, HydroOutputNode* ignore, double min_dist, double bigger = 0) {
+>       //cout << "Generating river at " << lat << ", " << lon << " (" << bigger << ")" << endl;
+>       rivers[mask_fine.getIndex(lat, lon)] = ignore; // temporary
+> 
+>       map<unsigned, pair<double, HydroNode*> > edges;
+>       double total_dist = 0, total_slope = 0, weight_slope = 0;
+> 
+>       unsigned rr = mask_coarse.getLatitudes().inRange(lat), cc = mask_coarse.getLongitudes().inRange(lon);
+>       bool offedge = false;
+> 
+>       // Follow this out of the cell
+>       queue< pair< pair<Measure, Measure>, double> > pending;
+>       pending.push(pair< pair<Measure, Measure>, double>(pair<Measure, Measure>(lat, lon), 1.0));
+> 
+>       while (!pending.empty()) {
+>         pair< pair<Measure, Measure>, double> llp = pending.front();
+>         pair<Measure, Measure> ll = llp.first;
+>         if (ll.first < mask_coarse.getLatitudes().getCellMin(rr) - mask_coarse.getLatitudes().getWidths() * bigger ||
+>             ll.first >= mask_coarse.getLatitudes().getCellMax(rr) + mask_coarse.getLatitudes().getWidths() * bigger ||
+>             ll.second < mask_coarse.getLongitudes().getCellMin(cc) - mask_coarse.getLongitudes().getWidths() * bigger ||
+>             ll.second >= mask_coarse.getLongitudes().getCellMax(cc) + mask_coarse.getLongitudes().getWidths() * bigger) {
+>           //cout << "Exit at " << ll.first << ", " << ll.second << endl;
+>           // is this the output node?
+>           if (mask_fine.getDouble(ll.first, ll.second) == 0)
+>             rivers[mask_fine.getIndex(ll.first, ll.second)] = out;
+> 
+>           if (rivers.find(mask_fine.getIndex(ll.first, ll.second)) == rivers.end())
+>             generateRiver(ll.first, ll.second, rivers, direction_fine, mask_fine, slope_fine, out, ignore, min_dist);
+> 
+>           addEdge(edges, mask_fine.getIndex(ll.first, ll.second), llp.second, rivers[mask_fine.getIndex(ll.first, ll.second)]);
+>         } else {
+>           //cout << "Cont to " << ll.first << ", " << ll.second << endl;
+>           total_dist += llp.second * mask_fine.calcCellSpan(lat, lon);
+>           total_slope += llp.second * slope_fine.getDouble(lat, lon);
+>           weight_slope += llp.second;
+> 
+>           bool riverOffedge = followRiver(ll.first, ll.second, llp.second, pending, edges, direction_fine, mask_fine, out, ignore);
+>           offedge = offedge || riverOffedge;
+>         }
+> 
+>         pending.pop();
+>       }
+> 
+>       if (total_dist < min_dist && !offedge && bigger < 2) {
+>         //cout << "Total Dist: " << total_dist << endl;
+>         return generateRiver(lat, lon, rivers, direction_fine, mask_fine, slope_fine, out, ignore, min_dist, bigger + 1);
+>       }
+>       if (total_dist < min_dist)
+>         total_dist = min_dist;
+> 
+>       // actually make the river and add it to rivers
+>       HydroNode* river = new HydroRiverNode(total_dist * mask_fine.calcCellSpan(lat, lon),
+>                                             total_dist, mask_fine.calcCellSpan(lat, lon),
+>                                             total_slope / weight_slope, lat, lon);
+> 
+>       river->setEdges(edges);
+>       rivers[mask_fine.getIndex(lat, lon)] = river;
+>       addToNodeMap(river, mask_coarse.getIndex(lat, lon));
+>     }
+> 
+>     void addEdge(map<unsigned, pair<double, HydroNode*> >& edges, unsigned index, double weight, HydroNode* target) {
+>       if (edges.find(index) == edges.end())
+>         edges[index] = pair<double, HydroNode*>(weight, target);
+>       else
+>         edges[index].first += weight;
+>     }
+> 
+>     // returns true if flows off edge
+>     bool followRiver(Measure lat, Measure lon, double weight, queue< pair< pair<Measure, Measure>, double> >& pending, map<unsigned, pair<double, HydroNode*> >& edges, DInfinityMap& direction_fine, GeographicMap<bool>& mask_fine, HydroOutputNode* out, HydroOutputNode* ignore) {
+>       if (weight < .01) {
+>         addEdge(edges, mask_fine.getIndex(lat, lon), weight, ignore);
+>         return false;
+>       }
+> 
+>       Measure lat0(Inds::lat), lon0(Inds::lon), lat1(Inds::lat), lon1(Inds::lon);
+>       double portion0;
+> 
+>       bool offedge = false;
+> 
+>       direction_fine.getDirections(lat, lon, lat0, lon0, lat1, lon1, portion0);
+>       if (lat == lat0 && lon == lon0 && lat == lat1 && lon == lon1)
+> 	return false; // No direction: missing data
+> 
+>       bool make_fine_0, make_fine_1;
+>       try {
+> 	make_fine_0 = mask_fine.getDouble(lat0, lon0);
+>       } catch (runtime_error& e) {
+> 	make_fine_0 = false;
+>       }
+>       try {
+> 	make_fine_1 = mask_fine.getDouble(lat1, lon1);
+>       } catch (runtime_error& e) {
+> 	make_fine_1 = false;
+>       }
+>       
+>       if (portion0 > 0) {
+>         if (make_fine_0 == 0) {
+>           if (portion0 < 1)
+>             addEdge(edges, mask_fine.getIndex(lat, lon), portion0 * weight, ignore);
+>           else
+>             addEdge(edges, mask_fine.getIndex(lat, lon), portion0 * weight, out);
+>           offedge = true;
+>         } else {
+>           if (lat0 >= mask_fine.getLatitudes().getMin() + mask_fine.getLatitudes().getWidths() &&
+>               lat0 < mask_fine.getLatitudes().getMax() - mask_fine.getLatitudes().getWidths() &&
+>               lon0 >= mask_fine.getLongitudes().getMin() + mask_fine.getLongitudes().getWidths() &&
+>               lon0 < mask_fine.getLongitudes().getMax() - mask_fine.getLongitudes().getWidths())
+>             pending.push(pair< pair<Measure, Measure>, double>(pair<Measure, Measure>(lat0, lon0), portion0 * weight));
+>           else {
+>             addEdge(edges, mask_fine.getIndex(lat, lon), portion0 * weight, out);
+>             offedge = true;
+>           }
+>         }
+>       }
+>       if (portion0 < 1) {
+>         if (make_fine_1 == 0) {
+>           if (portion0 > 0)
+>             addEdge(edges, mask_fine.getIndex(lat, lon), (1 - portion0) * weight, ignore);
+>           else
+>             addEdge(edges, mask_fine.getIndex(lat, lon), (1 - portion0) * weight, out);
+>           offedge = true;
+>         } else {
+>           if (lat1 >= mask_fine.getLatitudes().getMin() + mask_fine.getLatitudes().getWidths() &&
+>               lat1 < mask_fine.getLatitudes().getMax() - mask_fine.getLatitudes().getWidths() &&
+>               lon1 >= mask_fine.getLongitudes().getMin() + mask_fine.getLongitudes().getWidths() &&
+>               lon1 < mask_fine.getLongitudes().getMax() - mask_fine.getLongitudes().getWidths())
+>             pending.push(pair< pair<Measure, Measure>, double>(pair<Measure, Measure>(lat1, lon1), (1 - portion0) * weight));
+>           else {
+>             addEdge(edges, mask_fine.getIndex(lat, lon), (1 - portion0) * weight, out);
+>             offedge = true;
+>           }
+>         }
+>       }
+> 
+>       return offedge;
+>     }
+> 
+>     void addToNodeMap(HydroNode* node, unsigned index) {
+>       list<HydroNode*>* nodes = NULL;
+> 
+>       if (nodemap_coarse.find(index) == nodemap_coarse.end()) {
+>         nodes = new list<HydroNode*>();
+>         nodemap_coarse[index] = nodes;
+>       } else
+>         nodes = nodemap_coarse[index];
+> 
+>       nodes->push_back(node);
+>     }
+> 
+>     // Serializable protocol
+> 
+>     friend void* nodeListConstructor(istream& in, PointerReference& reference);
+> 
+>     virtual istream& streamExtract(istream& in, PointerReference& reference) {
+>       unsigned surfaces_count;
+>       in >> surfaces_count;
+> 
+>       for (unsigned ii = 0; ii < surfaces_count; ii++) {
+> 	unsigned index;
+> 	in >> index;
+> 	throw runtime_error("Need to have a extractor dictionary, and save the class names!");
+> 	//XXX: HydroNode* node = HydroNode::streamExtractPointer(in, reference);
+> 	//surfaces_coarse.insert(pair<unsigned, HydroNode*>(index, node));
+>       }
+> 
+>       unsigned nodemap_count;
+>       in >> nodemap_count;
+> 
+>       for (unsigned ii = 0; ii < nodemap_count; ii++) {
+> 	unsigned index;
+> 	in >> index;
+> 
+> 	list<HydroNode*>* nodeList = (list<openworld::HydroNode*>*) reference.streamExtractPointer(in, nodeListConstructor);
+> 	nodemap_coarse.insert(pair<unsigned, list<HydroNode*>*>(index, nodeList));
+>       }
+> 
+>       return in;
+>     }
+> 
+>     virtual ostream& streamInsert(ostream& os, PointerTracker& tracker) const {
+>       os << surfaces_coarse.size() << " ";
+> 
+>       for (map<unsigned, HydroNode*>::const_iterator it = surfaces_coarse.begin() ; it != surfaces_coarse.end(); it++) {
+> 	os << it->first << " ";
+> 	it->second->streamInsertPointer(os, tracker);
+>       }
+> 
+>       os << nodemap_coarse.size() << " ";
+> 
+>       for (map<unsigned, list<HydroNode*>*>::const_iterator it = nodemap_coarse.begin() ; it != nodemap_coarse.end(); it++) {
+> 	os << it->first << " ";
+> 	if (tracker.streamInsertPointer(os, it->second)) {
+> 	  os << it->second->size() << " ";
+> 
+> 	  for (list<HydroNode*>::iterator jt = it->second->begin(); jt != it->second->end(); ++jt)
+> 	    (*jt)->streamInsertPointer(os, tracker);
+> 	}
+>       }
+> 
+>       return os;
+>     }
+> 
+>   };
+> }
+> 
+> #endif
+> ```
+> 
+> From another script, I'm calling "generateSurfaceNodeFiles" to generate files and "generateFromSurfaceNodeFiles" to reconstruct the result. The weird thing is that it all works fine if the line `cout << "BBB" << endl;` is there, but not if I remove it (it fails quickly, reading something into a void* when it shouldn't). What's going on?
+**assistant**:
+> You’ve hit a classic C++ stream‑formatting landmine: your serialization is *text-based*, but you’re using it in a way that assumes fixed record boundaries and clean tokenization. The `cout << "BBB" << endl;` line changes timing/ordering of I/O just enough to hide the underlying bug; when you remove it, you see the real problem.
+> 
+> Here’s what’s actually going on and how to fix it.
+> 
+> ---
+> 
+> ## 1. Your “binary” files are really text streams
+> 
+> You open your files with:
+> 
+> ```c++
+> std::ofstream binaryFile("outputnode-...", std::ios::binary);
+> ...
+> surface->streamInsert(binaryFile, tracker);
+> out->streamInsert(binaryFile, tracker);
+> ignore->streamInsert(binaryFile, tracker);
+> binaryFile << endl;
+> ```
+> 
+> But `streamInsert` uses normal text output:
+> 
+> ```c++
+> virtual ostream& streamInsert(ostream& os, PointerTracker& tracker) const {
+>     os << "HydroSurfaceNode" << endl;
+>     HydroNode::streamInsert(os, tracker);
+>     return os;
+> }
+> 
+> ostream& HydroNode::streamInsert(ostream& os, PointerTracker& tracker) const {
+>     latitude.streamInsert(os) << " ";
+>     longitude.streamInsert(os) << " ";
+>     os << nodeArea << " " << distAlong << " "
+>        << distAcross << " " << slope << " " << minToFlow << " " << maxVelocity << endl;
+>     os << edges.size() << endl;
+>     for ( ... ) {
+>         os << it->first << " ";
+>         if (tracker.streamInsertPointer(os, it->second))
+>             it->second->streamInsert(os, tracker);
+>     }
+>     return os;
+> }
+> ```
+> 
+> So the actual file layout is (schematically):
+> 
+> ```text
+> HydroSurfaceNode\n
+> [lat fields] [lon fields] nodeArea distAlong distAcross slope minToFlow maxVelocity\n
+> edges_count\n
+> w1 <pointer-encoding-1> [maybe nested node data...]
+> w2 <pointer-encoding-2> ...
+> HydroOutputNode\n
+> ...
+> HydroOutputNode\n
+> ...
+> \n
+> ```
+> 
+> Then you read with:
+> 
+> ```c++
+> std::ifstream binaryFile("outputnode-...", std::ios::binary);
+> PointerReference tracker;
+> 
+> string subclass;
+> getline(binaryFile, subclass);
+> assert(subclass == "HydroSurfaceNode");
+> 
+> HydroNode* surface =
+>     (HydroNode*) HydroSurfaceNode::streamExtractPointer(binaryFile, tracker);
+> ```
+> 
+> and `streamExtractPointer` does:
+> 
+> ```c++
+> static void* streamExtractPointer(istream& in, PointerReference& reference) {
+>     HydroSurfaceNode* node =
+>         new HydroSurfaceNode(0., 0., 0., 0., Measure(0., Inds::lat), Measure(0., Inds::lon));
+>     node->streamExtract(in, reference);
+>     return node;
+> }
+> ```
+> 
+> with `HydroNode::streamExtract`:
+> 
+> ```c++
+> virtual istream& streamExtract(istream& in, PointerReference& reference) {
+>     latitude = Measure::streamExtract(in);
+>     longitude = Measure::streamExtract(in);
+>     in >> nodeArea >> distAlong >> distAcross >> slope >> minToFlow >> maxVelocity;
+> 
+>     cout << "AAA" << endl;
+>       
+>     uint size;
+>     double first;
+>     in >> size;
+>     edges.clear();
+>     for (uint ii = 0; ii < size; ii++) {
+>         in >> first;
+>         HydroNode* second =
+>             (HydroNode*) reference.streamExtractPointer(in, hydronodeConstructor);
+>         edges.push_back(pair<double, HydroNode*>(first, second));
+>     }
+>     cout << "BBB" << endl;
+>     return in;
+> }
+> ```
+> 
+> So far so good — if the file position is *exactly* right at every step.
+> 
+> ---
+> 
+> ## 2. Where it goes wrong: token boundaries + pointer encoding
+> 
+> The pointer tracking system is critical and opaque here, but you’re doing:
+> 
+> - On write: `tracker.streamInsertPointer(os, it->second)`  
+>   This presumably writes:
+>   - Something like an ID, *or*
+>   - Some control token (“new pointer / existing pointer”), *and maybe* then calls `streamInsert` for that pointed‑to object.
+> 
+> - On read: `reference.streamExtractPointer(in, hydronodeConstructor)`  
+>   This reads whatever `streamInsertPointer` wrote and either:
+>   - Returns an existing object, or  
+>   - Calls `hydronodeConstructor(in, reference)` to build a new one.
+> 
+> The failure you see:
+> 
+> > “it fails quickly, reading something into a void* when it shouldn’t”
+> 
+> is exactly what happens when:
+> 
+> - The input stream is *misaligned*: the next token you think is a pointer header is actually some numeric value, a class name string, or a newline leftover.
+> - `streamExtractPointer` consumes the wrong bytes, interprets them as its own protocol, and then either:
+>   - Returns garbage, or
+>   - Calls your constructor with the stream already out of sync.
+> 
+> The weird dependence on the `cout << "BBB" << endl;` is a big red flag that the read/write protocol is *fragile*: that print statement forces a particular interleaving of operations and flushes, which happen to line up the stream so you don’t immediately hit the bug.
+> 
+> Remove it, the compiler or runtime reorders slightly, and you read one token too early or too late.
+> 
+> ---
+> 
+> ## 3. Likely concrete issues in your code
+> 
+> Several suspects combine here:
+> 
+> ### 3.1. Mixed “framing” — no explicit record delimiters
+> 
+> You are effectively writing a *stream of objects*:
+> 
+> - `"HydroSurfaceNode"` + its data + possibly nested nodes
+> - `"HydroOutputNode"` + its data
+> - `"HydroOutputNode"` + its data
+> - etc.
+> 
+> But on read:
+> 
+> - You assume the first line is exactly `"HydroSurfaceNode"` and then that all subsequent reads line up nicely with how the pointers + edges were written.
+> - You don’t read back the `"HydroOutputNode"` lines or their bodies at all in `generateFromSurfaceNodeFiles`; you only deserialize the surface node.
+> 
+> That’s safe only if:
+> 
+> - `PointerTracker` never recursively serializes those `out` and `ignore` nodes referenced from `surface`, or
+> - Those pointers are written in a way that’s fully consumed inside `HydroNode::streamExtract`.
+> 
+> If `tracker.streamInsertPointer(os, it->second)` *does* cause `out` or `ignore` to be serialized inline (and `streamExtractPointer` knows to call `HydroOutputNode::streamExtractPointer` accordingly), but on read you treat *every* pointer as a `HydroNode` via `hydronodeConstructor`, then:
+> 
+> - You are feeding HydroOutputNode records into a constructor that expects a HydroSurfaceNode or HydroRiverNode, or vice versa.
+> - Once any such parse goes off, every subsequent `reference.streamExtractPointer` is misaligned.
+> 
+> Your comment here shows you know this is a missing piece:
+> 
+> ```c++
+> throw runtime_error("Need to have a extractor dictionary, and save the class names!");
+> //XXX: HydroNode* node = HydroNode::streamExtractPointer(in, reference);
+> ```
+> 
+> You don’t yet have a proper class-dispatching deserializer; but your pointer tracker may be serializing multiple subclasses anyway.
+> 
+> ### 3.2. Mixing `getline` and `operator>>` without strict framing
+> 
+> You’ve already noted in another context that mixing `operator>>` with `getline` is dangerous. Here you do:
+> 
+> - `getline(binaryFile, subclass);`
+> - Then inside `streamExtract`, many `in >>` calls.
+> 
+> If any preceding write didn’t leave the file exactly at the beginning of the `"HydroSurfaceNode\n"` line, or left extra whitespace/newlines, `getline` will happily skip or consume them, and you’ll start reading `"HydroSurfaceNode"` or the next token from the wrong byte.
+> 
+> When the I/O scheduling changes (with or without `cout << "BBB"`), that fragile boundary can shift.
+> 
+> ---
+> 
+> ## 4. Why `cout << "BBB"` “fixes” it
+> 
+> The print:
+> 
+> ```c++
+> cout << "BBB" << endl;
+> ```
+> 
+> - Forces a flush of `stdout`.
+> - Prevents certain compiler optimizations or reordering across that call.
+> - Changes timing and *sometimes* the way your test harness interleaves I/O with other operations (especially if using multiple threads, or if you re-open files rapidly, etc.).
+> 
+> In a strictly correct, fully deterministic single-threaded program with correct stream protocol, adding or removing a `cout` should not matter.
+> 
+> The fact that it does means:
+> 
+> - There’s an undefined behavior or a protocol violation (reading beyond the written tokens, interpreting wrong type, using uninitialized memory, etc.), and
+> - The extra call happens to push that undefined behavior into a non-crashing regime.
+> 
+> In your case, it’s almost certainly due to reading the wrong tokens as pointer metadata, causing:
+> 
+> - A bogus `void*` from `streamExtractPointer`, or
+> - A constructor being invoked on completely wrong stream position.
+> 
+> ---
+> 
+> ## 5. Concrete fixes
+> 
+> To make this robust and independent of debug prints, you’ll want to tighten the serialization protocol.
+> 
+> ### 5.1. Add an explicit class tag for every node, and use it on read
+> 
+> Right now:
+> 
+> - You write `"HydroSurfaceNode"` / `"HydroRiverNode"` / `"HydroOutputNode"` at the top of each node’s serialization.
+> - But `HydroNode::streamExtractPointer` is unimplemented, and your pointer deserialization always calls `hydronodeConstructor`.
+> 
+> You should implement:
+> 
+> ```c++
+> /// Decide which subclass constructor to use
+> void* hydronodeConstructor(istream& in, PointerReference& reference) {
+>     std::string subclass;
+>     std::getline(in, subclass);  // or better: read as a length-prefixed string
+> 
+>     if (subclass == "HydroSurfaceNode")
+>         return HydroSurfaceNode::streamExtractPointer(in, reference);
+>     else if (subclass == "HydroRiverNode")
+>         return HydroRiverNode::streamExtractPointer(in, reference);
+>     else if (subclass == "HydroOutputNode")
+>         return HydroOutputNode::streamExtractPointer(in, reference);
+>     else
+>         throw std::runtime_error("Unknown HydroNode subclass: " + subclass);
+> }
+> ```
+> 
+> And then, *everywhere* you deserialize a `HydroNode*` via `PointerReference`, make sure it uses `hydronodeConstructor`, not some default that assumes a single type.
+> 
+> This way, when `streamExtractPointer` for a pointer sees a node that is actually an output node or a river node, it will:
+> 
+> - Read its tag (`HydroOutputNode` / `HydroRiverNode` / …),
+> - Construct the right subclass,
+> - Call the right `streamExtract`, aligning the stream correctly.
+> 
+> ### 5.2. Stop mixing arbitrary `getline` with unknown prior state
+> 
+> In `generateFromSurfaceNodeFiles`:
+> 
+> ```c++
+> string subclass;
+> getline(binaryFile, subclass);
+> assert(subclass == "HydroSurfaceNode");
+> 
+> HydroNode* surface =
+>     (HydroNode*) HydroSurfaceNode::streamExtractPointer(binaryFile, tracker);
+> ```
+> 
+> This hard-codes class knowledge in two places:
+> 
+> - Once here (`assert(subclass == "HydroSurfaceNode")`)
+> - Once inside `HydroSurfaceNode::streamExtractPointer`
+> 
+> Better pattern:
+> 
+> ```c++
+> PointerReference tracker;
+> HydroNode* node = (HydroNode*) hydronodeConstructor(binaryFile, tracker);
+> HydroSurfaceNode* surface = dynamic_cast<HydroSurfaceNode*>(node);
+> if (!surface) {
+>     throw std::runtime_error("Expected HydroSurfaceNode in file but got something else");
+> }
+> ```
+> 
+> Now you are not pre‑consuming the line with `getline` separately — the constructor is responsible for reading its own type tag. That keeps reading and writing symmetric.
+> 
+> If you *do* want to keep the first `getline`, then your constructor must **not** read the subclass line again; they must match exactly.
+> 
+> ### 5.3. Consider a stricter framing protocol
+> 
+> Right now, all fields are whitespace-separated text. That makes exact recovery fragile if:
+> 
+> - You ever change formatting,
+> - `Measure::streamInsert` / `streamExtract` include internal spaces or newlines,
+> - The pointer tracker writes tokens that could be confused with your data.
+> 
+> More robust options you might like:
+> 
+> - Length‑prefixed blocks: `[type-tag-length][type-tag-bytes][payload-length][payload-bytes]`.
+> - Or a pure binary format with fixed field layouts.
+> 
+> Given your existing code, the *minimal* change is:
+> 
+> - Ensure every serialized node always starts with a single line: the subclass name + `\n`.
+> - Then insist that every constructor:
+>   - Consumes that line once and only once, and
+>   - Reads a fixed, known sequence of next tokens.
+> 
+> ---
+> 
+> ## 6. What to do immediately
+> 
+> If you want a fast path to “it works without `cout << "BBB"`”:
+> 
+> 1. **Implement `hydronodeConstructor` fully** so it dispatches on `"HydroSurfaceNode"`, `"HydroRiverNode"`, `"HydroOutputNode"`, etc., and calls the corresponding `streamExtractPointer`.
+> 
+> 2. **Remove the top-level `getline` in `generateFromSurfaceNodeFiles` and let `hydronodeConstructor` own reading the type tag**, or ensure they don’t both consume it.
+> 
+>    For example, switch to:
+> 
+>    ```c++
+>    std::ifstream binaryFile(...);
+>    PointerReference tracker;
+> 
+>    HydroNode* base = (HydroNode*) hydronodeConstructor(binaryFile, tracker);
+>    HydroSurfaceNode* surface = dynamic_cast<HydroSurfaceNode*>(base);
+>    assert(surface != nullptr);
+>    ```
+> 
+> 3. Confirm that `PointerTracker::streamInsertPointer` / `PointerReference::streamExtractPointer` **do not** themselves sneak in extra newlines or inconsistent formatting that `streamExtract` doesn’t expect.
+> 
+> Once you’ve done that, you should be able to delete `cout << "BBB" << endl;` and see deterministic behavior.
+> 
+> If you’d like, paste the definitions of `PointerTracker`, `PointerReference`, and `hydronodeConstructor`/`nodeListConstructor`, and I can walk through an exact, line‑by‑line serialization contract and give you a minimal patch that makes the protocol solid.

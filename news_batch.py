@@ -3,16 +3,24 @@ import numpy as np
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from memory import bulletin, collect, news
+from knowledge import bulletin, collect, feed_collect, news
 import utils
 
 def get_texts(engine, items):
     print("Retrieving items...")
     collect.collect_feeds(engine, items)
-    
+
     print("Evaluating documents...")
     texts = bulletin.get_input_text(engine, items, 50)
-            
+
+    print("Get daily news...")
+    with engine.connect() as conn:
+        for feed, title, pubtime, link, desc in feed_collect.iter_feed_items("https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml"):
+            item = collect.insert_entry(conn, items, feed, title, pubtime, link, desc)
+            print(item)
+            texts[item['id']] = bulletin.make_text(item)
+        conn.commit()
+
     return texts
 
 def make_batchfile(texts):

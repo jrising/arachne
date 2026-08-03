@@ -1,0 +1,56 @@
+**assistant**:
+> The following past discussion is relevant:
+> 
+> *   **2026-02-24 21:04:40:** James previously sought adv
+**user**:
+> I have an collection of estimates in R, and corresponding 90% confidence intervals. I would like to display these nicely, accounting for the significance levels that the confidence intervals give. Often the way I do this is
+> "X [Y - Z]"
+> where X is round(mu, N), Y is floor(ci05 * 10^(N-1)) / 10^(N-1), and Z is ceil(ci95 * 10^(N-1)) / 10^(N-10). N is the number of digits I can show, which depends on the number of digits shared by the confidence interval bounds.
+> 
+> Is there a more standard way to do this? And can you write up something that I can use for any set of mu, ci05, and ci95?
+**assistant**:
+> Displaying estimates with confidence intervals is a common requirement in statistical reporting, and the readability and clarity are crucial. While your approach of formatting is clear, there's indeed a slightly more standard format often used in literature: *X (95% CI [Y, Z])*, where X is the estimate and Y and Z are the lower and upper confidence bounds respectively. However, the format you've mentioned, "X [Y - Z]", is perfectly understandable too and frequently used for conciseness.
+> 
+> Here's a function in R that will allow you to generate these formatted strings based on the scenario you described, with an approach to dynamically determine the number of shared significant digits:
+> 
+> ```r
+> format_estimate_with_ci <- function(mu, ci05, ci95, digits = 2) {
+>   # Calculate the range
+>   ci_range <- ci95 - ci05
+>   
+>   # Determine the suitable number of digits by examining significant figures
+>   order_of_magnitude <- function(x) {
+>     if (x == 0) return(0)
+>     floor(log10(abs(x)))
+>   }
+>   ci_order <- order_of_magnitude(ci_range)
+>   
+>   # Determine the number of digits to use
+>   shared_digits <- max(0, ci_order + 1 - order_of_magnitude(abs(ci95 + ci05) / 2))
+>   num_digits <- min(digits, shared_digits)
+>   
+>   # Format components
+>   mu_formatted <- format(round(mu, num_digits), nsmall = num_digits)
+>   ci05_formatted <- format(floor(ci05 * 10^num_digits) / 10^num_digits, nsmall = num_digits)
+>   ci95_formatted <- format(ceiling(ci95 * 10^num_digits) / 10^num_digits, nsmall = num_digits)
+>   
+>   # Concatenate into a single string
+>   paste0(mu_formatted, " [", ci05_formatted, " - ", ci95_formatted, "]")
+> }
+> 
+> # Example usage
+> mu <- 1.456
+> ci05 <- 1.234
+> ci95 <- 1.678
+> formatted_output <- format_estimate_with_ci(mu, ci05, ci95)
+> print(formatted_output)
+> ```
+> 
+> ### How It Works:
+> 1. **Order of Magnitude**: The function evaluates the order of magnitude of the confidence interval range to determine how close the bounds are, which is key to deciding the shared significant figures.
+>    
+> 2. **Adjustability**: With `digits`, you can set the maximum number of decimal places you wish to display, but the function dynamically caps it at the shared digits found between the CI bounds to maintain consistency.
+> 
+> 3. **Rounding and Formatting**: We use `floor` and `ceiling` to adjust `ci05` and `ci95` when converting them to the desired format, ensuring they fit within your chosen numeric precision.
+> 
+> This approach should suit any collection of estimates with their associated confidence intervals you might have, giving you a tidy, homogeneous string for presentation or publication. Would you like to adjust anything specifically for your requirements?

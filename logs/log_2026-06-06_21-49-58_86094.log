@@ -1,0 +1,2288 @@
+**assistant**:
+> The user often uses phrases like "keep going" or "nope just keep going" to instruct the AI to contin
+**user**:
+> I have an OpenAI-based GPT system written in python that I use for a bunch of purposes, but now I would like to make it act more like an agent. Specifically, I want it to appear to have long-term memory, following best practices for this kind of system. What should I do?
+**assistant**:
+> Treat “long-term memory” as **a product feature built around the model**, not as something the model itself has. Best practice is to separate memory into types, write selectively, retrieve selectively, and keep the model’s working context small and structured.
+> 
+> ## Recommended architecture
+> 
+> ### 1) Split memory into 4 layers
+> 
+> #### A. **Session / working memory**
+> What’s relevant *right now* in the current interaction.
+> 
+> - Current user goal
+> - Constraints
+> - Recent tool results
+> - Open tasks
+> - Dialogue summary so far
+> 
+> This lives in the prompt/context window and should be aggressively summarized.
+> 
+> #### B. **Episodic memory**
+> Past interactions/events.
+> 
+> Examples:
+> - “On 2026-06-01, James asked me to help design an agent memory system.”
+> - “James prefers concise technical explanations.”
+> 
+> Store as timestamped records with metadata.
+> 
+> #### C. **Semantic / user-profile memory**
+> Stable facts/preferences inferred over time.
+> 
+> Examples:
+> - “Uses Python and OpenAI API”
+> - “Interested in global sustainability”
+> - “Prefers practical implementation details”
+> 
+> This should be curated, deduplicated, and versioned. Don’t let the model write directly to this without a policy layer.
+> 
+> #### D. **Procedural memory**
+> Rules/workflows the assistant should follow.
+> 
+> Examples:
+> - “When coding, provide a minimal working implementation first.”
+> - “Ask before storing sensitive personal facts.”
+> 
+> This is often better encoded in system prompts / developer instructions / explicit configuration than in a vector DB.
+> 
+> ---
+> 
+> ## Core design principle: **memory should be sparse and earned**
+> 
+> Do **not** save everything. Most conversations are not worth remembering.
+> 
+> Instead, create a **memory write policy**:
+> Only store things that are likely to matter later:
+> - stable preferences
+> - ongoing projects
+> - commitments / TODOs
+> - important facts about the user
+> - facts explicitly requested to remember
+> - recurring patterns of behavior
+> - summaries of substantial completed episodes
+> 
+> Avoid storing:
+> - transient chit-chat
+> - sensitive data unless explicitly approved
+> - low-confidence inferences
+> - duplicate facts
+> - raw long transcripts unless you truly need them
+> 
+> ---
+> 
+> ## Best-practice pipeline
+> 
+> ### 2) Build a memory manager around the model
+> 
+> A good agent loop looks like:
+> 
+> 1. **Receive user input**
+> 2. **Retrieve relevant memory**
+>    - current project/task memory
+>    - top-k episodic memories via semantic search
+>    - relevant user profile entries
+> 3. **Assemble context**
+>    - system prompt
+>    - short working summary
+>    - selected memories
+>    - recent dialogue
+> 4. **Generate response**
+> 5. **Post-process for memory writes**
+>    - decide whether anything should be saved
+>    - extract candidate memory objects
+>    - dedupe / score / possibly ask user for consent
+> 6. **Persist memory**
+> 
+> This is much more reliable than “stuff everything into a vector database and retrieve top-k.”
+> 
+> ---
+> 
+> ## 3) Use structured memory records, not blobs
+> 
+> Store memories in explicit schemas.
+> 
+> Example:
+> 
+> ```python
+> from pydantic import BaseModel
+> from typing import Literal, Optional, List
+> from datetime import datetime
+> 
+> class Memory(BaseModel):
+>     id: str
+>     memory_type: Literal["episodic", "semantic", "task", "preference"]
+>     content: str
+>     subject: str  # e.g. "user", "project:agent-memory"
+>     created_at: datetime
+>     updated_at: Optional[datetime] = None
+>     importance: float = 0.5
+>     confidence: float = 0.8
+>     source: str  # e.g. "conversation", "user_explicit", "tool_result"
+>     tags: List[str] = []
+>     valid_from: Optional[datetime] = None
+>     valid_until: Optional[datetime] = None
+> ```
+> 
+> Better still, make separate tables/models for:
+> - `UserFact`
+> - `Preference`
+> - `Task`
+> - `Project`
+> - `Episode`
+> - `Document`
+> 
+> This improves retrieval and maintenance.
+> 
+> ---
+> 
+> ## 4) Separate **memory store** from **retrieval index**
+> 
+> Use two systems:
+> 
+> ### Source of truth
+> A relational DB like:
+> - SQLite for solo/local use
+> - Postgres for production
+> 
+> This holds canonical structured memory records.
+> 
+> ### Retrieval layer
+> A vector index for semantic search over selected fields:
+> - pgvector if using Postgres
+> - FAISS / Chroma / Weaviate / Qdrant if you prefer
+> 
+> Why both?
+> - Vector DBs are good for fuzzy retrieval
+> - Relational DBs are good for correctness, updates, filtering, auditing, deletion, and deduplication
+> 
+> A common anti-pattern is using only embeddings as the memory system.
+> 
+> ---
+> 
+> ## 5) Retrieval should be hybrid, not purely vector
+> 
+> For each user query, retrieve memory via:
+> 
+> ### A. Symbolic / filter retrieval
+> Use metadata filters first:
+> - same user
+> - same project
+> - open tasks
+> - recent relevant episodes
+> - preferences
+> 
+> ### B. Semantic retrieval
+> Embed the current query (or distilled “memory query”) and retrieve nearest memories.
+> 
+> ### C. Recency + importance reranking
+> Score by something like:
+> 
+> ```python
+> score = (
+>     0.45 * semantic_similarity +
+>     0.25 * importance +
+>     0.20 * recency +
+>     0.10 * confidence
+> )
+> ```
+> 
+> Then cap how many memories go into context.
+> 
+> ---
+> 
+> ## 6) Maintain a compact “user model”
+> 
+> Keep a small profile document that gets updated carefully.
+> 
+> Example:
+> 
+> ```json
+> {
+>   "name": "James",
+>   "roles": ["interdisciplinary modeler", "father"],
+>   "technical_stack": ["python", "OpenAI API"],
+>   "interests": ["global sustainability", "agent design"],
+>   "preferences": [
+>     "wants practical answers",
+>     "likes direct recommendations"
+>   ],
+>   "active_projects": [
+>     "OpenAI-based GPT system with long-term memory"
+>   ]
+> }
+> ```
+> 
+> This should be:
+> - small
+> - human-readable
+> - editable
+> - versioned
+> - occasionally regenerated from lower-level memories
+> 
+> Think of it as a **cache of distilled identity-relevant facts**, not an autonomous truth source.
+> 
+> ---
+> 
+> ## 7) Add memory consolidation jobs
+> 
+> Humans don’t keep every experience equally accessible; your system shouldn’t either.
+> 
+> Run periodic jobs to:
+> - merge duplicate memories
+> - summarize clusters of episodes
+> - promote repeated facts into semantic memory
+> - decay or archive stale memories
+> - mark contradictory memories for review
+> 
+> For example:
+> - 20 separate episodes mentioning “James uses Python” → one stable semantic fact
+> - old task-specific constraints can expire
+> - closed projects can be summarized and archived
+> 
+> This is one of the biggest differences between a toy memory system and a robust one.
+> 
+> ---
+> 
+> ## 8) Explicitly handle contradiction and uncertainty
+> 
+> Long-term memory will drift unless you model uncertainty.
+> 
+> Each fact should have:
+> - confidence
+> - timestamp
+> - provenance/source
+> - possible expiry
+> 
+> Example:
+> - “Prefers concise answers” with confidence 0.6
+> - Later: “Asked for exhaustive explanation” doesn’t necessarily contradict, but may be context-dependent
+> 
+> You may want:
+> - multiple coexisting facts
+> - context-scoped preferences
+> - “most recent wins” for some categories
+> - “aggregate evidence wins” for others
+> 
+> ---
+> 
+> ## 9) Ask for consent on sensitive or high-impact memory
+> 
+> This is important UX and safety.
+> 
+> Good rule:
+> - If the user says “remember this,” store it
+> - If it’s potentially sensitive, ask first
+> - If it’s low-risk and clearly useful, you can store automatically
+> - Allow “what do you remember about me?” and “forget X”
+> 
+> You want memory controls:
+> - `remember(...)`
+> - `forget(...)`
+> - `list_memories(...)`
+> - `update_memory(...)`
+> 
+> This builds trust.
+> 
+> ---
+> 
+> ## 10) Don’t inject raw memory into the prompt; inject **memory summaries**
+> 
+> The model doesn’t need 20 old snippets. It needs a concise, structured view.
+> 
+> Instead of:
+> > Here are 18 past conversation excerpts...
+> 
+> Use:
+> ```text
+> Relevant long-term memory:
+> - User uses Python and OpenAI API for custom GPT systems.
+> - User is building agent-like behavior with long-term memory.
+> - Preference: practical implementation guidance preferred.
+> - Related prior work: asked about open-source and OpenAI-based instruction-following models.
+> ```
+> 
+> Even better, separate:
+> - user profile
+> - active project memory
+> - relevant episodes
+> - open commitments
+> 
+> ---
+> 
+> ## 11) Add task memory separately from personal memory
+> 
+> If you want agent behavior, task tracking is crucial.
+> 
+> Maintain explicit task state:
+> - goals
+> - subtasks
+> - blockers
+> - next actions
+> - outputs/artifacts
+> - deadlines
+> 
+> For many “agentic” use cases, **task memory is more important than autobiographical memory**.
+> 
+> Schema example:
+> 
+> ```python
+> class TaskState(BaseModel):
+>     task_id: str
+>     title: str
+>     status: Literal["open", "in_progress", "blocked", "done"]
+>     goal: str
+>     plan: list[str]
+>     current_step: str | None = None
+>     blockers: list[str] = []
+>     artifacts: list[str] = []
+>     updated_at: datetime
+> ```
+> 
+> This makes the system feel persistent and competent.
+> 
+> ---
+> 
+> ## 12) Use summarization checkpoints for long sessions
+> 
+> When a conversation gets long:
+> - summarize every N turns
+> - preserve decisions, goals, constraints, unresolved questions
+> - discard low-value chatter
+> 
+> Good summary template:
+> - Objective
+> - Decisions made
+> - Constraints/preferences
+> - Tool outputs/results
+> - Open questions
+> - Next actions
+> 
+> This becomes session memory and maybe episodic memory later.
+> 
+> ---
+> 
+> ## 13) Evaluate memory with actual metrics
+> 
+> You should test it like an information system, not vibe-check it.
+> 
+> Useful eval categories:
+> 
+> ### Retrieval quality
+> - Did it retrieve the right memories?
+> - Precision@k / Recall@k on labeled examples
+> 
+> ### Write quality
+> - Did it store useful facts?
+> - Did it avoid junk / duplicates / sensitive material?
+> 
+> ### Response usefulness
+> - Did memory improve answer quality?
+> - Did it hallucinate false memories?
+> - Did it over-personalize?
+> 
+> ### Persistence behavior
+> - Did it remember what mattered across sessions?
+> - Did it forget/override outdated facts correctly?
+> 
+> Create a benchmark set:
+> - “User said they prefer short code examples”
+> - “User changed preference from SQLite to Postgres”
+> - “User asked to forget a personal detail”
+> - “Project reopened after 3 months”
+> 
+> ---
+> 
+> ## 14) A pragmatic stack in Python
+> 
+> A solid setup:
+> 
+> - **LLM**: OpenAI Responses API / Chat Completions equivalent
+> - **Embeddings**: OpenAI text embedding model
+> - **Canonical DB**: SQLite or Postgres
+> - **Vector search**:
+>   - SQLite + local vector extension if simple
+>   - Postgres + pgvector if serious
+> - **Schema validation**: Pydantic
+> - **Orchestration**: plain Python first; avoid overframeworking
+> - **Background jobs**: APScheduler / Celery / cron
+> - **Observability**: log every retrieval and write decision
+> 
+> If you’re building for yourself, I’d start with:
+> - SQLite for facts/tasks/episodes
+> - a `memories` table plus `tasks` and `profile`
+> - embeddings stored alongside
+> - simple hybrid retrieval
+> - one consolidation script
+> 
+> That gets you 80% of the value.
+> 
+> ---
+> 
+> ## 15) Simple implementation pattern
+> 
+> ### Memory write step
+> After each assistant response, call a lightweight extraction pass:
+> 
+> Prompt the model to produce:
+> - candidate stable user facts
+> - candidate preferences
+> - candidate task updates
+> - candidate episodic summary
+> - whether explicit consent is needed
+> 
+> Return JSON only, then validate and store.
+> 
+> ### Retrieval step
+> Before generating a response:
+> 1. classify the query: personal / project / task / general
+> 2. fetch profile + active tasks
+> 3. semantic search episodic memory
+> 4. summarize top retrieved items into a compact block
+> 5. add to model context
+> 
+> ---
+> 
+> ## 16) Example minimal tables
+> 
+> ```sql
+> CREATE TABLE user_facts (
+>     id
+**user**:
+> Okay, this is very helpful. I would like your help in creating a system along these lines. Let's put some structure around this-- first, tell me if this sounds right to you.
+> 1. I think we can ignore type A, session memory, since that's just going to be the context consisting of the whole conversatino.
+> 1. I want an object that handles all types of long-term memory. It should have a function `post_process` which takes a conversation after it has concluded and makes changes to long-term memory. It should also have
+**assistant**:
+> Yes, broadly right — with one strong caveat:
+> 
+> ## 1. Session memory
+> I would **not** ignore type A entirely.
+> 
+> If your conversations are always short enough to fit comfortably in context, then fine: the raw conversation can serve as session memory.
+> 
+> But in practice, even for medium-length conversations, you usually want a **session-state layer** that is not just “the whole conversation”:
+> - current goal
+> - key constraints
+> - decisions made
+> - unresolved questions
+> - tool results
+> - draft plan / next steps
+> 
+> Why? Because:
+> - raw transcripts are noisy
+> - retrieval from raw turns is worse than retrieval from distilled state
+> - long conversations will eventually exceed practical context
+> - even before that, summarization improves reliability
+> 
+> So I’d say:
+> 
+> - **short term:** use the full conversation as session memory
+> - **design-wise:** still reserve a place in your architecture for a `SessionState` or conversation summary object
+> 
+> You can defer implementing it, but I wouldn’t conceptually remove it.
+> 
+> ---
+> 
+> ## 2. One object handling long-term memory
+> Yes, that sounds right.
+> 
+> A single façade object is a good idea, as long as internally it may manage:
+> - storage
+> - retrieval
+> - extraction/post-processing
+> - consolidation
+> - deletion/update logic
+> 
+> Something like:
+> 
+> ```python
+> class MemoryManager:
+>     def retrieve(self, user_id: str, query: str, context: dict | None = None) -> MemoryContext:
+>         ...
+> 
+>     def post_process(self, user_id: str, conversation: Conversation) -> MemoryUpdateResult:
+>         ...
+> 
+>     def remember(self, user_id: str, item: MemoryItem) -> str:
+>         ...
+> 
+>     def forget(self, user_id: str, memory_id: str | None = None, query: str | None = None) -> ForgetResult:
+>         ...
+> 
+>     def get_profile(self, user_id: str) -> UserProfile:
+>         ...
+> ```
+> 
+> That’s a good direction.
+> 
+> ---
+> 
+> ## 3. `post_process(conversation after it has concluded)`
+> Yes, that is a very reasonable first implementation.
+> 
+> That said, I’d slightly refine the semantics:
+> 
+> ### Good initial version
+> `post_process(conversation)`:
+> - extracts candidate memories
+> - updates profile/preferences/tasks
+> - stores an episodic summary
+> - deduplicates against existing memory
+> 
+> That’s excellent as a first pass.
+> 
+> ### One design caution
+> Not all useful memory should wait until the conversation has “con
+**user**:
+> Okay, granted.
+> So, let me abstract a level further.
+> Suppose that there are two stages of memory model interaction.
+> 1. Within-conversation: The within-conversation object persists for the length of a conversation. It has a function that is called once per response needed from the AI. For this it is given the AI's last response and the user's response in reply to that. It then returns a chunk of text that can be embedded into the prompt to the AI. It also has a function that can translate the whole conversation to that point into an effective summary.
+> 2. Between-conversations: This "lives" on the disk. It takes in everything that happened in a conversation and makes decisions about what should be stored.
+> 
+> Obviously, the between-conversations material is then provided to the within-conversation memory object.
+> 
+> In case it's useful, I am currently using both `whoosh` and `sqlalchemy` as databases for the AI. The whoosh database currently just has all conversations, which are indexed to keywords using summaries. The `sqlalchemy` database is currently used to record and retrieve various "feed items" from around the internet. Those systems may not reflect best practices, but it might be nice to stick to those libraries (or make use of that stored content) if it is useful.
+> 
+> Does that all sound good?
+**assistant**:
+> Yes — that sounds like a **good and clean abstraction**.
+> 
+> In fact, I think it’s better than jumping immediately into “episodic/semantic/task memory” as separate top-level classes. Your split is architecturally very natural:
+> 
+> - **Within-conversation memory** = working memory / prompt assembly / ongoing summary
+> - **Between-conversations memory** = persistence / consolidation / retrieval across sessions
+> 
+> That’s exactly the right separation.
+> 
+> ## My main reaction
+> 
+> I would endorse this design, with a few refinements in naming and responsibilities so it stays robust.
+> 
+> ---
+> 
+> # 1. Your two-stage model is sound
+> 
+> ## A. Within-conversation object
+> This should be responsible for:
+> 
+> - maintaining the conversation-local state
+> - deciding what persistent memory is relevant right now
+> - producing a compact prompt-ready memory block
+> - maintaining a rolling summary of the current conversation
+> 
+> Your API idea is reasonable:
+> - update per turn
+> - emit prompt text
+> - emit conversation summary
+> 
+> That’s good.
+> 
+> ## B. Between-conversations object
+> Also good:
+> - takes a finished conversation
+> - decides what to store
+> - updates durable memory
+> - supports retrieval for future conversations
+> 
+> Yes, this is the right place for:
+> - extracting candidate facts/preferences
+> - storing episodic summaries
+> - deduplicating
+> - updating user/project/task models
+> 
+> ---
+> 
+> # 2. One important refinement: retrieval belongs partly in both layers
+> 
+> You wrote:
+> 
+> > Obviously, the between-conversations material is then provided to the within-conversation memory object.
+> 
+> Yes — but I would make that explicit in the API.
+> 
+> The persistent layer should not just “store”; it should also **retrieve** relevant prior memory for a new conversation or a new turn.
+> 
+> So conceptually:
+> 
+> - **Between-conversations memory**
+>   - persistent storage
+>   - indexing
+>   - retrieval
+>   - consolidation after conversation end
+> 
+> - **Within-conversation memory**
+>   - turn-by-turn state
+>   - current summary
+>   - prompt assembly using retrieved durable memory
+> 
+> So the within-conversation object probably gets initialized with retrieved long-term memory, and may also ask for more during the conversation.
+> 
+> ---
+> 
+> # 3. I would rename them slightly
+> 
+> Your terms are fine, but if you want code that stays understandable, I’d suggest:
+> 
+> - `ConversationMemory` or `WorkingMemory`
+> - `LongTermMemory` or `PersistentMemory`
+> 
+> For example:
+> 
+> ```python
+> class ConversationMemory:
+>     ...
+>     
+> class LongTermMemory
+**user**:
+> Okay, then let's get started. I want to use "LongTermMemory" and "ConversationMemory". I also want to be able to test the whole thing, with unit tests that construct plausible memory scenarios without messing up my main memory. And besides, I want to have multiple users, so there will be multiple main memories anyway. Can you construct this whole system at the class/function-prototype level?
+**assistant**:
+> Yes. Below is a **class/function-prototype design** for a Python memory system built around:
+> 
+> - `ConversationMemory`
+> - `LongTermMemory`
+> 
+> with support for:
+> 
+> - multiple users
+> - test isolation
+> - pluggable storage/indexing
+> - your existing `sqlalchemy` and optionally `whoosh`
+> - unit tests using temporary or in-memory backends
+> - future extension into more agentic task memory
+> 
+> I’ll keep this at the **prototype / interface / skeleton** level, but concrete enough that you can start implementing directly.
+> 
+> ---
+> 
+> # Design goals
+> 
+> 1. **Clear split**
+>    - `ConversationMemory`: per-conversation, ephemeral
+>    - `LongTermMemory`: persistent across conversations
+> 
+> 2. **Multi-user**
+>    - all memory keyed by `user_id`
+>    - optional `agent_id` / `persona_id` later if needed
+> 
+> 3. **Testable**
+>    - injectable backends
+>    - in-memory or temp-db implementations
+>    - no coupling to production memory
+> 
+> 4. **Storage-agnostic**
+>    - SQLAlchemy for canonical storage
+>    - Whoosh optional for text/keyword retrieval
+>    - later embeddings/vector retrieval can be added behind interfaces
+> 
+> 5. **Structured memory**
+>    - conversation summaries
+>    - facts/preferences
+>    - tasks/projects
+>    - source/provenance metadata
+> 
+> ---
+> 
+> # High-level architecture
+> 
+> ```text
+> User turn loop
+>    |
+>    v
+> ConversationMemory
+>    |  \
+>    |   \--> asks LongTermMemory for relevant prior memory
+>    |
+>    --> returns prompt block / summary / state
+>    |
+> Conversation ends
+>    |
+>    v
+> LongTermMemory.post_process_conversation(...)
+>    --> extract candidate memories
+>    --> dedupe/update/store
+>    --> index summaries/documents
+> ```
+> 
+> ---
+> 
+> # Core domain models
+> 
+> These can be dataclasses or Pydantic models. I’d suggest Pydantic if you already use it; otherwise dataclasses are fine.
+> 
+> ## Shared enums / literals
+> 
+> ```python
+> from __future__ import annotations
+> from dataclasses import dataclass, field
+> from datetime import datetime
+> from typing import Optional, Sequence, Any, Literal
+> 
+> MemoryKind = Literal[
+>     "conversation_summary",
+>     "episode",
+>     "fact",
+>     "preference",
+>     "task",
+>     "project",
+>     "artifact",
+> ]
+> 
+> TaskStatus = Literal["open", "in_progress", "blocked", "done", "cancelled"]
+> Role = Literal["system", "user", "assistant", "tool"]
+> ```
+> 
+> ---
+> 
+> ## Conversation message
+> 
+> ```python
+> @dataclass
+> class Message:
+>     role: Role
+>     content: str
+>     created_at: datetime
+>     metadata: dict[str, Any] = field(default_factory=dict)
+> ```
+> 
+> ---
+> 
+> ## Conversation transcript
+> 
+> ```python
+> @dataclass
+> class ConversationTranscript:
+>     conversation_id: str
+>     user_id: str
+>     started_at: datetime
+>     ended_at: Optional[datetime]
+>     messages: list[Message]
+>     metadata: dict[str, Any] = field(default_factory=dict)
+> 
+>     def add_message(self, message: Message) -> None:
+>         self.messages.append(message)
+> ```
+> 
+> ---
+> 
+> ## Memory items
+> 
+> I recommend a single generic memory record at the interface level, even if internally you use specialized tables.
+> 
+> ```python
+> @dataclass
+> class MemoryRecord:
+>     memory_id: str
+>     user_id: str
+>     kind: MemoryKind
+>     content: str
+>     summary: Optional[str]
+>     created_at: datetime
+>     updated_at: Optional[datetime] = None
+> 
+>     # optional scoping
+>     conversation_id: Optional[str] = None
+>     project_id: Optional[str] = None
+>     task_id: Optional[str] = None
+>     subject: Optional[str] = None
+> 
+>     # quality / lifecycle
+>     importance: float = 0.5
+>     confidence: float = 0.7
+>     valid_from: Optional[datetime] = None
+>     valid_until: Optional[datetime] = None
+>     is_active: bool = True
+> 
+>     # provenance / retrieval
+>     source: str = "conversation"
+>     tags: list[str] = field(default_factory=list)
+>     metadata: dict[str, Any] = field(default_factory=dict)
+> ```
+> 
+> ---
+> 
+> ## User profile
+> 
+> This is a distilled view, not necessarily the authoritative store.
+> 
+> ```python
+> @dataclass
+> class UserProfile:
+>     user_id: str
+>     display_name: Optional[str] = None
+>     preferences: list[str] = field(default_factory=list)
+>     facts: list[str] = field(default_factory=list)
+>     active_projects: list[str] = field(default_factory=list)
+>     active_tasks: list[str] = field(default_factory=list)
+>     updated_at: Optional[datetime] = None
+> ```
+> 
+> ---
+> 
+> ## Task record
+> 
+> ```python
+> @dataclass
+> class TaskRecord:
+>     task_id: str
+>     user_id: str
+>     title: str
+>     status: TaskStatus
+>     goal: Optional[str] = None
+>     plan: list[str] = field(default_factory=list)
+>     current_step: Optional[str] = None
+>     blockers: list[str] = field(default_factory=list)
+>     artifacts: list[str] = field(default_factory=list)
+>     created_at: datetime = field(default_factory=datetime.utcnow)
+>     updated_at: datetime = field(default_factory=datetime.utcnow)
+>     metadata: dict[str, Any] = field(default_factory=dict)
+> ```
+> 
+> ---
+> 
+> # Retrieval and prompt assembly models
+> 
+> ## Long-term retrieval result
+> 
+> ```python
+> @dataclass
+> class RetrievedMemoryBundle:
+>     user_id: str
+>     query: str
+>     profile: Optional[UserProfile]
+>     relevant_memories: list[MemoryRecord]
+>     active_tasks: list[TaskRecord]
+>     generated_summary_block: str
+> ```
+> 
+> ---
+> 
+> ## Conversation state snapshot
+> 
+> ```python
+> @dataclass
+> class ConversationState:
+>     conversation_id: str
+>     user_id: str
+>     running_summary: str = ""
+>     open_questions: list[str] = field(default_factory=list)
+>     current_goals: list[str] = field(default_factory=list)
+>     constraints: list[str] = field(default_factory=list)
+>     important_points: list[str] = field(default_factory=list)
+>     last_updated: Optional[datetime] = None
+> ```
+> 
+> ---
+> 
+> ## Post-processing result
+> 
+> ```python
+> @dataclass
+> class PostProcessResult:
+>     conversation_id: str
+>     user_id: str
+>     stored_memory_ids: list[str] = field(default_factory=list)
+>     updated_task_ids: list[str] = field(default_factory=list)
+>     updated_profile: bool = False
+>     candidate_memories: list[MemoryRecord] = field(default_factory=list)
+>     notes: list[str] = field(default_factory=list)
+> ```
+> 
+> ---
+> 
+> # Storage interfaces
+> 
+> These interfaces are the key to testability.
+> 
+> ---
+> 
+> ## Canonical persistent store
+> 
+> This is where SQLAlchemy fits naturally.
+> 
+> ```python
+> from typing import Protocol
+> 
+> class MemoryStore(Protocol):
+>     def create_user_if_missing(self, user_id: str) -> None: ...
+> 
+>     def save_memory(self, memory: MemoryRecord) -> str: ...
+>     def update_memory(self, memory: MemoryRecord) -> None: ...
+>     def get_memory(self, user_id: str, memory_id: str) -> Optional[MemoryRecord]: ...
+>     def list_memories(
+>         self,
+>         user_id: str,
+>         *,
+>         kind: Optional[MemoryKind] = None,
+>         active_only: bool = True,
+>         limit: int = 100,
+>     ) -> list[MemoryRecord]: ...
+> 
+>     def find_memories_by_filters(
+>         self,
+>         user_id: str,
+>         *,
+>         kind: Optional[MemoryKind] = None,
+>         conversation_id: Optional[str] = None,
+>         project_id: Optional[str] = None,
+>         task_id: Optional[str] = None,
+>         tags: Optional[Sequence[str]] = None,
+>         active_only: bool = True,
+>         limit: int = 100,
+>     ) -> list[MemoryRecord]: ...
+> 
+>     def save_conversation(self, transcript: ConversationTranscript) -> None: ...
+>     def get_conversation(self, user_id: str, conversation_id: str) -> Optional[ConversationTranscript]: ...
+> 
+>     def save_user_profile(self, profile: UserProfile) -> None: ...
+>     def get_user_profile(self, user_id: str) -> Optional[UserProfile]: ...
+> 
+>     def save_task(self, task: TaskRecord) -> str: ...
+>     def update_task(self, task: TaskRecord) -> None: ...
+>     def get_task(self, user_id: str, task_id: str) -> Optional[TaskRecord]: ...
+>     def list_tasks(
+>         self,
+>         user_id: str,
+>         *,
+>         status: Optional[TaskStatus] = None,
+>         limit: int = 100,
+>     ) -> list[TaskRecord]: ...
+> 
+>     def delete_memory(self, user_id: str, memory_id: str) -> bool: ...
+> ```
+> 
+> ---
+> 
+> ## Search index interface
+> 
+> This is where Whoosh can slot in.
+> 
+> ```python
+> class MemoryIndex(Protocol):
+>     def index_memory(self, memory: MemoryRecord) -> None: ...
+>     def remove_memory(self, memory_id: str) -> None: ...
+> 
+>     def search(
+>         self,
+>         user_id: str,
+>         query: str,
+>         *,
+>         kinds: Optional[Sequence[MemoryKind]] = None,
+>         limit: int = 10,
+>     ) -> list[str]:
+>         """Return memory_ids in ranked order."""
+>         ...
+> 
+>     def index_conversation_summary(
+>         self,
+>         user_id: str,
+>         conversation_id: str,
+>         summary: str,
+>         metadata: Optional[dict[str, Any]] = None,
+>     ) -> None: ...
+> ```
+> 
+> If Whoosh already indexes conversation summaries, you can initially use it only for:
+> - prior conversation summaries
+> - memory summaries / facts
+> 
+> Later you can add embedding retrieval without changing `LongTermMemory`.
+> 
+> ---
+> 
+> ## Extraction / summarization model interface
+> 
+> This wraps LLM calls for:
+> - turn summary
+> - conversation summary
+> - memory extraction
+> - profile updates
+> - task extraction
+> 
+> ```python
+> class MemoryModel(Protocol):
+>     def summarize_conversation(
+>         self,
+>         transcript: ConversationTranscript,
+>         existing_summary: Optional[str] = None,
+>     ) -> str: ...
+> 
+>     def summarize_turn_delta(
+>         self,
+>         transcript: ConversationTranscript,
+>         previous_state: ConversationState,
+>     ) -> ConversationState: ...
+> 
+>     def build_retrieval_query(
+>         self,
+>         recent_messages: Sequence[Message],
+>         conversation_state: ConversationState,
+>     ) -> str: ...
+> 
+>     def extract_candidate_memories(
+>         self,
+>         transcript: ConversationTranscript,
+>         conversation_summary: str,
+>     ) -> list[MemoryRecord]: ...
+> 
+>     def merge_profile(
+>         self,
+>         existing_profile: Optional[UserProfile],
+>         candidate_memories: Sequence[MemoryRecord],
+>     ) -> UserProfile: ...
+> 
+>     def build_prompt_memory_block(
+>         self,
+>         profile: Optional[UserProfile],
+>         memories: Sequence[MemoryRecord],
+>         tasks: Sequence[TaskRecord],
+>         conversation_state: ConversationState,
+>     ) -> str: ...
+> ```
+> 
+> This is the main seam for mocking in tests.
+> 
+> ---
+> 
+> # Main classes
+> 
+> ---
+> 
+> ## `LongTermMemory`
+> 
+> This is the persistent orchestrator.
+> 
+> ```python
+> class LongTermMemory:
+>     def __init__(
+>         self,
+>         store: MemoryStore,
+>         model: MemoryModel,
+>         index: Optional[MemoryIndex] = None,
+>     ) -> None:
+>         self.store = store
+>         self.model = model
+>         self.index = index
+> ```
+> 
+> ### Core methods
+> 
+> ```python
+> class LongTermMemory:
+>     def initialize_user(self, user_id: str) -> None:
+>         """Ensure user storage/profile exists."""
+> 
+>     def retrieve_for_conversation(
+>         self,
+>         user_id: str,
+>         *,
+>         query: str,
+>         limit: int = 8,
+>         kinds: Optional[Sequence[MemoryKind]] = None,
+>     ) -> RetrievedMemoryBundle:
+>         """
+>         Retrieve relevant durable memory for use in a live conversation.
+>         Combines profile, tasks, and searched memories.
+>         """
+> 
+>     def retrieve_by_keywords(
+>         self,
+>         user_id
+**user**:
+> This is great. Please continue, from `retrieve_by_keywords`?
+**assistant**:
+> Absolutely. I’ll continue the prototype from `retrieve_by_keywords`, and fill out the rest of the main methods plus a plausible module structure and test scaffolding.
+> 
+> ---
+> 
+> # Continuing `LongTermMemory`
+> 
+> ```python
+> class LongTermMemory:
+>     def __init__(
+>         self,
+>         store: MemoryStore,
+>         model: MemoryModel,
+>         index: Optional[MemoryIndex] = None,
+>     ) -> None:
+>         self.store = store
+>         self.model = model
+>         self.index = index
+> 
+>     def initialize_user(self, user_id: str) -> None:
+>         """Ensure user storage/profile exists."""
+>         self.store.create_user_if_missing(user_id)
+>         profile = self.store.get_user_profile(user_id)
+>         if profile is None:
+>             self.store.save_user_profile(UserProfile(user_id=user_id))
+> 
+>     def retrieve_for_conversation(
+>         self,
+>         user_id: str,
+>         *,
+>         query: str,
+>         limit: int = 8,
+>         kinds: Optional[Sequence[MemoryKind]] = None,
+>     ) -> RetrievedMemoryBundle:
+>         """
+>         Retrieve relevant durable memory for a live conversation.
+>         Combines profile, tasks, and searched memories into a compact bundle.
+>         """
+>         self.initialize_user(user_id)
+> 
+>         profile = self.store.get_user_profile(user_id)
+>         active_tasks = self.store.list_tasks(user_id, status="open", limit=20)
+>         in_progress_tasks = self.store.list_tasks(user_id, status="in_progress", limit=20)
+> 
+>         relevant_memories: list[MemoryRecord] = []
+>         seen_ids: set[str] = set()
+> 
+>         # 1. Search index if available
+>         if self.index is not None:
+>             memory_ids = self.index.search(
+>                 user_id=user_id,
+>                 query=query,
+>                 kinds=kinds,
+>                 limit=limit,
+>             )
+>             for memory_id in memory_ids:
+>                 memory = self.store.get_memory(user_id, memory_id)
+>                 if memory is not None and memory.memory_id not in seen_ids:
+>                     relevant_memories.append(memory)
+>                     seen_ids.add(memory.memory_id)
+> 
+>         # 2. Fallback / augmentation from structured filters
+>         fallback_memories = self.store.list_memories(
+>             user_id,
+>             kind=None,
+>             active_only=True,
+>             limit=limit * 2,
+>         )
+>         for memory in fallback_memories:
+>             if memory.memory_id not in seen_ids:
+>                 relevant_memories.append(memory)
+>                 seen_ids.add(memory.memory_id)
+>             if len(relevant_memories) >= limit:
+>                 break
+> 
+>         all_tasks = active_tasks + [t for t in in_progress_tasks if t.task_id not in {x.task_id for x in active_tasks}]
+> 
+>         generated_summary_block = self.model.build_prompt_memory_block(
+>             profile=profile,
+>             memories=relevant_memories[:limit],
+>             tasks=all_tasks[:10],
+>             conversation_state=ConversationState(
+>                 conversation_id="",
+>                 user_id=user_id,
+>             ),
+>         )
+> 
+>         return RetrievedMemoryBundle(
+>             user_id=user_id,
+>             query=query,
+>             profile=profile,
+>             relevant_memories=relevant_memories[:limit],
+>             active_tasks=all_tasks[:10],
+>             generated_summary_block=generated_summary_block,
+>         )
+> 
+>     def retrieve_by_keywords(
+>         self,
+>         user_id: str,
+>         *,
+>         query: str,
+>         limit: int = 10,
+>         kinds: Optional[Sequence[MemoryKind]] = None,
+>     ) -> list[MemoryRecord]:
+>         """
+>         Search durable memory by keyword/text query.
+>         Intended as a lower-level API than retrieve_for_conversation.
+>         """
+>         self.initialize_user(user_id)
+> 
+>         if self.index is None:
+>             return self.store.list_memories(
+>                 user_id=user_id,
+>                 kind=None,
+>                 active_only=True,
+>                 limit=limit,
+>             )
+> 
+>         memory_ids = self.index.search(
+>             user_id=user_id,
+>             query=query,
+>             kinds=kinds,
+>             limit=limit,
+>         )
+> 
+>         results: list[MemoryRecord] = []
+>         for memory_id in memory_ids:
+>             memory = self.store.get_memory(user_id, memory_id)
+>             if memory is not None:
+>                 results.append(memory)
+> 
+>         return results
+> 
+>     def get_user_profile(self, user_id: str) -> Optional[UserProfile]:
+>         self.initialize_user(user_id)
+>         return self.store.get_user_profile(user_id)
+> 
+>     def list_user_memories(
+>         self,
+>         user_id: str,
+>         *,
+>         kind: Optional[MemoryKind] = None,
+>         active_only: bool = True,
+>         limit: int = 100,
+>     ) -> list[MemoryRecord]:
+>         self.initialize_user(user_id)
+>         return self.store.list_memories(
+>             user_id=user_id,
+>             kind=kind,
+>             active_only=active_only,
+>             limit=limit,
+>         )
+> 
+>     def remember(
+>         self,
+>         memory: MemoryRecord,
+>     ) -> str:
+>         """
+>         Explicitly save a memory record and index it if applicable.
+>         """
+>         self.initialize_user(memory.user_id)
+>         memory_id = self.store.save_memory(memory)
+> 
+>         if self.index is not None:
+>             saved = self.store.get_memory(memory.user_id, memory_id)
+>             if saved is not None:
+>                 self.index.index_memory(saved)
+> 
+>         return memory_id
+> 
+>     def forget(
+>         self,
+>         user_id: str,
+>         *,
+>         memory_id: Optional[str] = None,
+>         query: Optional[str] = None,
+>     ) -> int:
+>         """
+>         Forget one or more memories.
+>         Returns the number of deleted memories.
+>         """
+>         self.initialize_user(user_id)
+> 
+>         deleted = 0
+> 
+>         if memory_id is not None:
+>             ok = self.store.delete_memory(user_id, memory_id)
+>             if ok:
+>                 deleted += 1
+>                 if self.index is not None:
+>                     self.index.remove_memory(memory_id)
+>             return deleted
+> 
+>         if query is not None:
+>             matches = self.retrieve_by_keywords(user_id, query=query, limit=50)
+>             for match in matches:
+>                 ok = self.store.delete_memory(user_id, match.memory_id)
+>                 if ok:
+>                     deleted += 1
+>                     if self.index is not None:
+>                         self.index.remove_memory(match.memory_id)
+> 
+>         return deleted
+> 
+>     def post_process_conversation(
+>         self,
+>         transcript: ConversationTranscript,
+>     ) -> PostProcessResult:
+>         """
+>         Process a completed conversation:
+>         - save transcript
+>         - summarize
+>         - extract candidate memories
+>         - update profile
+>         - store/index memory
+>         """
+>         self.initialize_user(transcript.user_id)
+>         self.store.save_conversation(transcript)
+> 
+>         summary = self.model.summarize_conversation(transcript)
+> 
+>         summary_memory = MemoryRecord(
+>             memory_id="",
+>             user_id=transcript.user_id,
+>             kind="conversation_summary",
+>             content=summary,
+>             summary=summary[:400],
+>             created_at=transcript.ended_at or datetime.utcnow(),
+>             conversation_id=transcript.conversation_id,
+>             source="conversation_summary",
+>             importance=0.6,
+>             confidence=0.9,
+>             metadata={"conversation_id": transcript.conversation_id},
+>         )
+> 
+>         stored_ids: list[str] = []
+>         summary_id = self.store.save_memory(summary_memory)
+>         stored_ids.append(summary_id)
+> 
+>         if self.index is not None:
+>             saved_summary = self.store.get_memory(transcript.user_id, summary_id)
+>             if saved_summary is not None:
+>                 self.index.index_memory(saved_summary)
+>             self.index.index_conversation_summary(
+>                 user_id=transcript.user_id,
+>                 conversation_id=transcript.conversation_id,
+>                 summary=summary,
+>                 metadata={"memory_id": summary_id},
+>             )
+> 
+>         candidate_memories = self.model.extract_candidate_memories(
+>             transcript=transcript,
+>             conversation_summary=summary,
+>         )
+> 
+>         for candidate in candidate_memories:
+>             candidate.user_id = transcript.user_id
+>             if candidate.conversation_id is None:
+>                 candidate.conversation_id = transcript.conversation_id
+>             memory_id = self.store.save_memory(candidate)
+>             stored_ids.append(memory_id)
+> 
+>             if self.index is not None:
+>                 saved = self.store.get_memory(transcript.user_id, memory_id)
+>                 if saved is not None:
+>                     self.index.index_memory(saved)
+> 
+>         existing_profile = self.store.get_user_profile(transcript.user_id)
+>         updated_profile = self.model.merge_profile(
+>             existing_profile=existing_profile,
+>             candidate_memories=candidate_memories,
+>         )
+>         self.store.save_user_profile(updated_profile)
+> 
+>         return PostProcessResult(
+>             conversation_id=transcript.conversation_id,
+>             user_id=transcript.user_id,
+>             stored_memory_ids=stored_ids,
+>             updated_profile=True,
+>             candidate_memories=candidate_memories,
+>             notes=[],
+>         )
+> 
+>     def consolidate_user_memory(
+>         self,
+>         user_id: str,
+>     ) -> list[str]:
+>         """
+>         Optional maintenance operation:
+>         merge duplicates, archive stale items, etc.
+>         Returns notes describing changes made.
+>         """
+>         self.initialize_user(user_id)
+>         # Prototype only: to be implemented later
+>         return []
+> 
+>     def start_conversation(
+>         self,
+>         user_id: str,
+>         conversation_id: str,
+>         *,
+>         initial_query: str = "",
+>     ) -> "ConversationMemory":
+>         """
+>         Convenience constructor for a ConversationMemory instance.
+>         """
+>         bundle = self.retrieve_for_conversation(
+>             user_id=user_id,
+>             query=initial_query,
+>         )
+>         return ConversationMemory(
+>             user_id=user_id,
+>             conversation_id=conversation_id,
+>             long_term_memory=self,
+>             initial_retrieved_bundle=bundle,
+>         )
+> ```
+> 
+> ---
+> 
+> # `ConversationMemory`
+> 
+> This object persists for one conversation and is responsible for:
+> 
+> - storing the transcript as it unfolds
+> - updating running state
+> - generating the prompt-ready memory text
+> - producing a final summary if needed
+> - exposing the final transcript for `LongTermMemory.post_process_conversation`
+> 
+> ```python
+> class ConversationMemory:
+>     def __init__(
+>         self,
+>         user_id: str,
+>         conversation_id: str,
+>         long_term_memory: LongTermMemory,
+>         initial_retrieved_bundle: Optional[RetrievedMemoryBundle] = None,
+>     ) -> None:
+>         self.user_id = user_id
+>         self.conversation_id = conversation_id
+>         self.long_term_memory = long_term_memory
+> 
+>         now = datetime.utcnow()
+>         self.transcript = ConversationTranscript(
+>             conversation_id=conversation_id,
+>             user_id=user_id,
+>             started_at=now,
+>             ended_at=None,
+>             messages=[],
+>             metadata={},
+>         )
+> 
+>         self.state = ConversationState(
+>             conversation_id=conversation_id,
+>             user_id=user_id,
+>             running_summary="",
+>             last_updated=now,
+>         )
+> 
+>         self.initial_retrieved_bundle = initial_retrieved_bundle
+>         self._latest_memory_block: str = (
+>             initial_retrieved_bundle.generated_summary_block
+>             if initial_retrieved_bundle is not None
+>             else ""
+>         )
+> ```
+> 
+> ## Turn update API
+> 
+> You proposed:
+> 
+> > It has a function that is called once per response needed from the AI. For this it is given the AI's last response and the user's response in reply to that. It then returns a chunk of text that can be embedded into the prompt to the AI.
+> 
+> That’s a good API. I’d support both:
+> - a high-level paired-turn update
+> - lower-level add-message methods
+> 
+> ```python
+> class ConversationMemory:
+>     def add_message(
+>         self,
+>         role: Role,
+>         content: str,
+>         *,
+>         created_at: Optional[datetime] = None,
+>         metadata: Optional[dict[str, Any]] = None,
+>     ) -> None:
+>         self.transcript.add_message(
+>             Message(
+>                 role=role,
+>                 content=content,
+>                 created_at=created_at or datetime.utcnow(),
+>                 metadata=metadata or {},
+>             )
+>         )
+> 
+>     def update_with_turn(
+>         self,
+>         *,
+>         assistant_response: Optional[str],
+>         user_response: str,
+>     ) -> str:
+>         """
+>         Update conversation memory with the latest assistant/user turn pair,
+>         refresh state, and return prompt-ready memory text for the next model call.
+>         """
+>         if assistant_response:
+>             self.add_message
+**user**:
+> Great. Keep it going from `update_with_turn`.
+**assistant**:
+> ```python
+>         if assistant_response:
+>             self.add_message("assistant", assistant_response)
+> 
+>         self.add_message("user", user_response)
+> 
+>         self.state = self.long_term_memory.model.summarize_turn_delta(
+>             transcript=self.transcript,
+>             previous_state=self.state,
+>         )
+> 
+>         retrieval_query = self.long_term_memory.model.build_retrieval_query(
+>             recent_messages=self.transcript.messages[-6:],
+>             conversation_state=self.state,
+>         )
+> 
+>         bundle = self.long_term_memory.retrieve_for_conversation(
+>             user_id=self.user_id,
+>             query=retrieval_query,
+>             limit=8,
+>         )
+> 
+>         self._latest_memory_block = self.long_term_memory.model.build_prompt_memory_block(
+>             profile=bundle.profile,
+>             memories=bundle.relevant_memories,
+>             tasks=bundle.active_tasks,
+>             conversation_state=self.state,
+>         )
+> 
+>         self.state.last_updated = datetime.utcnow()
+>         return self._latest_memory_block
+> 
+>     def get_prompt_block(self) -> str:
+>         """
+>         Return the most recent prompt-ready memory block.
+>         """
+>         return self._latest_memory_block
+> 
+>     def summarize(self) -> str:
+>         """
+>         Return an effective summary of the conversation so far.
+>         """
+>         return self.long_term_memory.model.summarize_conversation(
+>             transcript=self.transcript,
+>             existing_summary=self.state.running_summary or None,
+>         )
+> 
+>     def get_state(self) -> ConversationState:
+>         return self.state
+> 
+>     def get_transcript(self) -> ConversationTranscript:
+>         return self.transcript
+> 
+>     def mark_complete(self, *, ended_at: Optional[datetime] = None) -> None:
+>         self.transcript.ended_at = ended_at or datetime.utcnow()
+> 
+>     def finalize(self) -> PostProcessResult:
+>         """
+>         Mark the conversation complete and hand it off to long-term memory.
+>         """
+>         if self.transcript.ended_at is None:
+>             self.mark_complete()
+>         return self.long_term_memory.post_process_conversation(self.transcript)
+> ```
+> 
+> ---
+> 
+> # Suggested module structure
+> 
+> Here’s a clean filesystem layout for this:
+> 
+> ```text
+> memory/
+>     __init__.py
+>     models.py
+>     protocols.py
+>     long_term.py
+>     conversation.py
+>     store_sqlalchemy.py
+>     store_inmemory.py
+>     index_whoosh.py
+>     index_null.py
+>     model_openai.py
+>     model_mock.py
+>     fixtures.py
+> tests/
+>     test_conversation_memory.py
+>     test_long_term_memory.py
+>     test_memory_integration.py
+> ```
+> 
+> ---
+> 
+> # `models.py`
+> 
+> This would hold the dataclasses I sketched earlier:
+> 
+> - `Message`
+> - `ConversationTranscript`
+> - `MemoryRecord`
+> - `UserProfile`
+> - `TaskRecord`
+> - `RetrievedMemoryBundle`
+> - `ConversationState`
+> - `PostProcessResult`
+> 
+> You already have those prototypes above.
+> 
+> ---
+> 
+> # `protocols.py`
+> 
+> This would hold:
+> 
+> - `MemoryStore`
+> - `MemoryIndex`
+> - `MemoryModel`
+> 
+> This is important because it keeps all core orchestration code decoupled from SQLAlchemy/Whoosh/OpenAI.
+> 
+> ---
+> 
+> # In-memory store for tests
+> 
+> This is probably the most important thing for unit tests.
+> 
+> ## `store_inmemory.py`
+> 
+> ```python
+> from collections import defaultdict
+> from copy import deepcopy
+> 
+> 
+> class InMemoryStore:
+>     def __init__(self) -> None:
+>         self.users: set[str] = set()
+>         self.memories: dict[str, dict[str, MemoryRecord]] = defaultdict(dict)
+>         self.conversations: dict[str, dict[str, ConversationTranscript]] = defaultdict(dict)
+>         self.profiles: dict[str, UserProfile] = {}
+>         self.tasks: dict[str, dict[str, TaskRecord]] = defaultdict(dict)
+> 
+>         self._memory_counter = 0
+>         self._task_counter = 0
+> 
+>     def create_user_if_missing(self, user_id: str) -> None:
+>         self.users.add(user_id)
+> 
+>     def _next_memory_id(self) -> str:
+>         self._memory_counter += 1
+>         return f"mem-{self._memory_counter}"
+> 
+>     def _next_task_id(self) -> str:
+>         self._task_counter += 1
+>         return f"task-{self._task_counter}"
+> 
+>     def save_memory(self, memory: MemoryRecord) -> str:
+>         memory = deepcopy(memory)
+>         if not memory.memory_id:
+>             memory.memory_id = self._next_memory_id()
+>         self.memories[memory.user_id][memory.memory_id] = memory
+>         return memory.memory_id
+> 
+>     def update_memory(self, memory: MemoryRecord) -> None:
+>         self.memories[memory.user_id][memory.memory_id] = deepcopy(memory)
+> 
+>     def get_memory(self, user_id: str, memory_id: str) -> Optional[MemoryRecord]:
+>         memory = self.memories[user_id].get(memory_id)
+>         return deepcopy(memory) if memory is not None else None
+> 
+>     def list_memories(
+>         self,
+>         user_id: str,
+>         *,
+>         kind: Optional[MemoryKind] = None,
+>         active_only: bool = True,
+>         limit: int = 100,
+>     ) -> list[MemoryRecord]:
+>         items = list(self.memories[user_id].values())
+> 
+>         if kind is not None:
+>             items = [m for m in items if m.kind == kind]
+>         if active_only:
+>             items = [m for m in items if m.is_active]
+> 
+>         items.sort(key=lambda m: (m.importance, m.created_at), reverse=True)
+>         return [deepcopy(x) for x in items[:limit]]
+> 
+>     def find_memories_by_filters(
+>         self,
+>         user_id: str,
+>         *,
+>         kind: Optional[MemoryKind] = None,
+>         conversation_id: Optional[str] = None,
+>         project_id: Optional[str] = None,
+>         task_id: Optional[str] = None,
+>         tags: Optional[Sequence[str]] = None,
+>         active_only: bool = True,
+>         limit: int = 100,
+>     ) -> list[MemoryRecord]:
+>         items = list(self.memories[user_id].values())
+> 
+>         if kind is not None:
+>             items = [m for m in items if m.kind == kind]
+>         if conversation_id is not None:
+>             items = [m for m in items if m.conversation_id == conversation_id]
+>         if project_id is not None:
+>             items = [m for m in items if m.project_id == project_id]
+>         if task_id is not None:
+>             items = [m for m in items if m.task_id == task_id]
+>         if tags:
+>             tagset = set(tags)
+>             items = [m for m in items if tagset.intersection(m.tags)]
+>         if active_only:
+>             items = [m for m in items if m.is_active]
+> 
+>         items.sort(key=lambda m: (m.importance, m.created_at), reverse=True)
+>         return [deepcopy(x) for x in items[:limit]]
+> 
+>     def save_conversation(self, transcript: ConversationTranscript) -> None:
+>         self.conversations[transcript.user_id][transcript.conversation_id] = deepcopy(transcript)
+> 
+>     def get_conversation(self, user_id: str, conversation_id: str) -> Optional[ConversationTranscript]:
+>         convo = self.conversations[user_id].get(conversation_id)
+>         return deepcopy(convo) if convo is not None else None
+> 
+>     def save_user_profile(self, profile: UserProfile) -> None:
+>         self.profiles[profile.user_id] = deepcopy(profile)
+> 
+>     def get_user_profile(self, user_id: str) -> Optional[UserProfile]:
+>         profile = self.profiles.get(user_id)
+>         return deepcopy(profile) if profile is not None else None
+> 
+>     def save_task(self, task: TaskRecord) -> str:
+>         task = deepcopy(task)
+>         if not task.task_id:
+>             task.task_id = self._next_task_id()
+>         self.tasks[task.user_id][task.task_id] = task
+>         return task.task_id
+> 
+>     def update_task(self, task: TaskRecord) -> None:
+>         self.tasks[task.user_id][task.task_id] = deepcopy(task)
+> 
+>     def get_task(self, user_id: str, task_id: str) -> Optional[TaskRecord]:
+>         task = self.tasks[user_id].get(task_id)
+>         return deepcopy(task) if task is not None else None
+> 
+>     def list_tasks(
+>         self,
+>         user_id: str,
+>         *,
+>         status: Optional[TaskStatus] = None,
+>         limit: int = 100,
+>     ) -> list[TaskRecord]:
+>         items = list(self.tasks[user_id].values())
+>         if status is not None:
+>             items = [t for t in items if t.status == status]
+>         items.sort(key=lambda t: t.updated_at, reverse=True)
+>         return [deepcopy(x) for x in items[:limit]]
+> 
+>     def delete_memory(self, user_id: str, memory_id: str) -> bool:
+>         if memory_id in self.memories[user_id]:
+>             del self.memories[user_id][memory_id]
+>             return True
+>         return False
+> ```
+> 
+> This gives you:
+> - total test isolation
+> - multiple users
+> - no touching production data
+> - deterministic inspection in tests
+> 
+> ---
+> 
+> # Simple in-memory index for tests
+> 
+> ## `index_null.py`
+> 
+> ```python
+> class NullMemoryIndex:
+>     def index_memory(self, memory: MemoryRecord) -> None:
+>         pass
+> 
+>     def remove_memory(self, memory_id: str) -> None:
+>         pass
+> 
+>     def search(
+>         self,
+>         user_id: str,
+>         query: str,
+>         *,
+>         kinds: Optional[Sequence[MemoryKind]] = None,
+>         limit: int = 10,
+>     ) -> list[str]:
+>         return []
+> 
+>     def index_conversation_summary(
+>         self,
+>         user_id: str,
+>         conversation_id: str,
+>         summary: str,
+>         metadata: Optional[dict[str, Any]] = None,
+>     ) -> None:
+>         pass
+> ```
+> 
+> ## Optional lightweight keyword test index
+> 
+> This is useful for integration tests without Whoosh.
+> 
+> ```python
+> class SimpleTextMemoryIndex:
+>     def __init__(self, store: MemoryStore) -> None:
+>         self.store = store
+> 
+>     def index_memory(self, memory: MemoryRecord) -> None:
+>         pass  # no-op; store is source of truth
+> 
+>     def remove_memory(self, memory_id: str) -> None:
+>         pass
+> 
+>     def search(
+>         self,
+>         user_id: str,
+>         query: str,
+>         *,
+>         kinds: Optional[Sequence[MemoryKind]] = None,
+>         limit: int = 10,
+>     ) -> list[str]:
+>         query_terms = {term.lower() for term in query.split() if term.strip()}
+>         candidates = self.store.list_memories(user_id, kind=None, active_only=True, limit=1000)
+> 
+>         if kinds is not None:
+>             kindset = set(kinds)
+>             candidates = [c for c in candidates if c.kind in kindset]
+> 
+>         scored: list[tuple[int, str]] = []
+>         for memory in candidates:
+>             haystack = " ".join(filter(None, [memory.content, memory.summary or "", " ".join(memory.tags)])).lower()
+>             score = sum(1 for term in query_terms if term in haystack)
+>             if score > 0:
+>                 scored.append((score, memory.memory_id))
+> 
+>         scored.sort(reverse=True)
+>         return [memory_id for _, memory_id in scored[:limit]]
+> 
+>     def index_conversation_summary(
+>         self,
+>         user_id: str,
+>         conversation_id: str,
+>         summary: str,
+>         metadata: Optional[dict[str, Any]] = None,
+>     ) -> None:
+>         pass
+> ```
+> 
+> ---
+> 
+> # Mock model for tests
+> 
+> This is extremely useful.
+> 
+> ## `model_mock.py`
+> 
+> ```python
+> class MockMemoryModel:
+>     def summarize_conversation(
+>         self,
+>         transcript: ConversationTranscript,
+>         existing_summary: Optional[str] = None,
+>     ) -> str:
+>         user_messages = [m.content for m in transcript.messages if m.role == "user"]
+>         assistant_messages = [m.content for m in transcript.messages if m.role == "assistant
+**user**:
+> And please keep going from `MockMemoryModel`.
+**assistant**:
+> ```python
+>         if not transcript.messages:
+>             return existing_summary or ""
+> 
+>         last_user = user_messages[-1] if user_messages else ""
+>         last_assistant = assistant_messages[-1] if assistant_messages else ""
+>         pieces = []
+>         if existing_summary:
+>             pieces.append(f"Existing summary: {existing_summary}")
+>         if last_user:
+>             pieces.append(f"Last user message: {last_user[:200]}")
+>         if last_assistant:
+>             pieces.append(f"Last assistant message: {last_assistant[:200]}")
+>         return " | ".join(pieces)
+> 
+>     def summarize_turn_delta(
+>         self,
+>         transcript: ConversationTranscript,
+>         previous_state: ConversationState,
+>     ) -> ConversationState:
+>         state = ConversationState(
+>             conversation_id=previous_state.conversation_id,
+>             user_id=previous_state.user_id,
+>             running_summary=previous_state.running_summary,
+>             open_questions=list(previous_state.open_questions),
+>             current_goals=list(previous_state.current_goals),
+>             constraints=list(previous_state.constraints),
+>             important_points=list(previous_state.important_points),
+>             last_updated=datetime.utcnow(),
+>         )
+> 
+>         if transcript.messages:
+>             last_message = transcript.messages[-1]
+>             if last_message.role == "user":
+>                 content = last_message.content.strip()
+>                 if content:
+>                     state.important_points.append(content[:200])
+>                     state.running_summary = (
+>                         (state.running_summary + " | ") if state.running_summary else ""
+>                     ) + f"User said: {content[:200]}"
+> 
+>                     lowered = content.lower()
+>                     if "goal:" in lowered:
+>                         state.current_goals.append(content)
+>                     if "constraint:" in lowered:
+>                         state.constraints.append(content)
+>                     if "?" in content:
+>                         state.open_questions.append(content)
+> 
+>         # keep bounded
+>         state.important_points = state.important_points[-10:]
+>         state.current_goals = state.current_goals[-5:]
+>         state.constraints = state.constraints[-5:]
+>         state.open_questions = state.open_questions[-5:]
+>         if len(state.running_summary) > 2000:
+>             state.running_summary = state.running_summary[-2000:]
+> 
+>         return state
+> 
+>     def build_retrieval_query(
+>         self,
+>         recent_messages: Sequence[Message],
+>         conversation_state: ConversationState,
+>     ) -> str:
+>         parts: list[str] = []
+> 
+>         for message in recent_messages[-3:]:
+>             if message.role == "user":
+>                 parts.append(message.content)
+> 
+>         parts.extend(conversation_state.current_goals[-2:])
+>         parts.extend(conversation_state.constraints[-2:])
+> 
+>         return " ".join(parts).strip()[:500]
+> 
+>     def extract_candidate_memories(
+>         self,
+>         transcript: ConversationTranscript,
+>         conversation_summary: str,
+>     ) -> list[MemoryRecord]:
+>         """
+>         Very simple deterministic extractor for tests.
+>         Rules:
+>         - lines containing 'remember:' become fact memories
+>         - lines containing 'preference:' become preference memories
+>         - always emit one episode summary if there were user messages
+>         """
+>         now = transcript.ended_at or datetime.utcnow()
+>         candidates: list[MemoryRecord] = []
+> 
+>         for message in transcript.messages:
+>             if message.role != "user":
+>                 continue
+> 
+>             for raw_line in message.content.splitlines():
+>                 line = raw_line.strip()
+>                 lowered = line.lower()
+> 
+>                 if lowered.startswith("remember:"):
+>                     content = line.split(":", 1)[1].strip()
+>                     if content:
+>                         candidates.append(
+>                             MemoryRecord(
+>                                 memory_id="",
+>                                 user_id=transcript.user_id,
+>                                 kind="fact",
+>                                 content=content,
+>                                 summary=content[:200],
+>                                 created_at=now,
+>                                 conversation_id=transcript.conversation_id,
+>                                 source="mock_extractor",
+>                                 importance=0.8,
+>                                 confidence=0.95,
+>                                 tags=["remember"],
+>                             )
+>                         )
+> 
+>                 elif lowered.startswith("preference:"):
+>                     content = line.split(":", 1)[1].strip()
+>                     if content:
+>                         candidates.append(
+>                             MemoryRecord(
+>                                 memory_id="",
+>                                 user_id=transcript.user_id,
+>                                 kind="preference",
+>                                 content=content,
+>                                 summary=content[:200],
+>                                 created_at=now,
+>                                 conversation_id=transcript.conversation_id,
+>                                 source="mock_extractor",
+>                                 importance=0.7,
+>                                 confidence=0.9,
+>                                 tags=["preference"],
+>                             )
+>                         )
+> 
+>                 elif lowered.startswith("task:"):
+>                     content = line.split(":", 1)[1].strip()
+>                     if content:
+>                         candidates.append(
+>                             MemoryRecord(
+>                                 memory_id="",
+>                                 user_id=transcript.user_id,
+>                                 kind="task",
+>                                 content=content,
+>                                 summary=content[:200],
+>                                 created_at=now,
+>                                 conversation_id=transcript.conversation_id,
+>                                 source="mock_extractor",
+>                                 importance=0.75,
+>                                 confidence=0.85,
+>                                 tags=["task"],
+>                             )
+>                         )
+> 
+>         user_messages = [m.content for m in transcript.messages if m.role == "user"]
+>         if user_messages:
+>             candidates.append(
+>                 MemoryRecord(
+>                     memory_id="",
+>                     user_id=transcript.user_id,
+>                     kind="episode",
+>                     content=conversation_summary,
+>                     summary=conversation_summary[:200],
+>                     created_at=now,
+>                     conversation_id=transcript.conversation_id,
+>                     source="mock_extractor",
+>                     importance=0.4,
+>                     confidence=0.8,
+>                     tags=["episode"],
+>                 )
+>             )
+> 
+>         return candidates
+> 
+>     def merge_profile(
+>         self,
+>         existing_profile: Optional[UserProfile],
+>         candidate_memories: Sequence[MemoryRecord],
+>     ) -> UserProfile:
+>         if existing_profile is None:
+>             # infer user_id from first candidate if possible
+>             user_id = candidate_memories[0].user_id if candidate_memories else "unknown"
+>             profile = UserProfile(user_id=user_id)
+>         else:
+>             profile = UserProfile(
+>                 user_id=existing_profile.user_id,
+>                 display_name=existing_profile.display_name,
+>                 preferences=list(existing_profile.preferences),
+>                 facts=list(existing_profile.facts),
+>                 active_projects=list(existing_profile.active_projects),
+>                 active_tasks=list(existing_profile.active_tasks),
+>                 updated_at=datetime.utcnow(),
+>             )
+> 
+>         pref_set = set(profile.preferences)
+>         fact_set = set(profile.facts)
+>         task_set = set(profile.active_tasks)
+> 
+>         for memory in candidate_memories:
+>             if memory.kind == "preference":
+>                 pref_set.add(memory.content)
+>             elif memory.kind == "fact":
+>                 fact_set.add(memory.content)
+>             elif memory.kind == "task":
+>                 task_set.add(memory.content)
+> 
+>         profile.preferences = sorted(pref_set)
+>         profile.facts = sorted(fact_set)
+>         profile.active_tasks = sorted(task_set)
+>         profile.updated_at = datetime.utcnow()
+> 
+>         return profile
+> 
+>     def build_prompt_memory_block(
+>         self,
+>         profile: Optional[UserProfile],
+>         memories: Sequence[MemoryRecord],
+>         tasks: Sequence[TaskRecord],
+>         conversation_state: ConversationState,
+>     ) -> str:
+>         lines: list[str] = []
+> 
+>         lines.append("Relevant memory:")
+> 
+>         if profile is not None:
+>             if profile.facts:
+>                 lines.append("Facts:")
+>                 for fact in profile.facts[:5]:
+>                     lines.append(f"- {fact}")
+>             if profile.preferences:
+>                 lines.append("Preferences:")
+>                 for pref in profile.preferences[:5]:
+>                     lines.append(f"- {pref}")
+> 
+>         if tasks:
+>             lines.append("Active tasks:")
+>             for task in tasks[:5]:
+>                 lines.append(f"- [{task.status}] {task.title}")
+> 
+>         if conversation_state.current_goals:
+>             lines.append("Current goals:")
+>             for goal in conversation_state.current_goals[-3:]:
+>                 lines.append(f"- {goal}")
+> 
+>         if conversation_state.constraints:
+>             lines.append("Constraints:")
+>             for constraint in conversation_state.constraints[-3:]:
+>                 lines.append(f"- {constraint}")
+> 
+>         if memories:
+>             lines.append("Relevant prior memories:")
+>             for memory in memories[:5]:
+>                 snippet = memory.summary or memory.content[:160]
+>                 lines.append(f"- ({memory.kind}) {snippet}")
+> 
+>         return "\n".join(lines)
+> ```
+> 
+> That gives you a deterministic, testable stand-in for the real LLM-backed memory model.
+> 
+> ---
+> 
+> # OpenAI-backed memory model skeleton
+> 
+> Now let’s define the real implementation seam, without overcommitting to prompt details yet.
+> 
+> ## `model_openai.py`
+> 
+> ```python
+> class OpenAIMemoryModel:
+>     def __init__(
+>         self,
+>         client: Any,
+>         *,
+>         model_name: str,
+>         temperature: float = 0.0,
+>     ) -> None:
+>         self.client = client
+>         self.model_name = model_name
+>         self.temperature = temperature
+> 
+>     def summarize_conversation(
+>         self,
+>         transcript: ConversationTranscript,
+>         existing_summary: Optional[str] = None,
+>     ) -> str:
+>         raise NotImplementedError
+> 
+>     def summarize_turn_delta(
+>         self,
+>         transcript: ConversationTranscript,
+>         previous_state: ConversationState,
+>     ) -> ConversationState:
+>         raise NotImplementedError
+> 
+>     def build_retrieval_query(
+>         self,
+>         recent_messages: Sequence[Message],
+>         conversation_state: ConversationState,
+>     ) -> str:
+>         raise NotImplementedError
+> 
+>     def extract_candidate_memories(
+>         self,
+>         transcript: ConversationTranscript,
+>         conversation_summary: str,
+>     ) -> list[MemoryRecord]:
+>         raise NotImplementedError
+> 
+>     def merge_profile(
+>         self,
+>         existing_profile: Optional[UserProfile],
+>         candidate_memories: Sequence[MemoryRecord],
+>     ) -> UserProfile:
+>         raise NotImplementedError
+> 
+>     def build_prompt_memory_block(
+>         self,
+>         profile: Optional[UserProfile],
+>         memories: Sequence[MemoryRecord],
+>         tasks: Sequence[TaskRecord],
+>         conversation_state: ConversationState,
+>     ) -> str:
+>         """
+>         This one can be deterministic and not require an LLM.
+>         """
+>         lines: list[str] = []
+> 
+>         if profile or memories or tasks or conversation_state.running_summary:
+>             lines.append("Long-term and conversation memory:")
+> 
+>         if profile:
+>             if profile.facts:
+>                 lines.append("Known facts about user:")
+>                 for fact in profile.facts[:8]:
+>                     lines.append(f"- {fact}")
+>             if profile.preferences:
+>                 lines.append("User preferences:")
+>                 for pref in profile.preferences[:8]:
+>                     lines.append(f"- {pref}")
+> 
+>         if tasks:
+>             lines.append("Active tasks:")
+>             for task in tasks[:8]:
+>                 title = task.title
+>                 if task.current_step:
+>                     title += f" | next: {task.current_step}"
+>                 lines.append(f"- [{task.status}] {title}")
+> 
+>         if conversation_state.current_goals:
+>             lines.append("Current conversation goals:")
+>             for goal in conversation_state.current_goals[-5:]:
+>                 lines.append(f"- {goal}")
+> 
+>         if conversation_state.constraints:
+>             lines.append("Current constraints:")
+>             for constraint in conversation_state.constraints[-5:]:
+>                 lines.append(f"- {constraint}")
+> 
+>         if memories:
+>             lines.append("Relevant prior memory:")
+>             for memory in memories[:8]:
+>                 text = memory.summary or memory.content[:200]
+>                 lines.append(f"- ({memory.kind}) {text}")
+> 
+>         return "\n".join(lines)
+> ```
+> 
+> For the real implementation, I’d recommend that:
+> - `build_prompt_memory_block` be deterministic
+> - the LLM only be used for:
+>   - summarization
+>   - extraction
+>   - maybe retrieval-query generation
+>   - maybe profile merge if you want nuance
+> 
+> That reduces cost and weirdness.
+> 
+> ---
+> 
+> # SQLAlchemy store skeleton
+> 
+> Now let’s define the canonical persistent store.
+> 
+> ## `store_sqlalchemy.py`
+> 
+> I’ll keep this at the prototype level, because the exact schema style depends on whether you use ORM declarative mapping or Core tables.
+> 
+> ### ORM model sketch
+> 
+> ```python
+> # Not complete runnable code; prototype only
+> 
+> from sqlalchemy import (
+>     Column, String, Text, DateTime, Float, Boolean, Integer, ForeignKey
+> )
+> from sqlalchemy.orm import declarative_base
+> 
+> Base = declarative_base()
+> 
+> 
+> class MemoryRow(Base):
+>     __tablename__ = "memory_records"
+> 
+>     memory_id

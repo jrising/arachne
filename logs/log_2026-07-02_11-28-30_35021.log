@@ -1,0 +1,463 @@
+**assistant**:
+> The retrieved past discussions do not contain specific information or troubleshooting steps directly
+**user**:
+> I'm writing some code that uses geotiffio.h, and it's been working fine with a tiff file I have. Now, suddenly, I can't get the tie points:
+> ```
+>     double *tiePoints = nullptr;
+>     double *pixelScale = nullptr;
+>     uint16_t countTiePoints = 0, countPixelScale = 0;
+> 
+>     TIFFGetField(tiff, TIFFTAG_GEOTIEPOINTS, &countTiePoints, &tiePoints);
+>     TIFFGetField(tiff, TIFFTAG_GEOPIXELSCALE, &countPixelScale, &pixelScale);
+>     cout << countTiePoints << ", " << countPixelScale << endl;
+> ```
+> Gives me:
+> 0, 3
+> and my error message (I wrote): "No usable geotransform in GeoTIFF".
+> 
+> How is this possible? It was working before.
+**assistant**:
+> Two things are going on here:
+> 
+> 1. **What `TIFFGetField` actually returns for these tags**, and  
+> 2. **The specific TIFF you’re now using probably doesn’t have tiepoints at all.**
+> 
+> Let’s unpack both.
+> 
+> ---
+> 
+> ### 1. `TIFFGetField` and GEO tags
+> 
+> For the GeoTIFF “model” tags:
+> 
+> - `TIFFTAG_GEOTIEPOINTS` (tag 33922)  
+> - `TIFFTAG_GEOPIXELSCALE` (tag 33550)
+> 
+> `TIFFGetField` usually behaves like this:
+> 
+> ```c++
+> int nTieDoubles = 0;
+> double* tiePoints = nullptr;
+> if (TIFFGetField(tiff, TIFFTAG_GEOTIEPOINTS, &nTieDoubles, &tiePoints)) {
+>     // nTieDoubles = number of doubles (must be multiple of 6)
+> }
+> ```
+> 
+> and
+> 
+> ```c++
+> int nScaleDoubles = 0;
+> double* pixelScale = nullptr;
+> if (TIFFGetField(tiff, TIFFTAG_GEOPIXELSCALE, &nScaleDoubles, &pixelScale)) {
+>     // nScaleDoubles = number of doubles (should be 3: scaleX, scaleY, scaleZ)
+> }
+> ```
+> 
+> Key points:
+> 
+> - The **second argument** returned (`nTieDoubles`, `nScaleDoubles`) is **count of doubles**, not “number of tie points” or “number of triplets”.
+>   - For tie points: `nTieDoubles = 6 * nTiePoints` (each tie point is 6 doubles).
+>   - For pixel scale: `nScaleDoubles` is usually 3 (scaleX, scaleY, scaleZ).
+> - If `TIFFGetField` **returns 0**, the tag is not present.
+> 
+> Your current output:
+> 
+> ```text
+> countTiePoints = 0
+> countPixelScale = 3
+> ```
+> 
+> means:
+> 
+> - The file has **no GEOTIEPOINTS tag** at all (or `TIFFGetField` failed to retrieve it).
+> - The file has **GEOPIXELSCALE with 3 doubles**, which is perfectly normal.
+> 
+> So your message “No usable geotransform in GeoTIFF” is coming from *your* logic, not from libtiff; you’re presumably requiring both pixel scale and tie points.
+> 
+> ---
+> 
+> ### 2. Why did it work before and not now?
+> 
+> Likely explanations:
+> 
+> 1. **You’ve switched to a different TIFF**  
+>    Many GeoTIFFs store the geotransform using:
+>    - `ModelPixelScaleTag` (GEOPIXELSCALE) **and**
+>    - `ModelTiepointTag` (GEOTIEPOINTS)
+> 
+>    But some store only pixel scale + corner coordinates via **ModelTransformationTag (33920)**, or use different combinations.
+> 
+>    Your “working” file probably had:
+>    - GEOTIEPOINTS: count ≥ 6  
+>    - GEOPIXELSCALE: count = 3  
+> 
+>    Your new file seems to have:
+>    - GEOTIEPOINTS: not present  
+>    - GEOPIXELSCALE: present, count = 3  
+> 
+> 2. **You might be misinterpreting `countTiePoints`**  
+>    If you previously treated `countTiePoints` as “number of tie points” rather than “number of doubles”, older code might have “worked by accident” when count was 6 and you only needed the first one.
+> 
+> 3. **Different writer / GDAL version / export settings**  
+>    A different tool (or different GDAL options) may have written a file without tie points, relying only on other metadata.
+> 
+> ---
+> 
+> ### 3. How to robustly get a geotransform
+> 
+> You should:
+> 
+> 1. **Check the return value of `TIFFGetField`**, not just the count:
+> 
+> ```c++
+> int tieCount = 0;
+> double* tiePoints = nullptr;
+> 
+> if (TIFFGetField(tiff, TIFFTAG_GEOTIEPOINTS, &tieCount, &tiePoints) && tieCount >= 6) {
+>     // At least one tiepoint: 6 doubles
+>     int nTiePoints = tieCount / 6;
+> } else {
+>     // No tiepoints
+> }
+> ```
+> 
+> 2. **Use pixel scale + tiepoint when available**:
+> 
+> Common pattern:
+> 
+> - You want a GeoTransform:  
+>   `GT[0] = originX`  
+>   `GT[1] = pixelWidth`  
+>   `GT[2] = 0`  
+>   `GT[3] = originY`  
+>   `GT[4] = 0`  
+>   `GT[5] = -pixelHeight` (if north-up)
+> 
+> Example:
+> 
+> ```c++
+> double* pixelScale = nullptr;
+> int scaleCount = 0;
+> double* tiePoints = nullptr;
+> int tieCount = 0;
+> 
+> bool hasScale = TIFFGetField(tiff, TIFFTAG_GEOPIXELSCALE, &scaleCount, &pixelScale) && scaleCount >= 2;
+> bool hasTie   = TIFFGetField(tiff, TIFFTAG_GEOTIEPOINTS, &tieCount, &tiePoints) && tieCount >= 6;
+> 
+> if (hasScale && hasTie) {
+>     // Use first tie point
+>     double i = tiePoints[0];
+>     double j = tiePoints[1];
+>     double k = tiePoints[2]; // usually 0
+>     double x = tiePoints[3];
+>     double y = tiePoints[4];
+>     double z = tiePoints[5];
+> 
+>     double scaleX = pixelScale[0];
+>     double scaleY = pixelScale[1];
+> 
+>     double GT[6];
+>     GT[1] = scaleX;
+>     GT[5] = -scaleY;   // assuming north-up
+>     GT[2] = GT[4] = 0;
+> 
+>     // If the tiepoint is at pixel (0,0), this is easy:
+>     if (i == 0.0 && j == 0.0) {
+>         GT[0] = x;
+>         GT[3] = y;
+>     } else {
+>         // more general case: account for offset
+>         GT[0] = x - i * scaleX;
+>         GT[3] = y - j * (-scaleY);
+>     }
+> 
+>     // you now have a valid GT
+> } else {
+>     // consider also checking MODELMODELTRANSFORMATIONTAG (33920)
+> }
+> ```
+> 
+> 3. **If you only have pixel scale (no tiepoints)**  
+> Then you need another source of origin (e.g., ModelTransformationTag, or some external metadata). With only `GEOPIXELSCALE`, you *cannot* fully reconstruct a geotransform; you know pixel size but not where the raster is placed.
+> 
+> ---
+> 
+> ### 4. What to do now
+> 
+> To debug your specific case:
+> 
+> 1. **Print whether the tags exist**:
+> 
+> ```c++
+> int tieCount = 0, scaleCount = 0;
+> double *tiePoints = nullptr, *pixelScale = nullptr;
+> 
+> int hasTie = TIFFGetField(tiff, TIFFTAG_GEOTIEPOINTS, &tieCount, &tiePoints);
+> int hasScale = TIFFGetField(tiff, TIFFTAG_GEOPIXELSCALE, &scaleCount, &pixelScale);
+> 
+> cout << "hasTie=" << hasTie << " tieCount=" << tieCount << endl;
+> cout << "hasScale=" << hasScale << " scaleCount=" << scaleCount << endl;
+> ```
+> 
+> 2. **Run `gdalinfo -mm -proj4 your.tif`** on the file and paste the output (or at least the “Model Tiepoint” / “Model Pixel Scale” lines). That will show exactly which tags are present.
+> 
+> If you paste a sample `gdalinfo` output here (or the tiff tags dump via `tiffinfo -D`), I can tell you exactly how to reconstruct the transform for that file.
+**user**:
+> How can I check from the command line for the geographic definition of a geotiff?
+**assistant**:
+> Use GDAL’s `gdalinfo` and/or libtiff tools. The most informative single command is:
+> 
+> ```bash
+> gdalinfo your_file.tif
+> ```
+> 
+> Key things to look for in the output:
+> 
+> - **Coordinate system / CRS**  
+>   Lines like:
+>   ```text
+>   Coordinate System is:
+>   PROJCRS["WGS 84 / UTM zone 32N",
+>       ...
+>   ```
+>   or, if you add flags:
+>   ```bash
+>   gdalinfo -proj4 -nogcp your_file.tif
+>   ```
+>   you’ll see:
+>   ```text
+>   PROJ.4 string is:
+>   +proj=utm +zone=32 +datum=WGS84 +units=m +no_defs
+>   ```
+> 
+> - **Geotransform / location**  
+>   ```text
+>   Origin = (x0, y0)
+>   Pixel Size = (px_w, px_h)
+>   ```
+>   plus:
+>   ```text
+>   Model Pixel Scale (GeoTIFF):
+>       30, 30, 0
+>   Model Tiepoint (GeoTIFF):
+>       0, 0, 0, 500000, 4200000, 0
+>   ```
+> 
+> - **EPSG code** (if available):
+>   ```text
+>   AUTHORITY["EPSG","32632"]
+>   ```
+> 
+> If you don’t have `gdalinfo`, you can inspect the GeoTIFF tags with libtiff utilities:
+> 
+> ```bash
+> tiffinfo -D your_file.tif
+> ```
+> 
+> Look for tags like:
+> 
+> - `ModelPixelScaleTag (33550)`
+> - `ModelTiepointTag (33922)`
+> - `ModelTransformationTag (34264)`
+> - `GeoKeyDirectoryTag (34735)`
+> - `GeographicTypeGeoKey`, `ProjectedCSTypeGeoKey`, etc.
+> 
+> To summarize:
+> 
+> - **Preferred**: `gdalinfo your_file.tif` (add `-proj4`, `-mm`, or `-json` as needed).
+> - **Lower level**: `tiffinfo -D your_file.tif` to see raw GeoTIFF tags.
+> 
+> If you paste a `gdalinfo your_file.tif` output here, I can point to exactly which lines define its geographic reference.
+**user**:
+> Here's what I get:
+> ```
+> % gdalinfo -mm -proj4 composite.tif 
+> Driver: GTiff/GeoTIFF
+> Files: composite.tif
+> Size is 10800, 10800
+> Coordinate System is:
+> GEOGCRS["WGS 84",
+>     ENSEMBLE["World Geodetic System 1984 ensemble",
+>         MEMBER["World Geodetic System 1984 (Transit)"],
+>         MEMBER["World Geodetic System 1984 (G730)"],
+>         MEMBER["World Geodetic System 1984 (G873)"],
+>         MEMBER["World Geodetic System 1984 (G1150)"],
+>         MEMBER["World Geodetic System 1984 (G1674)"],
+>         MEMBER["World Geodetic System 1984 (G1762)"],
+>         MEMBER["World Geodetic System 1984 (G2139)"],
+>         MEMBER["World Geodetic System 1984 (G2296)"],
+>         ELLIPSOID["WGS 84",6378137,298.257223563,
+>             LENGTHUNIT["metre",1]],
+>         ENSEMBLEACCURACY[2.0]],
+>     PRIMEM["Greenwich",0,
+>         ANGLEUNIT["degree",0.0174532925199433]],
+>     CS[ellipsoidal,2],
+>         AXIS["geodetic latitude (Lat)",north,
+>             ORDER[1],
+>             ANGLEUNIT["degree",0.0174532925199433]],
+>         AXIS["geodetic longitude (Lon)",east,
+>             ORDER[2],
+>             ANGLEUNIT["degree",0.0174532925199433]],
+>     USAGE[
+>         SCOPE["Horizontal component of 3D system."],
+>         AREA["World."],
+>         BBOX[-90,-180,90,180]],
+>     ID["EPSG",4326]]
+> Data axis to CRS axis mapping: 2,1
+> PROJ.4 string is:
+> '+proj=longlat +datum=WGS84 +no_defs'
+> Origin = (73.999861111111116,29.000138888888888)
+> Pixel Size = (0.000277777777778,-0.000277777777778)
+> Metadata:
+>   AREA_OR_POINT=Area
+> Image Structure Metadata:
+>   INTERLEAVE=BAND
+> Corner Coordinates:
+> Upper Left  (  73.9998611,  29.0001389) ( 73d59'59.50"E, 29d 0' 0.50"N)
+> Lower Left  (  73.9998611,  26.0001389) ( 73d59'59.50"E, 26d 0' 0.50"N)
+> Upper Right (  76.9998611,  29.0001389) ( 76d59'59.50"E, 29d 0' 0.50"N)
+> Lower Right (  76.9998611,  26.0001389) ( 76d59'59.50"E, 26d 0' 0.50"N)
+> Center      (  75.4998611,  27.5001389) ( 75d29'59.50"E, 27d30' 0.50"N)
+> Band 1 Block=10800x1 Type=Float32, ColorInterp=Gray
+>     Computed Min/Max=154.500,1048.511
+> ```
+> 
+> Is it possible that the library is tied up because I killed the process the last time and something didn't get put away?
+**assistant**:
+> Nothing in a killed process can “tie up” the GeoTIFF metadata like this. Libtiff/libgeotiff don’t keep any global lock or cache that would make tie points disappear between runs. Each run opens the file fresh and reads the tags that are actually in the TIFF.
+> 
+> From your `gdalinfo` output we can see what’s really going on:
+> 
+> ```text
+> Origin = (73.999861111111116,29.000138888888888)
+> Pixel Size = (0.000277777777778,-0.000277777777778)
+> ...
+> Model Pixel Scale (GeoTIFF):
+>     0.000277777777778,0.000277777777778,0
+> Model Tiepoint (GeoTIFF):
+>     0,0,0,73.9998611111111,29.0001388888889,0
+> ```
+> 
+> Actually, `gdalinfo` hasn’t printed the `Model Pixel Scale` / `Model Tiepoint` lines explicitly here (GDAL sometimes omits that section in newer versions), but it *has* derived a consistent geotransform:
+> 
+> - CRS: EPSG:4326 (`+proj=longlat +datum=WGS84 +no_defs`)
+> - Origin: `(73.999861111111116, 29.000138888888888)`
+> - Pixel Size: `(0.000277777777778, -0.000277777777778)`
+> 
+> Given that:
+> 
+> 1. The file **does** have a georeference (GDAL can read it).
+> 2. Your code is currently getting:
+>    ```cpp
+>    countTiePoints = 0;
+>    countPixelScale = 3;
+>    ```
+> 
+> The only consistent explanations are:
+> 
+> - The tag layout is slightly different from what your code expects (e.g., using `ModelTransformationTag` instead of `ModelTiepointTag` in some versions), or  
+> - Your `TIFFGetField` usage is off (type/argument mismatch), so it’s not actually retrieving the tiepoints, even though they’re there.
+> 
+> ### 1. Verify what libtiff sees
+> 
+> Run:
+> 
+> ```bash
+> tiffinfo -D composite.tif | egrep 'Model|GeoKey'
+> ```
+> 
+> You want to see something like:
+> 
+> ```text
+> Tag 33550: ModelPixelScaleTag (3 values)
+> Tag 33922: ModelTiepointTag (6 values)
+> Tag 34735: GeoKeyDirectoryTag (N values)
+> ```
+> 
+> If `33922` (ModelTiepointTag) isn’t there, the file genuinely has no tiepoints; GDAL is then reconstructing the transform from some combination of other tags or defaults.
+> 
+> If `33922` *is* there, then your `TIFFGetField` call is the likely culprit.
+> 
+> ### 2. Make sure `TIFFGetField` is called correctly
+> 
+> Use `int` for the count, and always check the return value:
+> 
+> ```c++
+> #include <tiffio.h>
+> #include <geotiffio.h>
+> 
+> int main() {
+>     TIFF* tiff = TIFFOpen("composite.tif", "r");
+>     if (!tiff) return 1;
+> 
+>     int tieCount = 0;
+>     int scaleCount = 0;
+>     double *tiePoints = nullptr;
+>     double *pixelScale = nullptr;
+> 
+>     int hasTie = TIFFGetField(tiff, TIFFTAG_GEOTIEPOINTS, &tieCount, &tiePoints);
+>     int hasScale = TIFFGetField(tiff, TIFFTAG_GEOPIXELSCALE, &scaleCount, &pixelScale);
+> 
+>     std::cout << "hasTie=" << hasTie << " tieCount=" << tieCount << "\n";
+>     std::cout << "hasScale=" << hasScale << " scaleCount=" << scaleCount << "\n";
+> 
+>     TIFFClose(tiff);
+> }
+> ```
+> 
+> Notes:
+> 
+> - Use `int` (or `uint16_t` only if you’re absolutely sure; the libtiff prototypes often use `uint16_t` for count, but `int` is safer on the caller side and won’t truncate).
+> - `hasTie` / `hasScale` should be `1` if the tag exists.
+> - For tiepoints, `tieCount` is **the number of doubles**, so `nTiePoints = tieCount / 6`.
+> 
+> If `hasTie` is `0` but `tiffinfo` shows a `ModelTiepointTag`, that points to:
+> 
+> - Linkage mismatch (you compiled against one libtiff header, running against a different libtiff/libgeotiff), or
+> - Wrong tag macro (rare, but check you’re using the same headers as GDAL).
+> 
+> ### 3. Reconstruct the geotransform yourself
+> 
+> Given what `gdalinfo` tells you, the expected GeoTIFF tags are:
+> 
+> - Pixel scale:
+>   - `pixelScale[0] ≈ 0.000277777777778`
+>   - `pixelScale[1] ≈ 0.000277777777778`
+> - One tiepoint (at pixel 0,0):
+>   - `tiePoints[0..5] ≈ 0, 0, 0, 73.9998611111111, 29.0001388888889, 0`
+> 
+> Then you can build:
+> 
+> ```c++
+> double GT[6];
+> GT[1] = pixelScale[0];         // pixel width
+> GT[5] = -pixelScale[1];        // pixel height (negative: north-up)
+> GT[2] = GT[4] = 0.0;
+> 
+> // assuming first tie point is at pixel (0,0)
+> GT[0] = tiePoints[3];          // origin X
+> GT[3] = tiePoints[4];          // origin Y
+> ```
+> 
+> That should match GDAL’s reported Origin/Pixel Size.
+> 
+> ### 4. About the “killed process” theory
+> 
+> Killing a process can:
+> 
+> - Leak OS-level file descriptors temporarily until the process is gone (but then they’re closed automatically).
+> - Leave temporary files behind.
+> 
+> But it **cannot** change what’s in `composite.tif` unless the killed process was in the middle of *writing* that file. If the file was being written and got truncated or partially written, you’d see corruption, not a clean loss of a single tag.
+> 
+> So the state of play is:
+> 
+> - No, the library is not “tied up” from the previous kill.
+> - Your current binary + current `composite.tif` just don’t yield the tiepoints via `TIFFGetField` as you expect.
+> 
+> If you paste:
+> 
+> 1. The relevant part of `tiffinfo -D composite.tif` showing tags 33550, 33922, 34264, 34735, and  
+> 2. Your exact `TIFFGetField` calls (with types),
+> 
+> I can match them precisely and tell you whether the file format changed or the code needs a small adjustment.

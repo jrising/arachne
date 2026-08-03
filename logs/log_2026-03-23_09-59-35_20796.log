@@ -1,0 +1,82 @@
+**assistant**:
+> The most relevant past discussion is:
+> 
+> *   **2024-08-25 21:11:01:** James inquired about applying a
+**user**:
+> In pivot_wider, can I change the naming of columns? I have a call:
+> ```
+>     info %>% group_by(scenario, time) %>% summarize(mu=mean(var), med=median(var), ci25=quantile(var, .25), ci75=quantile(var, .75)) %>%
+>         pivot_wider(names_from='scenario', values_from=c('mu', 'med', 'ci25', 'ci75'), names_sort=F)
+> ```
+> And I get columns like `mu_Baseline`, but I want columns like `Baseline_mu`.
+**assistant**:
+> Yes, you can change the naming of columns in `pivot_wider` using the `names_glue` argument. The `names_glue` argument allows you to specify a custom naming pattern for your new columns. In your case, you want to swap the order of the `scenario` and the statistical measure name (`mu`, `med`, `ci25`, `ci75`).
+> 
+> Here's how you can modify your `pivot_wider` call to achieve the desired column names `Baseline_mu`, `Baseline_med`, etc.:
+> 
+> ```r
+> info %>% 
+>   group_by(scenario, time) %>% 
+>   summarize(
+>     mu = mean(var), 
+>     med = median(var), 
+>     ci25 = quantile(var, .25), 
+>     ci75 = quantile(var, .75)
+>   ) %>% 
+>   pivot_wider(
+>     names_from = 'scenario', 
+>     values_from = c('mu', 'med', 'ci25', 'ci75'), 
+>     names_sort = FALSE,
+>     names_glue = "{scenario}_{.value}"
+>   )
+> ```
+> 
+> In the `names_glue` argument, `{scenario}` will be replaced by the value from `names_from`, and `{.value}` will be replaced by the values from `values_from`. This will rearrange the names to the format you desire.
+**user**:
+> Can I also make these so that they're grouped? So, I get the final dataframe:
+> ```
+> # A tibble: 3 × 13
+>    time Baseline_mu IntegratedAction_mu LTCAction_mu Baseline_med IntegratedAction_med LTCAction_med Baseline_ci25 IntegratedAction_ci25 LTCAction_ci25
+>   <dbl>       <dbl>               <dbl>        <dbl>        <dbl>                <dbl>         <dbl>         <dbl>                 <dbl>          <dbl>
+> ```
+> But I want to see mu_IntegratedAction, med_IntegratedAction, ci25_IntegratedAction, before moving on to mu_Baseline, etc.
+**assistant**:
+> Yes, you can achieve that by using the `names_glue` argument along with sorting your `names_from` to change the order of how `scenario` names appear in the final column names. You would need to arrange your `scenario` values in the desired order before calling `pivot_wider`.
+> 
+> Here's how you can modify your code to get the final output with the desired grouping of columns:
+> 
+> ```r
+> library(dplyr)
+> library(tidyr)
+> 
+> info %>%
+>   group_by(scenario, time) %>%
+>   summarize(
+>     mu = mean(var), 
+>     med = median(var), 
+>     ci25 = quantile(var, .25), 
+>     ci75 = quantile(var, .75)
+>   ) %>%
+>   ungroup() %>%
+>   pivot_wider(
+>     names_from = 'scenario', 
+>     values_from = c('mu', 'med', 'ci25', 'ci75'), 
+>     names_glue = "{.value}_{scenario}",
+>     names_sort = TRUE
+>   ) %>%
+>   # Reorder columns as needed
+>   select(time, 
+>          contains("IntegratedAction"), 
+>          contains("Baseline"), 
+>          contains("LTCAction"))
+> ```
+> 
+> ### Breakdown of the Code:
+> 
+> 1. **`names_glue`:** This pattern `{.value}_{scenario}` will create names like `mu_IntegratedAction`, `med_IntegratedAction`, etc.
+>    
+> 2. **`names_sort`:** Setting this to `TRUE` ensures that the columns are sorted alphabetically after naming.
+> 
+> 3. **`select()`:** After the pivoting, you can reorder the columns as desired. The `contains()` function is helpful for grouping similar columns together.
+> 
+> With this setup, your final dataframe should reflect the structured grouping you want!

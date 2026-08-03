@@ -4,7 +4,7 @@ import os, pickle, subprocess, time, random, glob, json, base64
 import regex as re
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
-import openai
+from openai import OpenAI
 from dotenv import load_dotenv
 from whoosh.index import open_dir
 from whoosh import qparser
@@ -12,14 +12,17 @@ import numpy as np
 from pypdf import PdfReader
 
 from chatwrap import gemini, chatlog
+import memory
+import memory.default, memory.integration_short_term
 import utils
 from utils import create_chat, fillin_training_end, chat_tokens, chat_tokens_each, chat_tokens_one
 
 app = Flask(__name__)
 
 load_dotenv()
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
-openai.api_key = os.getenv('OPENAI_API_KEY')
+client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
+user_id = "jar"
 
 break_streaming = False
 
@@ -44,60 +47,55 @@ def index():
             return render_template('index.html', log_filename=utils.get_log_filename(), menu_html=get_menu())
  
 def stream(input_text, past_messages, log_filename, history_text="",
-           custom_system=None, custom_model=None, on_stream_end=None):
+           custom_system=None, custom_model=None, on_stream_end=None, custom_userid=None):
     global break_streaming
     break_streaming = False
+    print(input_text)
 
+    print(f"Memory: {custom_userid}")
+    
     messages = create_chat(input_text, past_messages, history_text=history_text, custom_system=custom_system)
     
+    print(len(messages))
     if len(messages) < 4:
         if custom_model == 'cheap':
-            model = 'gpt-4o-mini'
+            model = 'gpt-5-nano'
         elif custom_model:
             model = custom_model
         else:
             chatlen = chat_tokens(messages)
-            if chatlen <= 3000:
-                model = 'gpt-4o-2024-08-06'
-            else:
-                model = 'gpt-4o-2024-08-06'
+            model = 'gpt-5-nano'
 
         fillin_training_end(messages, model)
         print(model)
-        completion = openai.ChatCompletion.create(model=model, messages=messages,
-                                                  stream=True, max_tokens=max(2500, min(4096, chat_tokens_one(input_text) + 500)), temperature=1)
+        completion = client.chat.completions.create(model=model, messages=messages,
+                                                  stream=True, max_completion_tokens=max(2500, min(4096, chat_tokens_one(input_text) + 500)), temperature=1)
     else:
         if not custom_model or custom_model == 'cheap':
-            chatlen = chat_tokens(messages)
-            if chatlen >= 15000:
-                model = 'gpt-4o-2024-08-06'
-            elif chatlen <= 3000:
-                model = 'gpt-4o-mini'
-            else:
-                model = 'gpt-4o-mini'
+            model = 'gpt-5-nano'
         else:
             model = custom_model
 
         if custom_model:
             fillin_training_end(messages, model)
-            completion = openai.ChatCompletion.create(model=model, messages=messages,
-                                                      stream=True, max_tokens=500, temperature=1)
+            completion = client.chat.completions.create(model=model, messages=messages,
+                                                      stream=True, max_completion_tokens=2500, temperature=1)
         else:
             try:
                 fillin_training_end(messages, model)
-                completion = openai.ChatCompletion.create(model=model, messages=messages,
-                                                          stream=True, max_tokens=2500, temperature=1)
+                completion = client.chat.completions.create(model=model, messages=messages,
+                                                          stream=True, max_completion_tokens=2500, temperature=1)
             except openai.error.InvalidRequestError as ex:
-                if model == 'gpt-4o':
+                if model == 'gpt-5.6-luna':
                     raise ex
-                fillin_training_end(messages, 'gpt-4o')
-                completion = openai.ChatCompletion.create(model='gpt-4o', messages=messages,
-                                                          stream=True, max_tokens=2500, temperature=1)
+                fillin_training_end(messages, 'gpt-5.6-luna')
+                completion = client.chat.completions.create(model='gpt-5.6-luna', messages=messages,
+                                                          stream=True, max_completion_tokens=2500, temperature=1)
 
     response = ""
     for line in completion:
-        if 'content' in line['choices'][0]['delta']:
-            token = line['choices'][0]['delta']['content']
+        if line.choices[0].delta.content:
+            token = line.choices[0].delta.content
             response += token
             yield token
         if break_streaming:
@@ -106,7 +104,10 @@ def stream(input_text, past_messages, log_filename, history_text="",
         
     ## Write all out to logs
     if log_filename:
-        chatlog.save_log(os.path.join("logs", log_filename), messages)
+        if custom_userid:
+            chatlog.save_log(os.path.join("logs", log_filename), [{"role": "memory", "content": custom_userid}] + messages)
+        else:
+            chatlog.save_log(os.path.join("logs", log_filename), messages)
 
     if on_stream_end:
         on_stream_end(response)
@@ -128,6 +129,8 @@ def completion_api(custom_system=None, custom_model=None, custom_context=""):
     global break_streaming
     data = request.form
 
+    print("Collecting conversation...")
+
     soup = BeautifulSoup(data['past_messages'], 'html.parser')
     past_messages = []
     for div in soup.find_all('div'):
@@ -139,6 +142,10 @@ def completion_api(custom_system=None, custom_model=None, custom_context=""):
     if past_messages[-1]['role'] == 'user':
         past_messages = past_messages[:-1]
 
+    if custom_model is None:
+        custom_model = data.get('model', None)
+        
+    myuser_id = user_id
     if past_messages:
         input_text = data['input_text']
     else:
@@ -148,28 +155,40 @@ def completion_api(custom_system=None, custom_model=None, custom_context=""):
             if data.get('context', '') != '' and os.path.exists('prompts/' + data['preamble'] + '-context.md'):
                 preamble = open('prompts/' + data['preamble'] + '-context.md', 'r').read()
                 preamble = preamble.replace("[CONTEXT]", data.get('context', ''))
-            else:
+            elif os.path.exists('prompts/' + data['preamble'] + '.md'):
                 preamble = open('prompts/' + data['preamble'] + '.md', 'r').read()
+            else:
+                myuser_id = data['preamble']
+                print(f"Loading memory {myuser_id}")
+                preamble = ""
+                
         input_text = preamble + data['input_text']
 
     if custom_context:
         history_text = custom_context
     else:
+        print("Loading LTM...")
+        ltm = memory.default.create_long_term()
+        print("Loading STM...")
+        stm = memory.integration_short_term.build_memory_block(ltm, user_id=myuser_id,
+                                                               input_text=input_text, past_messages=past_messages)
         histchoice = random.choice(["history", "gemini", "none"])
         if histchoice == 'history':
+            print("Memory: History List")
             history_text = data.get('history', '')
             if history_text:
                 history_text = history_text.replace("\n\n", "\n").replace("\n\n", "\n")
-                history_text = "Below are selected log entries of past conversations, as part of an experimental AI memory system. They may have no bearing on the chat.\n" + history_text
+                history_text = stm + "\n\nBelow are selected log entries of past conversations. They may have no bearing on the chat.\n" + history_text
         elif histchoice == 'gemini':
+            print("Memory: Gemini Helper")
             results = get_logs_raw(input_text)
-            history_text = gemini.single_prompt("The following query has been submitted to a super-intelligent AI assistant named Arachne, which you support as a memory system:\n===\n" + input_text + "\n===\nThe following past discussion synopses have been retrieved, which may relate to this query:\n===\n" + "\n===\n".join([result['path'][9:19] + ' ' + result['path'][20:28].replace('-', ':') + ': ' + result['content'] for result in results]) + "\n===\nPlease excerpt and summarize any entries that are relevant to the query.")
-            print(history_text)
+            history_text = gemini.single_prompt("The following query has been submitted to a super-intelligent AI assistant named Arachne, which you support as a memory system:\n===\n" + input_text + (("\n===\nHere is the previous response from Arachne:\n===\n" + past_messages[-1]['content']) if len(past_messages) > 0 else "") + "\n===\nHere are outputs from an automated memory system:\n===\n" + stm + "\n===\nAnd the following past discussion synopses have been retrieved, which may relate to this query:\n===\n" + "\n===\n".join([result['path'][9:19] + ' ' + result['path'][20:28].replace('-', ':') + ': ' + result['content'] for result in results]) + "\n===\nPlease excerpt relevant memory items and summarize any history entries that are relevant to the query.")
         else:
-            history_text = ""
+            print("Memory: Short-term Only")
+            history_text = stm
 
     return stream(input_text, past_messages, data['log_filename'], history_text,
-                  custom_system=custom_system, custom_model=custom_model)
+                  custom_system=custom_system, custom_model=custom_model, custom_userid=(myuser_id if myuser_id != user_id else None))
 
 ## Custom AIs
 
@@ -310,8 +329,8 @@ def log_summary(prompt, response, log_filename):
         notes.insert(0, messages[-1])
         messages = messages[:-1]
 
-    completion = openai.ChatCompletion.create(
-        model="gpt-4o",
+    completion = client.chat.completions.create(
+        model="gpt-5.6-luna",
         messages=messages + [
             { "role": "user",
               "content": "Now, please provide a short summary of the previous page. Include this in a block as follows: ```[summary here]```." }])
@@ -345,7 +364,7 @@ def completion_reader():
     if request.method == "POST":
         try:
             data = request.form
-
+            
             metadata = load_reader_metadata(data['document'], data['log_filename'])
             metadatapath = data['document'].replace('.pdf', '.json')
 
@@ -357,17 +376,21 @@ def completion_reader():
             with open(metadatapath, 'w') as fp:
                 json.dump(metadata, fp, indent=4)
         except:
+            print("A")
             return "Cannot load metadata."
             
         try:
             reader = PdfReader(data['document'])
+            print(reader)
 
             page = reader.pages[nextpage - 1]
             text = page.extract_text(extraction_mode="layout", layout_mode_space_vertically=False, layout_mode_strip_rotated=False)
         except:
+            print("B")
             return "Cannot read PDF."
             
         try:
+            print("OK")
             ## Process images
             imagetexts = []
             for count, image_file_object in enumerate(page.images):
@@ -377,8 +400,8 @@ def completion_reader():
                     detail = "high"
                 encoded = base64.b64encode(image_file_object.data).decode("utf-8")
 
-                completion = openai.ChatCompletion.create(
-                    model="gpt-4o",
+                completion = client.chat.completions.create(
+                    model="gpt-5.6-luna",
                     messages=[
                         { "role": "user",
                           "content": [
@@ -391,9 +414,11 @@ def completion_reader():
 
                 imagetexts.append(completion.choices[0].message.content)
         except:
+            print("C")
             return "Cannot process images."
 
         try:
+            print("KK")
             if nextpage == 1:
                 prompt = "Here is the first page of a PDF, in a text-based layout:\n===\n" + text + "\n===\n"
             else:
@@ -411,6 +436,7 @@ def completion_reader():
 
             return Response(strm, mimetype='text/event-stream')
         except:
+            print("D")
             return "Cannot create translation."
     else:
         return completion()
@@ -501,7 +527,7 @@ def get_ip():
 
 @app.route("/news", methods=["GET"])
 def news():
-    from memory import bulletin, news
+    from knowledge import bulletin, news
     nowstr = request.args.get('date')
     if nowstr is not None:
         now = datetime.strptime(nowstr, "%Y-%m-%d")
@@ -521,14 +547,14 @@ def news():
         
     messages = chatlog.load_log(utils.get_default_system_message(), filepath.replace('.pkl', '.log'))
     
-    welcome = now.strftime('# Daily Bulletin: %Y-%m-%d') + prev.strftime(' (<a href="/news?date=%Y-%m-%d">Previous</a>)\n\n') + process_bulletin(messages[0]['content'], texts, lambda ids: bulletin.incremenet_uses(engine, items, ids, 1))
+    welcome = now.strftime('# Daily Bulletin: %Y-%m-%d') + prev.strftime(' (<a href="/news?date=%Y-%m-%d">Previous</a>)\n\n') + process_bulletin(messages[1]['content'], texts, lambda ids: bulletin.incremenet_uses(engine, items, ids, 1))
 
     return render_template('index.html', welcome=welcome, log_filename=filepath.replace('.pkl', '.log'))
 
 @app.route("/news-now", methods=["GET"])
 def news_now():
     print("Preparing memo...")
-    from memory import bulletin
+    from knowledge import bulletin
     
     engine, items = bulletin.get_engine_items()
     print("Retrieving items...")
@@ -559,7 +585,7 @@ def news_now():
 
 @app.route("/news-nonet", methods=["GET"])
 def news_nonet():
-    from memory import bulletin
+    from knowledge import bulletin
 
     engine, items = bulletin.get_engine_items()
 
@@ -593,11 +619,16 @@ def generate_news_links(index, texts):
 
 @app.route("/vote-updown", methods=["GET"])
 def vote_updown():
-    from memory import bulletin
+    from knowledge import bulletin
     id = int(request.args.get('id'))
     prob = float(request.args.get('prob'))
     bulletin.vote_updown(id, prob)
     return "Success."
+
+@app.route("/checkupdate")
+def checkupdate():
+    deployment_id = Path("last_updated.txt").read_text().strip()
+    return Response(deployment_id + "\n", mimetype="text/plain")
 
 if __name__ == '__main__':
     app.run(debug=True)

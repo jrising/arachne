@@ -1,0 +1,1525 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> I'm using Shiny and now (I'm not sure what changed), by pickerInputs won't open. They show the default, but nothing happens when I click on them. I don't see any javascript errors in the console when I do this.
+**assistant**:
+> Let’s triage this step by step. This kind of “pickerInput won’t open, no JS error” usually comes down to one of a few things:
+> 
+> 1. **Missing / not loaded `shinyWidgets` JS/CSS**
+> 2. **Version mismatch (shiny vs shinyWidgets vs bootstrap)**
+> 3. **CSS/JS conflict (e.g., overlay blocking clicks, bootstrap 5 vs 3, etc.)**
+> 4. **UI created before `shinyWidgets` is attached (rare but possible with modules / HTML templates)**
+> 
+> I’ll give you a minimal diagnostic checklist and a tiny reproducible test. If that test works, we know it’s something in your app; if not, it’s a package / environment issue.
+> 
+> ---
+> 
+> ## 1. Quick minimal test
+> 
+> Create a *new* file `picker_test.R` with nothing else loaded and run it:
+> 
+> ```r
+> library(shiny)
+> library(shinyWidgets)
+> 
+> ui <- fluidPage(
+>   titlePanel("pickerInput test"),
+>   sidebarLayout(
+>     sidebarPanel(
+>       pickerInput(
+>         inputId = "test_picker",
+>         label = "Choose a letter",
+>         choices = LETTERS[1:5],
+>         options = list(`live-search` = TRUE)
+>       )
+>     ),
+>     mainPanel(
+>       verbatimTextOutput("sel")
+>     )
+>   )
+> )
+> 
+> server <- function(input, output, session) {
+>   output$sel <- renderPrint(input$test_picker)
+> }
+> 
+> shinyApp(ui, server)
+> ```
+> 
+> Tell me what happens in that app:
+> 
+> - If **the dropdown opens and works**, then the core stack is fine and something in your main app is interfering.
+> - If **the dropdown still doesn’t open**, it’s almost certainly a version/load issue; go to section 2.
+> 
+> ---
+> 
+> ## 2. Check versions and conflicts
+> 
+> In an R console (not inside a Shiny session):
+> 
+> ```r
+> sessionInfo()
+> packageVersion("shiny")
+> packageVersion("shinyWidgets")
+> ```
+> 
+> Useful checks:
+> 
+> - `shinyWidgets` should be reasonably recent relative to `shiny`. Big gaps can break JS.
+> - If you’ve recently switched to **bslib / Bootstrap 5**, older shinyWidgets versions can misbehave.
+> 
+> If you see something like:
+> 
+> ```r
+> other attached packages:
+> [1] bslib_0.7.0 ... shinyWidgets_0.7.6 ... shiny_1.9.0
+> ```
+> 
+> then it’s worth updating everything:
+> 
+> ```r
+> update.packages(ask = FALSE, checkBuilt = TRUE)
+> # or minimally:
+> install.packages("shinyWidgets")
+> install.packages("shiny")
+> install.packages("bslib")
+> ```
+> 
+> Then re-run the minimal test app.
+> 
+> ---
+> 
+> ## 3. Check JS/CSS actually loaded
+> 
+> In your *broken* app, open the browser dev tools (F12):
+> 
+> 1. Go to **Network** tab, filter by `picker` or by “JS”.
+> 2. Reload the app.
+> 3. You should see something like `shinyWidgets-bindings.js` (name varies by version) being loaded, plus the associated CSS.
+> 
+> If those files aren’t being loaded:
+> 
+> - Confirm that you have `library(shinyWidgets)` in the **global scope**, not just inside `server` or inside a module.
+> - Make sure you don’t have a custom HTML template that omits `htmlDependency`s from R.
+> 
+> ---
+> 
+> ## 4. Inspect the element & see if something blocks clicks
+> 
+> Sometimes the pickerInput is “working” but a CSS overlay div is catching clicks, so there’s no JS error but nothing opens.
+> 
+> In the dev tools:
+> 
+> 1. Right-click on the picker input → “Inspect”.
+> 2. Look at the HTML; normally you see something like:
+> 
+>    ```html
+>    <div class="form-group shiny-input-container">
+>      <label ...>Choose a letter</label>
+>      <div class="bs-select ...">
+>        <button type="button" class="btn dropdown-toggle ...">...</button>
+>        ...
+>    ```
+> 
+> 3. Move your mouse around and watch the layout inspector: is some full-page `<div>` (modal overlay, loading screen, etc.) sitting **above** it?
+> 
+> If so, check:
+> 
+> - Any custom CSS like:
+> 
+>   ```css
+>   .some-overlay {
+>     position: fixed;
+>     top: 0; left: 0;
+>     width: 100%; height: 100%;
+>     z-index: 9999;
+>   }
+>   ```
+> 
+>   without being hidden/removed.
+> 
+> - Any UI elements from packages like `waiter`, `shinybusy`, etc., that might stay active.
+> 
+> ---
+> 
+> ## 5. Common recent-breaking-changes causes
+> 
+> A few specific things you may have recently changed:
+> 
+> 1. **Switched to `bslib::bs_theme()` or to `theme = bslib::bs_theme(version = 5)`**  
+>    Some older shinyWidgets versions weren’t fully compatible with bootstrap 5. Updating `shinyWidgets` usually fixes it.
+> 
+> 2. **Start using `navbarPage()` with `theme` and custom JS**  
+>    If you load custom Bootstrap JS or CSS after shiny’s own dependencies, you can override the dropdown behavior. Search your code for `<script src=...bootstrap...>` or `<link href=...bootstrap...>` and try temporarily removing them.
+> 
+> 3. **Moved `library(shinyWidgets)` into `server` or a module**  
+>    That prevents Shiny from registering the input binding for `pickerInput`. Make sure it’s at top-level.
+> 
+> ---
+> 
+> ## 6. If you can, share structure snippets
+> 
+> If you’re up for it, paste a minimal version of your actual UI code that includes a non-working picker, for example:
+> 
+> ```r
+> ui <- fluidPage(
+>   # any theme / bslib?
+>   pickerInput("var", "Variable:", choices = c("a", "b", "c")),
+>   # any HTML templates or wrapper?
+> )
+> ```
+> 
+> and how you define `shinyApp(ui, server)`. I can then point to likely conflicts very precisely.
+> 
+> ---
+> 
+> To move forward now:
+> 
+> 1. Run the **minimal test app** above and tell me if that picker opens or not.
+> 2. Paste the output of:
+>    ```r
+>    packageVersion("shiny")
+>    packageVersion("shinyWidgets")
+>    ```
+> 3. If the test app works, paste the small UI snippet from your real app where the picker is defined.  
+> 
+> From there I can narrow it down pretty quickly.
+**user**:
+> The picker_test.R works fine.
+**assistant**:
+> Good, that means your Shiny + shinyWidgets stack is fine, and the problem is something specific to your main app (UI structure, themes, or other JS/CSS).
+> 
+> Let’s narrow it down with the least pain possible.
+> 
+> ---
+> 
+> ## 1. Compare minimal vs your app
+> 
+> First, show me a small but *real* snippet from your app that includes a broken picker, including:
+> 
+> - How you define the UI (e.g., `fluidPage(...)`, `navbarPage(...)`, `dashboardPage(...)`, or `golem`/`bs4Dash`?)
+> - The actual `pickerInput(...)` call
+> 
+> Example of what to paste:
+> 
+> ```r
+> library(shiny)
+> library(shinyWidgets)
+> library(bslib)          # if used
+> library(shinydashboard) # if used
+> 
+> ui <- fluidPage(
+>   # any theme?
+>   # theme = bslib::bs_theme(version = 5),
+>   
+>   pickerInput(
+>     inputId = "my_picker",
+>     label = "Choose:"
+>     choices = c("a", "b", "c")
+>   ),
+>   ...
+> )
+> 
+> server <- function(input, output, session) {
+>   ...
+> }
+> 
+> shinyApp(ui, server)
+> ```
+> 
+> Even a simplified version that still shows the bug is enough.
+> 
+> ---
+> 
+> ## 2. Quick checklist inside the broken app
+> 
+> While you gather that snippet, here are some fast tests to run in the broken app:
+> 
+> ### 2.1 Is Bootstrap or other JS overriding it?
+> 
+> Look at the HTML `<head>` in the browser dev tools (Elements tab). Check for:
+> 
+> - Extra `<script src="...bootstrap...">` or `<link href="...bootstrap...">` that you added manually via `tags$head()` or an HTML template.
+> - Extra JS libs like `selectpicker` or similar.
+> 
+> If you see that, temporarily comment out any explicit Bootstrap/JS includes in your UI and test again.
+> 
+> ---
+> 
+> ### 2.2 Does a plain `selectInput` work?
+> 
+> In your *actual* app’s UI, add:
+> 
+> ```r
+> selectInput("plain_sel", "Plain select:", choices = LETTERS[1:5])
+> pickerInput("test_picker2", "Test picker:", choices = LETTERS[1:5])
+> ```
+> 
+> Reload and see:
+> 
+> - If `selectInput` opens and `pickerInput` doesn’t, it’s almost certainly a conflicting JS/CSS or dependency order issue.
+> - If *neither* opens, then something is intercepting clicks (overlay, modal, etc.).
+> 
+> ---
+> 
+> ### 2.3 Look for an overlay blocking clicks
+> 
+> In dev tools:
+> 
+> 1. Right-click on the picker → Inspect.
+> 2. Move the mouse around on the page while watching which elements highlight.
+> 3. If you see a large `<div>` that covers much of the page with high `z-index`, check its CSS in the Styles panel.
+> 
+> Typical culprits:
+> 
+> - A loading overlay from `waiter`, `shinybusy`, `shinycssloaders`, or your own CSS.
+> - A modal backdrop that never got removed.
+> 
+> Temporarily disable that CSS in the browser (uncheck `position: fixed`, `z-index`, or `pointer-events`) and then try clicking the picker. If it suddenly works, we’ve found the issue.
+> 
+> ---
+> 
+> ### 2.4 Modules / `insertUI` / HTML templates?
+> 
+> Let me know if:
+> 
+> - The picker lives inside a module (`module_ui`, `module_server`).
+> - You use `htmlTemplate()` plus Shiny to place your app into a static HTML file.
+> - You dynamically insert the picker with `insertUI()` or `renderUI()`.
+> 
+> If so, paste that part of the code, because dependency registration can break if done in a particular way.
+> 
+> ---
+> 
+> ## 3. Version / theme combinations that often break
+> 
+> If any of these are true, mention it:
+> 
+> - Using `bslib::bs_theme(version = 5)` or `bootstrap = 5` in any way.
+> - Using `shinydashboard` or `bs4Dash`.
+> - Using `semantic.dashboard`, `fresh`, `argonDash`, or other dashboard frameworks.
+> 
+> They sometimes ship their own Bootstrap/JS that can override shinyWidgets behavior.
+> 
+> ---
+> 
+> ## 4. What I need from you now
+> 
+> To go from “many hypotheses” → “this is it,” please send:
+> 
+> 1. A minimal UI snippet from your actual app where the picker is defined, including any `theme`, `tags$head()`, or dashboard wrapper.
+> 2. A note on whether you’re using any of:
+>    - `bslib`, `shinydashboard`, `bs4Dash`, `waiter`, `shinybusy`, or custom HTML templates.
+> 3. Result of adding both a `selectInput` and a `pickerInput` side by side in your existing UI (which opens, which doesn’t).
+> 
+> With that, I can point to a very concrete fix—likely either removing/adjusting a conflicting JS/CSS include, or a small change in how/where you load `shinyWidgets`.
+**user**:
+> Maybe it's best if I just share my whole app. Here it is:
+> ```
+> # setwd("~/Dropbox/HMT/online")
+> 
+> # Library
+> library(leaflet)
+> library(sf)
+> library(shiny)
+> library(shinyjs)
+> library(dplyr)
+> library(rlang)
+> library(shinyWidgets)
+> library(ggplot2)
+> library(bslib)
+> library(plotly)
+> library(Hmisc)
+> library(RColorBrewer)
+> 
+> source("lib/adaptation.R")
+> source("lib/synthesis.R", chdir=T)
+> 
+> gdp.2025.usd <- 3958780000000 # Nominal USD. https://www.worldometers.info/gdp/gdp-by-country/
+> gbp.usd.2025 <- 1.3193
+> 
+> divanames <- read.csv("shapefiles/divanames.csv")
+> divanames$name[7] <- "Near Àird"
+> divanames$name[12] <- "Near Port Mòr"
+> 
+> order_of_magnitude <- function(x) {
+>     if (is.na(x)) return(NA)
+>     if (x == 0) return(0)
+>     floor(log10(abs(x)))
+> }
+> 
+> format_estimate_with_ci <- function(mu, ci05, ci95, bold='') {
+>     if (is.na(mu))
+>         return(NA)
+>     ## Calculate the range
+>     ci_range <- ifelse(mu > ci05, ifelse(mu < ci95, ci95 - ci05, mu - ci05), ci95 - mu)
+> 
+>     ## Determine the suitable number of digits by examining significant figures
+>     ci_order <- order_of_magnitude(ci_range)
+>     num_digits <- -ci_order + 1
+> 
+>     ## Format components
+>     mu_formatted <- format(round(mu, num_digits), nsmall = max(num_digits, 0))
+>     ci05_formatted <- format(floor(ci05 * 10^(num_digits-1)) / 10^(num_digits-1), nsmall = max(0, num_digits-1))
+>     ci95_formatted <- format(ceiling(ci95 * 10^(num_digits-1)) / 10^(num_digits-1), nsmall = max(0, num_digits-1))
+> 
+>     ## Concatenate into a single string
+>     if (bold == 'mu') {
+>         paste0('<b>', mu_formatted, "</b> [", ci05_formatted, " - ", ci95_formatted, "]")
+>     } else if (bold == 'ci05') {
+>         paste0(mu_formatted, " [<b>", ci05_formatted, "</b> - ", ci95_formatted, "]")
+>     } else if (bold == 'ci95') {
+>         paste0(mu_formatted, " [", ci05_formatted, " - <b>", ci95_formatted, "</b>]")
+>     } else {
+>         paste0(mu_formatted, " [", ci05_formatted, " - ", ci95_formatted, "]")
+>     }
+> }
+> 
+> get.value <- function(df, spdf, scenario, measure, year, quant, regcol.spdf, regcol.df) {
+>     print(quant)
+>     if (!is.na(regcol.spdf)) {
+>         if (quant == 'all') {
+>             subdf <- df[df$scenario == scenario & df$measure == measure & df$year == year, ]
+>             joinby <- setNames(regcol.df, regcol.spdf)
+>             subdf2 <- spdf %>% left_join(subdf, by=joinby)
+>             return(subdf2)
+>         } else {
+>             subdf <- df[df$scenario == scenario & df$measure == measure & df$year == year, c(regcol.df, quant)]
+>             joinby <- setNames(regcol.df, regcol.spdf)
+>             subdf2 <- spdf %>% left_join(subdf, by=joinby)
+>             return(subdf2[, quant, drop=T])
+>         }
+>     } else {
+>         if (quant == 'all') {
+>             return(df[df$scenario == scenario & df$measure == measure & df$year == year, ])
+>         } else {
+>             return(df[df$scenario == scenario & df$measure == measure & df$year == year, quant, drop=T])
+>         }
+>     }
+> }
+> 
+> add.polygons <- function(lt, spdf, scenario, measure, year, quant, regcol.spdf, regcol.df, namecol.spdf, group=NULL) {
+>     print("add.polygons")
+>     ## Prepare the text for tooltips:
+>     allvals <- get.value(df, spdf, scenario, measure, year, 'all', regcol.spdf, regcol.df)
+>     alltxts <- sapply(1:nrow(allvals), function(ii) format_estimate_with_ci(allvals$mu[ii], allvals$ci05[ii], allvals$ci95[ii], quant))
+>     if (namecol.spdf %in% names(spdf)) {
+>         mytext <- paste(
+>             "Region: ", spdf[, namecol.spdf, drop=T], "<br/>",
+>             "Damages: ", alltxts, "<br/>",
+>             sep="") %>%
+>             lapply(htmltools::HTML)
+>     } else {
+>         mytext <- paste(
+>             "Region: ", namecol.spdf, "<br/>",
+>             "Damages: ", alltxts, "<br/>",
+>             sep="") %>%
+>             lapply(htmltools::HTML)
+>     }
+> 
+>     if (is.null(group))
+>         group <- paste(quant, measure, scenario, year, sep="_")
+> 
+>     lt %>% addPolygons(data=spdf,
+>                        fillColor = ~mypalette(value),
+>                        layerId = ~PID,
+>                        stroke=TRUE,
+>                        fillOpacity = 0.6,
+>                        color="white",
+>                        weight=0.3,
+>                        label = mytext,
+>                        labelOptions = labelOptions(
+>                            style = list("font-weight" = "normal", padding = "2px 5px"),
+>                            textsize = "11px",
+>                            direction = "auto"
+>                        ),
+>                        group=group)
+> }
+> 
+> fix.limits <- function(df) {
+>     limits <<- c(quantile(df$ci05, .05), quantile(df$ci95, .95))
+>     print(limits)
+>     if (all(sign(df$ci05) == sign(df$ci95))) {
+>         mypalette <<- colorNumeric(palette="YlOrRd", domain=c(min(limits), max(limits)), na.color="transparent", reverse=F)
+>     } else {
+>         mypalette <<- colorNumeric(palette="Spectral", domain=c(-max(abs(limits)), max(abs(limits))), na.color="transparent", reverse=T)
+>     }
+> }
+> 
+> make.map <- function(lt, spdf, channel, scenario, measure, year, quant, regcol.spdf, regcol.df, namecol.spdf, group=NULL) {
+>     print("make.map")
+>     ## Final Map
+>     col <- paste(quant, scenario, year, sep="_")
+>     spdf$value <- pmax(limits[1], pmin(limits[2], get.value(df, spdf, scenario, measure, year, quant, regcol.spdf, regcol.df)))
+> 
+>     lt %>%
+>         add.polygons(spdf, scenario, measure, year, quant, regcol.spdf, regcol.df, namecol.spdf, group=group)
+> }
+> 
+> ## make.map(spdf, "Agricultural productivity", "Most Likely", "EAD", 2050, "mu", 'NAME_3', 'county', 'NAME_3')
+> ## make.map(spdf, "Agricultural productivity", "High Risk", "EAD", 2050, "mu", 'NAME_3', 'county', 'NAME_3')
+> ## make.map(spdf, "Agricultural productivity", "High Risk", "Extreme", 2050, "ci95", 'NAME_3', 'county', 'NAME_3')
+> 
+> ## m2050mu<-make.map(spdf, "Agricultural productivity", "Most Likely", "EAD", 2050, "mu", 'NAME_3', 'county', 'NAME_3')
+> ## m2050ci05<-make.map(spdf, "Agricultural productivity", "Most Likely", "EAD", 2050, "ci05", 'NAME_3', 'county', 'NAME_3')
+> ## m2050ci95<-make.map(spdf, "Agricultural productivity", "Most Likely", "EAD", 2050, "ci95", 'NAME_3', 'county', 'NAME_3')
+> 
+> ##########
+> 
+> 
+> datasets <- list(
+>   "Agricultural productivity" = 'agriculture.csv',
+>   "All-source flooding" = 'flooding.csv',
+>   "Heat-related mortality" = 'health.csv',
+>   "Labour productivity" = 'labourprod.csv',
+>   "Labour hours lost" = 'labourhours.csv',
+>   "Local temperatures" = 'temps.csv',
+>   "Catastrophic risk" = 'catastrophic.csv',
+>   "Missing risks" = 'missrisks.csv',
+>   "Trade spill-overs" = 'trade.csv',
+>   "Coastal impacts" = 'coastal.csv',
+>   "Sea-level rise" = 'slr.csv',
+>   "Total costs" = 'total-noadt.csv'
+> )
+> 
+> dataset2legend <- list(
+>   "Agricultural productivity" = 'Losses (million GBP)',
+>   "All-source flooding" = 'Losses (million GBP)',
+>   "Heat-related mortality" = 'Excess Deaths (people)',
+>   "Labour productivity" = 'Losses (million GBP)',
+>   "Labour hours lost" = '(hours/person)',
+>   "Local temperatures" = '(degree C)',
+>   "Catastrophic risk" = 'Losses (% GDP)',
+>   "Missing risks" = 'Losses (% GDP)',
+>   "Trade spill-overs" = 'Losses (% GDP)',
+>   "Coastal impacts" = 'Losses (million GBP)',
+>   "Sea-level rise" = '(mm since 1985-2005)',
+>   "Total costs" = '% GDP'
+> )
+> 
+> regions <- list(
+>   "Agricultural productivity" = "shapefiles/gadm36_GBR_3-withattr.shp",
+>   "All-source flooding" = "shapefiles/gadm36_GBR_3-withattr.shp",
+>   "Heat-related mortality" = "shapefiles/gadm36_GBR_3-withattr.shp",
+>   "Labour productivity" = "shapefiles/gadm36_GBR_3-withattr.shp",
+>   "Labour hours lost" = "shapefiles/ne_10m_admin_1_states_provinces.shp",
+>   "Local temperatures" = "shapefiles/ne_10m_admin_1_states_provinces.shp",
+>   "Catastrophic risk" = "shapefiles/gadm36_GBR_0.shp",
+>   "Missing risks" = "shapefiles/gadm36_GBR_0.shp",
+>   "Trade spill-overs" = "shapefiles/gadm36_GBR_0.shp",
+>   "Coastal impacts" = "shapefiles/divabuffer-uk.shp",
+>   "Sea-level rise" = "shapefiles/divabuffer-uk.shp",
+>   "Total costs" = "shapefiles/gadm36_GBR_0.shp"
+> )
+> 
+> dataset2region <- list( # regcol.spdf, regcol.df, namecol.spdf
+>   "Agricultural productivity" = c('NAME_3', 'county', 'NAME_3'),
+>   "All-source flooding" = c('NAME_3', 'county', 'NAME_3'),
+>   "Heat-related mortality" = c('NAME_3', 'county', 'NAME_3'),
+>   "Labour productivity" = c('NAME_3', 'county', 'NAME_3'),
+>   "Labour hours lost" = c("ISOADM1", "ISOADM1", 'name'),
+>   "Local temperatures" = c("ISOADM1", "Region", 'name'),
+>   "Catastrophic risk" = c(NA, NA, "UK-wide"),
+>   "Missing risks" = c(NA, NA, "UK-wide"),
+>   "Trade spill-overs" = c(NA, NA, "UK-wide"),
+>   "Coastal impacts" = c('locationax', 'segment', 'divaname'),
+>   "Sea-level rise" = c('locationid', 'Region', 'divaname'),
+>   "Total costs" = c(NA, NA, "UK-wide")
+> )
+> 
+> 
+> 
+> risk.options <- list("Hazards"=c("Local temperatures", "Sea-level rise"),
+>                      "Regional Risks"=c("Agricultural productivity", "All-source flooding",
+>                                         "Heat-related mortality", "Labour productivity",
+>                                         "Labour hours lost", "Coastal impacts"),
+>                      "National Risks"=c("Trade spill-overs", "Catastrophic risk", "Missing risks", "Total costs"))
+> 
+> adaptation.options <- list("Agricultural productivity"="Proportional to Benefits",
+>                            "Heat-related mortality"=c("Proportional to Benefits", "Air Conditioning", "Shutters"),
+>                            "Labour productivity & supply"="Proportional to Benefits",
+>                            "All-source flooding"="Proportional to Benefits",
+>                            "Coastal impacts"="Proportional to Benefits")
+> 
+> JS.logify <-
+> "
+> // function to logify a sliderInput
+> function logifySlider (sliderId, sci = false) {
+>   if (sci) {
+>     // scientific style
+>     $('#'+sliderId).data('ionRangeSlider').update({
+>       'prettify': function (num) { return ('10<sup>'+num+'</sup>'); }
+>     })
+>   } else {
+>     // regular number style
+>     $('#'+sliderId).data('ionRangeSlider').update({
+>       'prettify': function (num) { return (+(Math.pow(10, num).toPrecision(2))); }
+>     })
+>   }
+> }"
+> 
+> ## Math.round(Math.pow(10, num))
+> 
+> # call logifySlider for each relevant sliderInput
+> JS.onload <-
+> "
+> // execute upon document loading
+> $(document).ready(function() {
+>   // wait a few ms to allow other scripts to execute
+>   setTimeout(function() {
+>     // include call for each slider
+>     logifySlider('investment', sci = false)
+>   }, 5)})
+> "
+> 
+> ui <- page_navbar(
+>     title="PROSPER Adaptation Investment Support",
+>     selected="Climate Risks",
+>     bg = "#2D89C8",
+>     inverse = TRUE,
+>     nav_panel(title="Reports and Datasets",
+>               fluidPage(
+>                   uiOutput("outputsTable")
+>               )
+>               ),
+>     nav_panel(title="Climate Risks",
+>               fluidPage(
+>                   tags$style(type = "text/css", "
+> html, body { width:100% }
+>             .invest-table {
+>                 width: 100%;
+>                 border-collapse: collapse;
+>             }
+>             .invest-table th, .invest-table td {
+>                 border: 1px solid #ddd;
+>                 padding: 8px;
+>                 text-align: left;
+>             }
+>             .invest-table th {
+>                 background-color: #f2f2f2;
+>             }
+>             .invest-table tr:nth-child(even) {
+>                 background-color: #f9f9f9;
+>             }
+>             .legend-circle {
+>                 width: 20px;
+>                 height: 20px;
+>                 border-radius: 50%;
+>                 display: inline-block;
+>             }
+> "),
+>                   tags$script(HTML(
+>                            "$(function() { $('#map1').css('max-width', '100%'); });"
+>                        )),
+>                   titlePanel(h1("UK Climate Change Risk Maps", style='text-align: center')),
+>                   sidebarLayout(
+>                       sidebarPanel(
+>                           style="z-index:500; max-width: 600px", # legend over my map (map z = 400)
+>                           p("Select a hazard or channel to display over time (below) and across the UK (right). Select the Most Likely or High Risk scenario, or to show decadal extreme events.",
+>                             style = "font-size: 12pt; color: #333333;"),
+>                           pickerInput(
+>                               inputId = "channel",
+>                               label = "Channel:",
+>                               choices = risk.options,
+>                               selected = "Agricultural productivity",
+>                               options = list(
+>                                   `actions-box` = TRUE,
+>                                   size = 10,
+>                                   `selected-text-format` = "count > 3"
+>                               ),
+>                               multiple = F
+>                           ),
+>                           pickerInput(
+>                               inputId = "scenario",
+>                               label = "Scenario:",
+>                               choices = c('Most Likely - Expected annual damage', 'High Risk - Expected annual damage',
+>                                           'High Risk - Extreme year'),
+>                               selected = 'High Risk - Expected annual damage',
+>                               options = list(
+>                                   `actions-box` = TRUE,
+>                                   size = 10,
+>                                   `selected-text-format` = "count > 3"
+>                               ),
+>                               multiple = F
+>                           ),
+>                           textOutput("channelh3", container=h3),
+>                           plotOutput("timeseries", height=250)
+>                       ),
+>                       mainPanel(
+>                           fluidRow(
+>                               column(8,
+>                                      p("Select a year to display on the map below. To show the range of possible events, shift the probability between the 5th percentile (1-in-20 chance of outcomes below this level) and the 95th percentile (1-in-20 chance of outcomes above this level).",
+>                                        style = "font-size: 12pt; color: #333333;"))),
+>                           fluidRow(
+>                               column(4,
+>                                      sliderTextInput("year", "Year",
+>                                                      choices=2025:2075,
+>                                                      selected = 2050)),
+>                               column(4,
+>                                      sliderTextInput("quant", "Probability",
+>                                                      choices=c('1-in-20 less than', 'Expected', '1-in-20 more than'),
+>                                                      selected = 'Expected'))),
+>                           fluidRow(
+>                               column(8,
+>                                      leafletOutput("map1", width="100%", height="500px"), class="col-sm-8")))))),
+>     nav_panel(title="Adaptation Costs & Benefits",
+>               fluidPage(
+>                   useShinyjs(),
+>                   tags$head(tags$script(HTML(JS.logify))),
+>                   tags$head(tags$script(HTML(JS.onload))),
+>                   titlePanel(h1("Adaptation Costs & Benefits", style='text-align: center')),
+>                   sidebarLayout(
+>                       sidebarPanel(
+>                           p("Select a risk channel and a level of adaptation investment to see the benefits of adaptation.",
+>                             style = "font-size: 12pt; color: #333333;"),
+>                           pickerInput(
+>                               inputId = "adtchannel",
+>                               label = "Channel:",
+>                               choices = names(adaptation.options),
+>                               options = list(
+>                                   `actions-box` = TRUE,
+>                                   size = 10,
+>                                   `selected-text-format` = "count > 3"
+>                               ),
+>                               multiple = F
+>                           ),
+>                           pickerInput(
+>                               inputId = "adaptation",
+>                               label = "Adaptation:",
+>                               choices = NULL,
+>                               options = list(
+>                                   `actions-box` = TRUE,
+>                                   size = 10,
+>                                   `selected-text-format` = "count > 3"
+>                               ),
+>                               multiple = F
+>                           ),
+>                           sliderInput("investment", "Investment",
+>                                       min=log10(1), max=log10(1e4),
+>                                       value = log10(100), step=.1,
+>                                       pre="£", post="M / yr", sep=",", ticks=F)),
+>                       mainPanel(
+>                           p("Displays the costs and benefits of adaptation. To stack multiple adaptation investments, click 'Save'.",
+>                             style = "font-size: 12pt; color: #333333;"),
+>                           fluidRow(
+>                               column(12, plotlyOutput("adtgraph"))),
+>                           uiOutput("investTable"),
+>                           hidden(actionButton("saveButton", "Save Investuration")),
+>                           hidden(actionButton("loadButton", "Load Selected Investuration")))))),
+>     nav_item(tags$a("Documentation", href="www/PROSPER_Technical_Documentation.pdf", target="_blank")),
+>     nav_spacer(),
+>     nav_menu(title="Links",
+>              align="right",
+>              nav_item(tags$a("ACCREU", href="https://www.accreu.eu/")),
+>              nav_item(tags$a("ATTENUATE", href="https://www.lse.ac.uk/granthaminstitute/projects/attenuate-creating-the-enabling-conditions-for-uk-climate-adaptation-investment/")))
+> )
+> 
+> getAllColors <- function(nn) {
+>     if (nn < 3) {
+>         colors <- brewer.pal(3, "Set1")
+>         colors[1:nn]
+>     } else {
+>         brewer.pal(min(nn, 12), "Set1")
+>     }
+> }
+> 
+> makeInvestRow <- function(channel, adaptation, investment, color) {
+>     tibble(Channel=channel, Adaptation=adaptation, Investment=paste0("£", signif(10^investment, 2), "M / yr"))
+> }
+> 
+> makeInvestRowLegend <- function(nn) {
+>     paste0('<span class="legend-circle" style="background-color: ', getAllColors(nn), ';">')
+> }
+> 
+> constructTableHTML <- function(rows) {
+>     if (!is.null(rows)) {
+>         investRows <- apply(rows, 1, function(row) {
+>             paste0("<tr>",
+>                    paste(sapply(row, function(cell) {
+>                        paste0("<td>", cell, "</td>")
+>                    }), collapse=""),
+>                    "</tr>")
+>         })
+>         tableHeader <- paste0("<tr>",
+>                               paste(sapply(colnames(rows), function(col) {
+>                                   paste0("<th>", col, "</th>")
+>                               }), collapse=""),
+>                               "</tr>")
+>         tableHTML <- paste0("<table class='invest-table'>",
+>                             tableHeader,
+>                             paste(investRows, collapse=""),
+>                             "</table>")
+> 
+>         HTML(tableHTML)
+>     }
+> }
+> 
+> load.risk.channel <- function(channel, load.map, scenario, measure, quant) {
+>     print("load.risk.channel")
+>     df <<- read.csv(paste0("Dataset v2/", datasets[[channel]]))
+>     if (channel == 'Local temperatures') {
+>         df$mu <<- df$mu - 273.13
+>         df$ci05 <<- df$ci05 - 273.13
+>         df$ci95 <<- df$ci95 - 273.13
+>     } else if (channel == 'Coastal impacts') {
+>         ## 2015 conversation from https://www.poundsterlinglive.com/history/GBP-USD-2015
+>         df$mu <<- df$mu * 1000 * 1.5283
+>         df$ci05 <<- df$ci05 * 1000 * 1.5283
+>         df$ci95 <<- df$ci95 * 1000 * 1.5283
+>     } else if (channel %in% c("Total costs", "Missing risks")) {
+>         df$mu <<- df$mu * 100
+>         df$ci05 <<- df$ci05 * 100
+>         df$ci95 <<- df$ci95 * 100
+>     }
+>     timeseries.id(NULL)
+>     fix.limits(df)
+> }
+> 
+> load.channel.shapefile <- function(channel) {
+>     print("load.channel.shapefile")
+> 
+>     spdf <- st_read(regions[[channel]])
+>     if (!is.na(dataset2region[[channel]][1])) {
+>         if (dataset2region[[channel]][1] == 'ISOADM1')
+>             spdf$ISOADM1 <- gsub("-", "", spdf$adm1_code)
+>         if (dataset2region[[channel]][1] == 'locationax') {
+>             rowparts <- strsplit(spdf$locationna, ' ')
+>             spdf$locationax <- sapply(rowparts, function(parts) paste0(paste(parts[-1], collapse=''), parts[1]))
+>         }
+>     }
+>     if (dataset2region[[channel]][3] == 'divaname')
+>         spdf$divaname <- sapply(spdf$locationid, function(locid) ifelse(locid %in% divanames$locationid, divanames$name[divanames$locationid == locid], ""))
+>     if (!('PID' %in% names(spdf)))
+>         spdf$PID <- 1:nrow(spdf)
+> 
+>     spdf
+> }
+> 
+> get.adaptgraph.with.prev <- function(adtchannel, adaptation, investment, risk.input, adt.input, savedInvestsPdf) {
+>     label <- adtchannel
+>     if (!(label %in% savedInvestsPdf$label)) {
+>         return(get.adaptgraph(adtchannel, adaptation, investment, risk.input, adt.input))
+>     }
+> 
+>     adaptgraph.prev <- savedInvestsPdf[savedInvestsPdf$label == label, -1:-2]
+> 
+>     pdf4 <- get.adaptgraph(adtchannel, adaptation, log10(10^investment - sum(adaptgraph.prev$benefits[adaptgraph.prev$measure == 'Invest' & adaptgraph.prev$scenario == 'Most Likely'])),
+>                            risk.input, adt.input)
+> 
+>     pdf5 <- rbind(cbind(call='curr', pdf4), cbind(call='prev', adaptgraph.prev))
+>     pdf5 %>% group_by(year, scenario, measure) %>%
+>         dplyr::summarize(ci05=ci05[call == 'curr'] - sum(benefits[call == 'prev']),
+>                          ci95=ci95[call == 'curr'] - sum(benefits[call == 'prev']),
+>                          benefits=benefits[call == 'curr'] - sum(benefits[call == 'prev']))
+> }
+> 
+> get.adaptgraph <- function(adtchannel, adaptation, investment, risk.input, adt.input) {
+>     ## Calculate (mu - baseline) * (1 - mu.adt)
+>     if (adtchannel == "Coastal impacts") {
+>         pdf <- slr.adapt.prop(10^investment, adt.input)
+>         pdf2 <- pdf %>% left_join(risk.input, by=c('year', 'segment'), suffix=c('.adt', '')) %>%
+>             mutate(benefits=mu * (1 - mu.adt), ci05=ci05 * (1 - ci75),
+>                    ci95=ci95 * (1 - ci25)) %>%
+>             group_by(year, scenario, measure) %>%
+>             dplyr::summarize(benefits=sum(benefits), ci05=sum(ci05), ci95=sum(ci95))
+>     } else if (adtchannel == "All-source flooding") {
+>         pdf <- flood.adapt.prop(10^investment, adt.input)
+>         pdf2 <- risk.input %>%
+>             mutate(benefits=mu * (1 - pdf$mu), ci05=ci05 * (1 - pdf$ci75),
+>                    ci95=ci95 * (1 - pdf$ci25)) %>%
+>             group_by(year, scenario, measure) %>%
+>             dplyr::summarize(benefits=sum(benefits), ci05=sum(ci05), ci95=sum(ci95))
+>     } else if (adtchannel == "Agricultural productivity") {
+>         pdf <- agric.adapt.prop(10^investment, adt.input)
+>         pdf2 <- risk.input %>%
+>             left_join(pdf, by=c('scenario', 'year', 'measure', 'county'), suffix=c('', '.adt')) %>%
+>             mutate(benefits=mu * (1 - mu.adt), ci05=ci05 * (1 - ci75),
+>                    ci95=ci95 * (1 - ci25)) %>%
+>             group_by(year, scenario, measure) %>%
+>             dplyr::summarize(benefits=sum(benefits), ci05=sum(ci05), ci95=sum(ci95))
+>     } else if (adtchannel == "Labour productivity & supply") {
+>         pdf <- labor.adapt.prop(10^investment, adt.input)
+>         pdf2 <- risk.input %>%
+>             left_join(pdf, by=c('scenario', 'year', 'measure')) %>%
+>             mutate(benefits=ifelse(group == 'Effort', mu * (1 - mu.effort), mu * (1 - mu.hours)),
+>                    ci05=ifelse(group == 'Effort', ci05 * (1 - ci75.effort), ci05 * (1 - ci75.hours)),
+>                    ci95=ifelse(group == 'Effort', ci95 * (1 - ci25.effort), ci95 * (1 - ci25.hours))) %>%
+>             group_by(year, scenario, measure) %>%
+>             dplyr::summarize(benefits=sum(benefits), ci05=sum(ci05), ci95=sum(ci95))
+>     } else if (adtchannel == "Heat-related mortality") {
+>         adapt.func <- list("Proportional to Benefits"=health.adapt.prop, "Air Conditioning"=health.adapt.aircon, "Shutters"=health.adapt.shutters)[[adaptation]]
+>         pdf <- adapt.func(10^investment, adt.input)
+>         pdf2 <- risk.input %>%
+>             left_join(pdf, by=c('scenario', 'year', 'measure'), suffix=c('', '.adt')) %>%
+>             mutate(benefits=mu * (1 - mu.adt), ci05=ci05 * (1 - ci75),
+>                    ci95=ci95 * (1 - ci25)) %>%
+>             group_by(year, scenario, measure) %>%
+>             dplyr::summarize(benefits=sum(benefits), ci05=sum(ci05), ci95=sum(ci95))
+>     }
+> 
+>     pdf3 <- pdf2 %>% left_join(subset(pdf2, year == 2025), by='scenario', suffix=c('', '.2025')) %>%
+>         mutate(benefits=ifelse(benefits.2025 < 0, benefits - benefits.2025, benefits),
+>                ci05=ifelse(benefits.2025 < 0, ci05 - benefits.2025, ci05),
+>                ci95=ifelse(benefits.2025 < 0, ci95 - benefits.2025, ci95))
+> 
+>     rbind(data.frame(year=2025, scenario=c("High Risk", "Most Likely"),
+>                      measure="Invest", benefits=-10^investment, ci05=NA, ci95=NA),
+>           pdf3[, c('year', 'scenario', 'measure', 'benefits', 'ci05', 'ci95')])
+> }
+> 
+> server <- function(input, output, session) {
+>     previous <- 'TEST'
+>     shapefile_data <- reactiveVal(NULL)
+> 
+>     if (Sys.getenv('SHINY_PORT') == "") {
+>         session$onSessionEnded(function() {
+>             stopApp()
+>         })
+>     }
+> 
+>     output$outputsTable <- renderUI({
+>         constructTableHTML(rbind(data.frame(Title="Investing in Climate Resilience in the UK",
+>                                             Type="Policy Brief", Released="June 2026",
+>                                             Links=as.character(p(tags$a("Brief", href="www/PROSPER-UK-2026.pdf", target="_blank"), ", ",
+>                                                                  tags$a("Technical Docs", href="www/PROSPER_Technical_Documentation.pdf", target="_blank")))),
+>                                  data.frame(Title="New Insights on Physical Climate Risk and Adaptation Assessment in Scenario Analysis and Stress Testing",
+>                                             Type="Policy Brief", Released="July 2026",
+>                                             Links="In Preparation"),
+>                                  data.frame(Title="Risks Estimates for the UK",
+>                                             Type="Dataset", Released="June 2026",
+>                                             Links=as.character(tags$a("Archive", "https://zenodo.org/", target="_blank")))))
+>     })
+> 
+>     ## reactive filtering data from UI
+>     reactive_data <- reactive({
+>         print("reactive")
+>         scenario <- ifelse(input$scenario == 'Most Likely - Expected annual damage', 'Most Likely', 'High Risk')
+>         measure <- ifelse(input$scenario == 'High Risk - Extreme year', 'Extreme', 'EAD')
+>         quant <- ifelse(input$quant == "1-in-20 less than", 'ci05', ifelse(input$quant == "1-in-20 more than", 'ci95', 'mu'))
+> 
+>         if (substring(previous, 1, nchar(input$channel)) != input$channel) {
+>             print(input$channel)
+>             load.map.arg <- F
+>             if (previous != 'TEST')
+>                 if (regions[[strsplit(previous, '_')[[1]][1]]] != regions[[input$channel]])
+>                     load.map.arg <- T
+>             load.risk.channel(input$channel, load.map.arg, scenario, measure, quant)
+>         }
+> 
+>         list(channel=input$channel, quant=quant, scenario=scenario, measure=measure, year=input$year[1])
+>     })
+> 
+>     ## static backround map
+>     output$map1 <- renderLeaflet({
+>         print("renderLeaflet")
+>         leaflet() %>%
+>             addTiles() %>%
+>             setView(lat=54, lng=-3, zoom=6)
+>     })
+> 
+>     output$timeseries <- renderPlot({
+>         req(timeseries.id)
+>         lst <- reactive_data()
+>         spdf <- shapefile_data()
+>         if (is.null(timeseries.id())) {
+>             if (dataset2legend[[lst$channel]] == "(hours/person)") {
+>                 polydata <- read.csv("shapefiles/ne_10m_admin_1_states_provinces.shp.csv")
+>                 polydata$ISOADM1 <- paste0(polydata$adm0_a3, polydata$diss_me)
+> 
+>                 subdf <- df %>% filter(scenario == lst$scenario & measure == lst$measure) %>%
+>                     left_join(polydata[, c('ISOADM1', 'popsum')], by='ISOADM1') %>% group_by(year) %>%
+>                     dplyr::summarize(mu=wtd.mean(mu, popsum),
+>                                      ci05=wtd.mean(ci05, popsum),
+>                                      ci95=wtd.mean(ci95, popsum))
+>             } else if (dataset2legend[[lst$channel]] == "(mm since 1985-2005)") {
+>                 subdf <- df %>% filter(scenario == lst$scenario & measure == lst$measure) %>% group_by(year) %>%
+>                     dplyr::summarize(mu=mean(mu), ci05=mean(ci05), ci95=mean(ci95))
+>             } else {
+>                 subdf <- df %>% filter(scenario == lst$scenario & measure == lst$measure) %>% group_by(year) %>%
+>                     dplyr::summarize(mu=sum(mu), ci05=sum(ci05), ci95=sum(ci95))
+>             }
+>         } else {
+>             subdf <- df %>% filter(scenario == lst$scenario & measure == lst$measure & county == spdf$NAME_3[spdf$PID == timeseries.id()])
+>         }
+> 
+>         ggplot(subdf, aes(year, mu)) +
+>             geom_line() + geom_ribbon(aes(ymin=ci05, ymax=ci95), alpha=.5) +
+>             theme_bw(base_size=16) +
+>             xlab(NULL) + ylab(paste(lst$channel, "\n", dataset2legend[[lst$channel]]))
+>     }, height=250)
+> 
+>     observeEvent(input$scenario, {
+>         if (input$scenario == 'High Risk - Extreme year') {
+>             updateSliderTextInput(session, "year",
+>                                   choices=c(2030, 2040, 2050), selected=c(2030, 2040, 2050)[which.min(abs(c(2030, 2040, 2050) - input$year))])
+>         } else {
+>             updateSliderTextInput(session, "year",
+>                                   choices=2025:2075, selected=input$year)
+>         }
+>     })
+> 
+>     observeEvent(input$map1_shape_click, {
+>         ## Store the click event details
+>         click <- input$map1_shape_click
+> 
+>         timeseries.id(click$id)
+>     })
+> 
+>     observe({
+>         print("observe")
+>         prev.save <- previous
+>         lst <- reactive_data()
+> 
+>         replace.legend <- substring(previous, 1, nchar(lst$channel)) != lst$channel
+>         previous <<- paste(lst$channel, lst$measure, lst$quant, lst$scenario, lst$year, sep='_')
+>         output$channelh3 <- renderText(lst$channel)
+> 
+>         spdf <- load.channel.shapefile(lst$channel)
+>         shapefile_data(spdf)
+>         lt <- leafletProxy("map1", session)
+>         if (replace.legend) {
+>             fix.limits(df)
+>             lt <- lt %>% clearControls() %>%
+>                 addLegend(pal=mypalette, values=rev(seq(limits[1], limits[2], length.out=20)), opacity=0.5, title = paste(lst$channel, "<br/>", dataset2legend[[lst$channel]]), position = "topright")
+>         }
+>         lt <- lt %>% make.map(spdf, lst$channel, lst$scenario, lst$measure, lst$year, lst$quant, dataset2region[[lst$channel]][1], dataset2region[[lst$channel]][2], dataset2region[[lst$channel]][3], group=previous) %>%
+>             clearGroup(prev.save)
+>     })
+> 
+>     ## Adaptation Tab
+>     adt.data <- reactiveValues(adt.input=NULL, risk.input=NULL)
+> 
+>     observeEvent(input$adtchannel, {
+>         if (input$adtchannel == "Coastal impacts") {
+>             adt.data$adt.input <- load.slr.adapt()
+>             adt.data$risk.input <- to.gdpprop(read.csv("Dataset v2/coastal.csv"),
+>                                               synthesis.channels[[input$adtchannel]][3])
+>         } else if (input$adtchannel == "All-source flooding") {
+>             adt.data$adt.input <- load.flood.adapt()
+>             adt.data$risk.input <- to.gdpprop(read.csv("Dataset v2/flooding.csv"),
+>                                               synthesis.channels[[input$adtchannel]][3])
+>         } else if (input$adtchannel == "Agricultural productivity") {
+>             adt.data$adt.input <- load.agric.adapt()
+>             adt.data$risk.input <- to.gdpprop(read.csv("Dataset v2/agriculture.csv"),
+>                                               synthesis.channels[[input$adtchannel]][3])
+>         } else if (input$adtchannel == "Labour productivity & supply") {
+>             adt.data$adt.input <- load.labor.adapt()
+>             adt.data$risk.input <- rbind(cbind(group="Effort",
+>                                                to.gdpprop(read.csv("Dataset v2/labourprod.csv"),
+>                                                           synthesis.channels[["Labour productivity"]][3])),
+>                                          cbind(group="Hours",
+>                                                to.gdpprop(read.csv("Dataset v2/labourhours.csv") %>% dplyr::select(!c(hours1.mu, hours1.ci05, hours1.ci95)) %>% rename(county=ISOADM1),
+>                                                           synthesis.channels[["Labour supply"]][3])))
+>         } else if (input$adtchannel == "Heat-related mortality") {
+>             adt.data$adt.input <- load.health.adapt()
+>             adt.data$risk.input <- to.gdpprop(read.csv("Dataset v2/health.csv"),
+>                                               synthesis.channels[[input$adtchannel]][3])
+>         }
+> 
+>         options <- adaptation.options[[input$adtchannel]]
+>         updatePickerInput(session, "adaptation",
+>                           choices = options)
+>     })
+> 
+>     output$adtgraph <- renderPlotly({
+>         print("Benefit")
+>         req(adt.data$adt.input)
+>         req(adt.data$risk.input)
+> 
+>         pdf3 <- get.adaptgraph.with.prev(input$adtchannel, input$adaptation, input$investment,
+>                                          adt.data$risk.input, adt.data$adt.input, savedInvests$pdf)
+> 
+>         pdf4 <- rbind(savedInvests$pdf, cbind(UID="Current", channel=input$adtchannel, pdf3))
+> 
+>         pdf4.s0 <- pdf4 %>% filter(scenario == "Most Likely" & measure == 'Invest')
+>         pdf4.s1 <- pdf4 %>% filter(scenario == "Most Likely" & measure == 'EAD') %>%
+>             group_by(year) %>% mutate(ci05=ci05 + cumsum(benefits) - benefits,
+>                                       ci95=ci95 + cumsum(benefits) - benefits,
+>                                       benefits=cumsum(benefits))
+>         pdf4.s2 <- pdf4 %>% filter(scenario == "High Risk" & measure == 'EAD') %>%
+>             group_by(year) %>% mutate(ci05=ci05 + cumsum(benefits) - benefits,
+>                                       ci95=ci95 + cumsum(benefits) - benefits,
+>                                       benefits=cumsum(benefits))
+> 
+>         uid.colors <- setNames(getAllColors(nrow(savedInvests$rows) + 1), c(savedInvests$rows$UID, "Current"))
+> 
+>         ## Subplot titles
+>         title1 <- list(
+>             text = "Most Likely Scenario",
+>             xref = "paper",
+>             yref = "paper",
+>             yanchor = "bottom",
+>             xanchor = "center",
+>             align = "center",
+>             x = 0.5,
+>             y = 1,
+>             showarrow = FALSE
+>         )
+> 
+>         title2 <- list(
+>             text = "High Risk Scenario",
+>             xref = "paper",
+>             yref = "paper",
+>             yanchor = "bottom",
+>             xanchor = "center",
+>             align = "center",
+>             x = 0.5,
+>             y = 1,
+>             showarrow = FALSE
+>         )
+> 
+>         plotly::subplot(plot_ly() %>%
+>                         add_ribbons(x=pdf4.s1$year[pdf4.s1$UID == 'Current'],
+>                                     ymin=pdf4.s1$ci05[pdf4.s1$UID == 'Current'],
+>                                     ymax=pdf4.s1$ci95[pdf4.s1$UID == 'Current'],
+>                                     line=list(color='rgba(0, 0, 0, 0)'),
+>                                     fillcolor='rgba(7, 164, 181, 0.2)') %>%
+>                         add_lines(x=pdf4.s1$year, y=pdf4.s1$benefits, type='scatter', mode='lines',
+>                                   name=pdf4.s1$UID, line=list(color=uid.colors[pdf4.s1$UID])) %>%
+>                         add_lines(x=c(2025, 2075), y=-sum(pdf4.s0$benefits) * 1e6 * gbp.usd.2025 / gdp.2025.usd, name="Investment", line=list(dash='dash', color='grey')) %>%
+>                         add_bars(x=2025, y=-pdf4.s0$benefits * 1e6 * gbp.usd.2025 / gdp.2025.usd, name=pdf4.s0$UID,
+>                                marker=list(color=uid.colors[pdf4.s0$UID])) %>%
+>                         layout(
+>                             yaxis=list(
+>                                 tickformat="%",    # Format y-axis as percentages
+>                                 title="Costs and Benefits (% GDP)" # Optionally add a title to the y-axis
+>                             ), barmode='stack', annotations=title1),
+>                         plot_ly() %>%
+>                         add_ribbons(x=pdf4.s2$year[pdf4.s2$UID == 'Current'],
+>                                     ymin=pdf4.s2$ci05[pdf4.s2$UID == 'Current'],
+>                                     ymax=pdf4.s2$ci95[pdf4.s2$UID == 'Current'],
+>                                     line=list(color='rgba(0, 0, 0, 0)'),
+>                                     fillcolor='rgba(7, 164, 181, 0.2)') %>%
+>                         add_lines(x=pdf4.s2$year, y=pdf4.s2$benefits, type='scatter', mode='lines',
+>                                   name=pdf4.s2$UID, line=list(color=uid.colors[pdf4.s2$UID])) %>%
+>                         add_lines(x=c(2025, 2075), y=-sum(pdf4.s0$benefits) * 1e6 * gbp.usd.2025 / gdp.2025.usd, name="Investment", line=list(dash='dash', color='grey')) %>%
+>                         add_bars(x=2025, y=-pdf4.s0$benefits * 1e6 * gbp.usd.2025 / gdp.2025.usd, name=pdf4.s0$UID,
+>                                  marker=list(color=uid.colors[pdf4.s0$UID])) %>%
+>                         layout(
+>                             yaxis=list(
+>                                 tickformat="%",    # Format y-axis as percentages
+>                                 title="Costs and Benefits (% GDP)" # Optionally add a title to the y-axis
+>                             ), barmode='stack', annotations=title2),
+>                         shareY=T, nrows=1, margin=0.01) %>% hide_legend()
+>     })
+> 
+>     ## Define a reactiveValues object to store saved investurations
+>     savedInvests <- reactiveValues(rows=data.frame(), pdf=data.frame())
+> 
+>     ## Table to display saved investurations
+>     output$investTable <- renderUI({
+>         legend <- makeInvestRowLegend(nrow(savedInvests$rows) + 1)
+>         constructTableHTML(rbind(cbind(Legend=tail(legend, 1),
+>                                        makeInvestRow(input$adtchannel, input$adaptation, input$investment),
+>                                        action=paste0('<button class="btn btn-success" onclick="$(\'#saveButton\').click(); return false;">Save</button>')),
+>                                  cbind(Legend=rev(head(legend, -1)),
+>                                        savedInvests$rows[, -1])))
+>     })
+> 
+>     ## Save investuration on button click
+>     observeEvent(input$saveButton, {
+>         uid <- as.character(Sys.time())
+> 
+>         newEntry <- makeInvestRow(input$adtchannel, input$adaptation, input$investment)
+> 
+>         newRow <- cbind(UID=uid, newEntry,
+>                         action=paste0('<button class="btn btn-success" onclick="Shiny.onInputChange(\'deleteButton\', this.parentElement.parentElement.rowIndex - 1);">Delete</button>'))
+> 
+>         savedInvests$rows <- rbind(newRow, savedInvests$rows)
+> 
+>         pdf3 <- get.adaptgraph.with.prev(input$adtchannel, input$adaptation, input$investment,
+>                                          adt.data$risk.input, adt.data$adt.input, savedInvests$pdf)
+>         savedInvests$pdf <- rbind(savedInvests$pdf, cbind(UID=uid, channel=input$adtchannel, pdf3))
+>     })
+> 
+>     ## Load investuration on button click
+>     observeEvent(input$deleteButton, {
+>         selectedRow <- as.numeric(input$deleteButton)
+>         if (selectedRow <= nrow(savedInvests$rows)) {
+>             uid <- savedInvests$rows$UID[selectedRow]
+>             savedInvests$rows <- savedInvests$rows[-selectedRow,]
+>             savedInvests$pdf <- subset(savedInvests$pdf, UID != uid)
+>         } else {
+>             print("Missing row")
+>             print(selectedRow)
+>             print(savedInvests$rows)
+>         }
+>     })
+> }
+> 
+> df <- NULL
+> limits <- NULL
+> timeseries.id <- reactiveVal(NULL)
+> load.risk.channel('Agricultural productivity', T, "High Risk", "EAD", "mu")
+> 
+> ## Create a color palette for the map:
+> mypalette <- colorNumeric( palette="Spectral", domain=limits, na.color="transparent", reverse=T)
+> 
+> shinyApp(ui, server)
+> ```
+**assistant**:
+> The core issue is a conflict between **bslib/page_navbar (Bootstrap 5)** and the **Bootstrap 3-based pickerInput** from shinyWidgets (or how its dependencies are being loaded). Your minimal `picker_test.R` works because it uses `fluidPage()` with the standard Bootstrap 3 stack; your full app uses `page_navbar()` from bslib, which changes the bootstrap environment and can break pickerInput’s dropdown behavior without throwing JS errors.
+> 
+> Below are the most likely fixes (you don’t need all of them—pick the one that best matches how you want the app to look):
+> 
+> ---
+> 
+> ## Option 1 – Force classic Bootstrap page instead of `page_navbar`
+> 
+> If you don’t strictly need `page_navbar()` and are happy with a more classic navbar layout, change the top-level UI to a standard `navbarPage` or `fluidPage`. For example:
+> 
+> ```r
+> ui <- navbarPage(
+>   title = "PROSPER Adaptation Investment Support",
+>   id = "mainnav",
+>   inverse = TRUE,
+> 
+>   tabPanel(
+>     "Reports and Datasets",
+>     fluidPage(
+>       uiOutput("outputsTable")
+>     )
+>   ),
+> 
+>   tabPanel(
+>     "Climate Risks",
+>     fluidPage(
+>       # ... your existing Climate Risks UI ...
+>     )
+>   ),
+> 
+>   tabPanel(
+>     "Adaptation Costs & Benefits",
+>     fluidPage(
+>       # ... your existing Adaptation UI ...
+>     )
+>   )
+> )
+> ```
+> 
+> If you switch to `navbarPage()` like this, you’ll be back on the standard Shiny Bootstrap 3 stack, and pickerInput should start opening again (just as in `picker_test.R`).
+> 
+> ---
+> 
+> ## Option 2 – Keep `page_navbar` but explicitly use Bootstrap 3
+> 
+> If you want to keep bslib’s `page_navbar` structure, you can force it to use a Bootstrap 3 theme, which is what shinyWidgets is most robust with:
+> 
+> ```r
+> ui <- page_navbar(
+>   title = "PROSPER Adaptation Investment Support",
+>   selected = "Climate Risks",
+>   bg = "#2D89C8",
+>   inverse = TRUE,
+>   theme = bslib::bs_theme(version = 3),  # <- ADD THIS LINE
+> 
+>   nav_panel(title = "Reports and Datasets",
+>     fluidPage(
+>       uiOutput("outputsTable")
+>     )
+>   ),
+>   # ... rest of your nav_panel definitions ...
+> )
+> ```
+> 
+> Then restart the app and test the pickers again.
+> 
+> ---
+> 
+> ## Option 3 – Update to latest shinyWidgets + bslib and allow Bootstrap 5
+> 
+> If you prefer to stay with Bootstrap 5 styling:
+> 
+> 1. Make sure you are on the **latest versions**:
+> 
+>    ```r
+>    install.packages("shiny")
+>    install.packages("shinyWidgets")
+>    install.packages("bslib")
+>    ```
+> 
+> 2. Keep `page_navbar` as you have it (no explicit `bs_theme(version = 3)`), restart R completely, and run the app again.
+> 
+> Recent shinyWidgets versions have improved Bootstrap 5 compatibility, but depending on your current versions, this may or may not be sufficient.
+> 
+> ---
+> 
+> ## Quick sanity check: is the picker clickable but visually not opening?
+> 
+> Once you try one of the options above:
+> 
+> - Open dev tools → *Elements* and click the picker.
+> - You should see the related `.dropdown-menu` being added / toggled.
+> - If it appears but is off-screen or invisible, it’s a pure CSS issue; but given your symptoms plus the `page_navbar` change, it’s almost certainly the Bootstrap version conflict rather than a z-index overlay.
+> 
+> ---
+> 
+> ## Minimal change I’d try first
+> 
+> Given your code as-is, I’d try the smallest modification:
+> 
+> ```r
+> ui <- page_navbar(
+>     title="PROSPER Adaptation Investment Support",
+>     selected="Climate Risks",
+>     bg = "#2D89C8",
+>     inverse = TRUE,
+>     theme = bslib::bs_theme(version = 3),  # <--- add this
+>     # ... rest unchanged ...
+> )
+> ```
+> 
+> Then reload the app and see if the pickerInputs in both tabs open normally.
+> 
+> If that fixes it, we’ve confirmed it’s just the Bootstrap 5/3 mismatch. If not, I’d then:
+> 
+> - Confirm your `shinyWidgets` version (`packageVersion("shinyWidgets")`),
+> - And we can tune the theme / dependency interaction more precisely.
+> 
+> Let me know which option you try and what behavior you get; I can then help refine the UI structure so you keep the look you want without sacrificing the pickers.
+**user**:
+> Okay, I figured out the problem, but I don't know what's going on. When I go into my first tab:
+> ```
+>     nav_panel(title="Reports and Datasets",
+>               fluidPage(
+>                   uiOutput("outputsTable")
+>               )
+>               ),
+> ```
+> and comment out the fluidPage:
+> ```
+>     nav_panel(title="Reports and Datasets",
+>               ##fluidPage(
+>                   uiOutput("outputsTable")
+>               ##)
+>               ),
+> ```
+> It works fine. Not that the problem is showing up on page 2, but it's page 1 that breaks it. What's going on?
+**assistant**:
+> What’s happening is that you’ve accidentally nested **two Bootstrap pages** inside each other, and that breaks the JavaScript that shinyWidgets uses for `pickerInput`.
+> 
+> ### The core issue
+> 
+> You have:
+> 
+> ```r
+> ui <- page_navbar(
+>   # ...
+>   nav_panel(
+>     title = "Reports and Datasets",
+>     fluidPage(                  # <-- inner Bootstrap page
+>       uiOutput("outputsTable")
+>     )
+>   ),
+>   nav_panel(
+>     title = "Climate Risks",
+>     fluidPage(                  # <-- another inner page
+>       # ... lots of UI, including pickerInput ...
+>     )
+>   ),
+>   # ...
+> )
+> ```
+> 
+> `page_navbar()` already *is* a full-page layout with its own `<body>`, container, rows, etc. When you put `fluidPage()` *inside* a `nav_panel()`, you’re effectively creating a nested Bootstrap layout. That:
+> 
+> - Re-initializes some Bootstrap markup and classes inside the tab content,
+> - Can confuse how dropdowns and input bindings are attached,
+> - And in practice, often breaks components that rely on specific container structure—like `pickerInput`’s dropdown.
+> 
+> When you comment out the inner `fluidPage()`:
+> 
+> ```r
+> nav_panel(
+>   title = "Reports and Datasets",
+>   ##fluidPage(
+>     uiOutput("outputsTable")
+>   ##)
+> ),
+> ```
+> 
+> the tab content becomes just “normal” UI inside the already-correct page structure, and the pickers in other tabs start working again.
+> 
+> Even though the problem is *visible* on the second tab, it’s the markup created in the first tab that’s corrupting the overall DOM / Bootstrap environment.
+> 
+> ### What you should do
+> 
+> 1. **Remove `fluidPage()` inside each `nav_panel`**. Just put the contents directly:
+> 
+> ```r
+> ui <- page_navbar(
+>   title="PROSPER Adaptation Investment Support",
+>   selected="Climate Risks",
+>   bg = "#2D89C8",
+>   inverse = TRUE,
+> 
+>   nav_panel(
+>     title = "Reports and Datasets",
+>     uiOutput("outputsTable")
+>   ),
+> 
+>   nav_panel(
+>     title = "Climate Risks",
+>     tags$style(type = "text/css", " ... "),
+>     tags$script(HTML("$(function() { $('#map1').css('max-width', '100%'); });")),
+>     titlePanel(h1("UK Climate Change Risk Maps", style='text-align: center')),
+>     sidebarLayout(
+>       sidebarPanel(
+>         # ...
+>         pickerInput(...),
+>         pickerInput(...)
+>       ),
+>       mainPanel(
+>         # ...
+>       )
+>     )
+>   ),
+> 
+>   nav_panel(
+>     title="Adaptation Costs & Benefits",
+>     useShinyjs(),
+>     tags$head(tags$script(HTML(JS.logify))),
+>     tags$head(tags$script(HTML(JS.onload))),
+>     titlePanel(h1("Adaptation Costs & Benefits", style='text-align: center')),
+>     sidebarLayout(
+>       sidebarPanel(
+>         pickerInput(...),
+>         pickerInput(...),
+>         sliderInput(...)
+>       ),
+>       mainPanel(
+>         # ...
+>       )
+>     )
+>   ),
+> 
+>   # nav_item, nav_spacer, nav_menu...
+> )
+> ```
+> 
+> 2. Don’t wrap `nav_panel` contents in `fluidPage`, `navbarPage`, etc. The `page_*` family from bslib (`page_navbar`, `page_fluid`, etc.) is the **top-level** layout; you then put normal components (like `sidebarLayout`, `fluidRow`, `column`, etc.) directly inside panels.
+> 
+> Once you de-nest those inner `fluidPage()` calls, you should have:
+> 
+> - `pickerInput` opening correctly on both tabs,
+> - No need for hacks around that first tab.
+> 
+> If after this change you still see odd behavior, we can then look at Bootstrap versions (`bs_theme(version = 3 or 5)`), but your “commenting out fluidPage fixes it” observation is a very clean indicator that nested pages are the culprit.
+**user**:
+> Great. But that changes how my panel titles show up. I have, e.g.,:
+> `                  titlePanel(h1("UK Climate Change Risk Maps", style='text-align: center')),`
+> And there's now a lot of space around that title, which looks odd to me.
+**assistant**:
+> `page_navbar()` + `nav_panel()` already give you a full “page section” layout, and `titlePanel()` is designed for the classic `fluidPage()` layout. When you remove the inner `fluidPage()`, `titlePanel()`’s default Bootstrap spacing looks oversized/awkward in the new context.
+> 
+> You can fix this in one of three ways:
+> 
+> ---
+> 
+> ## 1. Replace `titlePanel()` with a simpler heading
+> 
+> Since you don’t need the old `titlePanel` layout, just use a header tag with a small margin. For example:
+> 
+> ```r
+> nav_panel(
+>   title = "Climate Risks",
+>   tags$style(type = "text/css", " ... "),
+>   tags$script(HTML("$(function() { $('#map1').css('max-width', '100%'); });")),
+>   
+>   tags$div(
+>     style = "text-align: center; margin: 10px 0 5px 0;",
+>     tags$h1("UK Climate Change Risk Maps", style = "margin: 0;")
+>   ),
+> 
+>   sidebarLayout(
+>     sidebarPanel(
+>       # ...
+>     ),
+>     mainPanel(
+>       # ...
+>     )
+>   )
+> )
+> ```
+> 
+> Similarly in the Adaptation tab:
+> 
+> ```r
+> nav_panel(
+>   title = "Adaptation Costs & Benefits",
+>   useShinyjs(),
+>   tags$head(tags$script(HTML(JS.logify))),
+>   tags$head(tags$script(HTML(JS.onload))),
+> 
+>   tags$div(
+>     style = "text-align: center; margin: 10px 0 5px 0;",
+>     tags$h1("Adaptation Costs & Benefits", style = "margin: 0;")
+>   ),
+> 
+>   sidebarLayout(
+>     # ...
+>   )
+> )
+> ```
+> 
+> That gives you tight, controlled spacing and keeps everything inside `page_navbar` well-behaved.
+> 
+> ---
+> 
+> ## 2. Keep `titlePanel()` but override its margins via CSS
+> 
+> If you like using `titlePanel()` semantically, you can shrink the extra whitespace globally:
+> 
+> ```r
+> nav_panel(
+>   title = "Climate Risks",
+>   tags$style(HTML("
+>     .tab-pane .page-header {
+>       margin-top: 10px;
+>       margin-bottom: 5px;
+>     }
+>     .tab-pane .page-header h1 {
+>       margin-top: 0;
+>       margin-bottom: 0;
+>       text-align: center;
+>     }
+>   ")),
+> 
+>   titlePanel(h1("UK Climate Change Risk Maps")),
+>   sidebarLayout(
+>     # ...
+>   )
+> )
+> ```
+> 
+> This reuses the existing `page-header` class but tightens it.
+> 
+> ---
+> 
+> ## 3. Use bslib’s more “native” page header style
+> 
+> If you want to lean into bslib conventions:
+> 
+> ```r
+> nav_panel(
+>   title = "Climate Risks",
+>   bslib::card(
+>     full_screen = FALSE,
+>     style = "margin-bottom: 10px;",
+>     bslib::card_body(
+>       tags$h1("UK Climate Change Risk Maps", style = "margin: 0; text-align: center;")
+>     )
+>   ),
+>   sidebarLayout(
+>     # ...
+>   )
+> )
+> ```
+> 
+> Slightly heavier markup, but consistent with bslib’s newer components.
+> 
+> ---
+> 
+> For minimal change and good aesthetics, I’d go with **Option 1**: replace `titlePanel()` with a simple `div + h1` and control the margins manually. That keeps your pickerInputs working (no nested `fluidPage`) and restores a clean, compact title appearance.

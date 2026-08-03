@@ -1,0 +1,835 @@
+**user**:
+> I am writing up a methods appendix for a report. Here's the intro for one of the sections:
+> ```
+> Adaptation costs and benefits for soil management practices are drawn from \citet{moran2013assessing}. This source provides estimates for improved drainage, compacted soils, cover crops, shallow ploughing, spring cultivation, and contour ploughing, each of which are evaluated for winter wheat, spring barley, potatoes, and carrots.
+> ```
+> The actual code then which implements these adaptation models is:
+> ```
+> setwd("~/Dropbox/HMT/channels/agriculture")
+> 
+> library(readxl)
+> library(dplyr)
+> source("~/projects/research-common/R/myPBSmapping.R")
+> 
+> df <- read.csv("tabula-Final-report-SRUC-ASC_-4-July_ASC-FINAL-9-July-2013_clean.csv") # million GBP
+> 
+> costs.capex <- data.frame(Solution="drainage", Cost.ha.lo=1730, Cost.ha.hi=2225)
+> costs.opex <- rbind(data.frame(Solution=c("drainage", "compacted soils", "cover crop"),
+>                                Cost.ha.lo=c(35, 20, 500), Cost.ha.hi=c(50, 40, 600)),
+>                     data.frame(Solution=c("shallow ploughing", "spring cultivation", "contour ploughing"),
+>                                Cost.ha.lo=0, Cost.ha.hi=0))
+> 
+> possible.solutions <- rbind(data.frame(Crop="W Wheat – free draining", Solution=c("shallow ploughing", "contour ploughing")),
+>                             data.frame(Crop="W Wheat – required drainage", Solution=c("drainage", "compacted soils", "shallow ploughing", "contour ploughing")),
+>                             data.frame(Crop="S Barley – free draining", Solution=c("shallow ploughing", "spring cultivation", "contour ploughing")),
+>                             data.frame(Crop="S Barley – required drainage", Solution=c("drainage", "compacted soils", "shallow ploughing", "spring cultivation", "contour ploughing")),
+>                             data.frame(Crop="Potatoes", Solution=c("drainage", "compacted soils", "cover crop", "shallow ploughing", "spring cultivation", "contour ploughing")),
+>                             data.frame(Crop="Carrots", Solution=c("cover crop", "shallow ploughing", "spring cultivation", "contour ploughing")))
+> 
+> ## All in million GBP
+> agprod.cereal <- read_excel("~/Dropbox/UK Economic Risks/channels/agriculture/regional/agr_r_accts__custom_2148028_spreadsheet.xlsx", sheet='Sheet 1', skip=9)
+> agprod.potato <- read_excel("~/Dropbox/UK Economic Risks/channels/agriculture/regional/agr_r_accts__custom_2148028_spreadsheet.xlsx", sheet='Sheet 5', skip=9)
+> agprod.croptl <- read_excel("~/Dropbox/UK Economic Risks/channels/agriculture/regional/agr_r_accts__custom_2148028_spreadsheet.xlsx", sheet='Sheet 10', skip=9)
+> 
+> agprod.cereal2 <- data.frame(nuts=agprod.cereal$TIME...1[nchar(agprod.cereal$TIME...1) == 4], region=agprod.cereal$TIME...2[nchar(agprod.cereal$TIME...1) == 4], agprod.cereal=apply(agprod.cereal[nchar(agprod.cereal$TIME...1) == 4, as.character(2010:2012)], 1, function(xx) mean(as.numeric(xx), na.rm=T)))
+> agprod.potato2 <- data.frame(nuts=agprod.potato$TIME...1[nchar(agprod.potato$TIME...1) == 4], region=agprod.potato$TIME...2[nchar(agprod.potato$TIME...1) == 4], agprod.potato=apply(agprod.potato[nchar(agprod.potato$TIME...1) == 4, as.character(2010:2012)], 1, function(xx) mean(as.numeric(xx), na.rm=T)))
+> agprod.croptl2 <- data.frame(nuts=agprod.croptl$TIME...1[nchar(agprod.croptl$TIME...1) == 4], region=agprod.croptl$TIME...2[nchar(agprod.croptl$TIME...1) == 4], agprod.croptl=apply(agprod.croptl[nchar(agprod.croptl$TIME...1) == 4, as.character(2010:2012)], 1, function(xx) mean(as.numeric(xx), na.rm=T)))
+> 
+> agprod2 <- agprod.croptl2 %>% left_join(agprod.cereal2, by=c('nuts', 'region')) %>%
+>     left_join(agprod.potato2, by=c('nuts', 'region'))
+> 
+> ## Construct weights for ADM3
+> xwalk <- read.csv("~/Dropbox/UK Economic Risks/regions/gadm2nuts.csv")
+> xwalk$NUTS2_ID <- sapply(xwalk$NUTS_ID, function(str) substring(str, 1, 4))
+> 
+> shp.withattr <- importShapefile("../../regions/gadm36_GBR_shp/gadm36_GBR_3-withattr.shp")
+> polydata.withattr <- attr(shp.withattr, 'PolyData')
+> 
+> agprod3 <- agprod2 %>% left_join(xwalk, by=c('nuts'='NUTS2_ID')) %>% left_join(polydata.withattr[, c('PID', 'area')], by='PID')
+> ## Distribute agricultural production by area
+> agprod4 <- agprod3 %>% group_by(nuts) %>%
+>     reframe(county=NAME_3, agprod.croptl=max(agprod.croptl) * area / sum(area),
+>             agprod.cereal=max(agprod.cereal) * area / sum(area),
+>             agprod.potato=max(agprod.potato) * area / sum(area))
+> 
+> ## Get Wheat and Barley by region
+> tonnes.wheat <- read_excel("~/Dropbox/HMT/channels/agriculture/uk-cops-webseries-241212.xlsx", sheet='Wheat', skip=34, n_max=13)
+> tonnes.barley <- read_excel("~/Dropbox/HMT/channels/agriculture/uk-cops-webseries-241212.xlsx", sheet='Spring Barley', skip=34, n_max=13)
+> 
+> tonnes.wheat2 <- data.frame(Region=tonnes.wheat$`Production (b)`[!(tonnes.wheat$`Production (b)` %in% c("United Kingdom", "England"))], tonnes.wheat=apply(tonnes.wheat[!(tonnes.wheat$`Production (b)` %in% c("United Kingdom", "England")), as.character(2010:2012)], 1, function(xx) mean(as.numeric(xx), na.rm=T)))
+> tonnes.barley2 <- data.frame(Region=tonnes.barley$`Production (b)`[!(tonnes.barley$`Production (b)` %in% c("United Kingdom", "England"))], tonnes.barley=apply(tonnes.barley[!(tonnes.barley$`Production (b)` %in% c("United Kingdom", "England")), as.character(2010:2012)], 1, function(xx) mean(as.numeric(xx), na.rm=T)))
+> 
+> tonnes3 <- data.frame(nuts1=c('UKC', 'UKD', 'UKE', 'UKF', 'UKG', 'UKH', 'UKI', 'UKJ', 'UKK', 'UKL', 'UKM', 'UKN'),
+>                       Region=c('North East', 'North West and Merseyside', 'Yorkshire & The Humber', 'East Midlands', 'West Midlands',
+>                                'Eastern', 'South East and London', 'South East and London', 'South West', 'Wales', 'Scotland', 'Northern Ireland')) %>%
+>     left_join(tonnes.wheat2, by='Region') %>% left_join(tonnes.barley2, by='Region')
+> 
+> ## 41% of the agricultural arable land is free draining (Anthony et al. 2012)
+> agprod5 <- agprod4 %>% mutate(nuts1=substring(nuts, 1, 3)) %>% left_join(tonnes3) %>%
+>     mutate(`W Wheat – free draining`=agprod.cereal * 0.41 * tonnes.wheat / (tonnes.wheat + tonnes.barley),
+>            `W Wheat – required drainage`=agprod.cereal * 0.59 * tonnes.wheat / (tonnes.wheat + tonnes.barley),
+>            `S Barley – free draining`=agprod.cereal * 0.41 * tonnes.barley / (tonnes.wheat + tonnes.barley),
+>            `S Barley – required drainage`=agprod.cereal * 0.59 * tonnes.barley / (tonnes.wheat + tonnes.barley),
+>            `Potatoes`=agprod.potato,
+>            `Carrots`=agprod.croptl - agprod.potato - agprod.cereal) # Very conservative: Only applies benefits to carrots
+> 
+> df2 <- subset(df, Price.Scenario == "pessimistic") %>% left_join(subset(df, Price.Scenario == "optimistic"),
+>                                                                  by=c('Solution', 'Crop'), suffix=c('.pes', '.opt'))
+> stopifnot(sum(df2$Cost...million..pes != df2$Cost...million..opt) == 0)
+> 
+> save(agprod5, df2, file="calib.RData")
+> 
+> marginals <- data.frame()
+> for (ii in 1:nrow(possible.solutions)) {
+>     ## Marginal units: % change / GBP
+>     ## Add 1 million GBP to all costs so 0-cost solutions visible
+>     solution <- possible.solutions$Solution[ii]
+>     crop <- possible.solutions$Crop[ii]
+> 
+>     row <- subset(df2, Solution == solution & Crop == crop)
+>     marginal1 <- (row$Crop.benefit...million..pes / sum(agprod5[, crop], na.rm=T)) / (row$Cost...million..pes + 5)
+>     marginal2 <- (row$Crop.benefit...million..opt / sum(agprod5[, crop], na.rm=T)) / (row$Cost...million..pes + 5)
+>     marginals <- rbind(marginals, data.frame(Solution=solution, Crop=crop, marginal.lo=min(c(marginal1, marginal2)),
+>                                              marginal.hi=max(c(marginal1, marginal2)), MaxCost=row$Cost...million..pes + 5))
+> }
+> 
+> marginals$total <- 0.5 * (marginals$marginal.hi + marginals$marginal.lo) * marginals$MaxCost
+> marginals2 <- marginals[order(marginals$total),]
+> marginals2[marginals2$Solution == 'compacted soils',]
+> 
+> marginals2 <- marginals[order(marginals$marginal.hi + marginals$marginal.lo, decreasing=T),]
+> marginals3 <- marginals2 %>% group_by(Crop) %>% mutate(xmin=c(0, cumsum(MaxCost)[-n()]), xmax=cumsum(MaxCost),
+>                                                        marginal.lo.prev=c(NA, marginal.lo[-n()]))
+> 
+> library(ggplot2)
+> 
+> ggplot(marginals3, aes(xmin=xmin, xmax=xmax, ymin=marginal.lo, ymax=marginal.hi, fill=Solution)) +
+>     geom_rect() +
+>     geom_segment(aes(x=xmin, y=marginal.lo.prev, xend=xmin, yend=marginal.hi, colour=Crop), linetype=2) +
+>     scale_y_log10("Aboided losses (% / million GBP)", labels=scales::percent) + theme_bw() + xlab("Implementation costs (million GBP)")
+> ggsave("mac-soil.pdf", width=6.5, height=4)
+> ```
+> 
+> Can you provide a clear technical description of how adaptation is modeled, including LaTeX for the mac-soil figure?
+**assistant**:
+> Here is a polished methods-appendix description that corresponds closely to your code, including LaTeX for the `mac-soil` figure. You can drop this into a methods section with minimal edits.
+> 
+> ---
+> 
+> ### Adaptation Cost–Benefit Modeling for Soil Management Practices
+> 
+> This section documents the implementation of the soil-management adaptation analysis, which evaluates the cost-effectiveness of several agricultural practices in reducing climate-related yield losses. The analysis combines cost–benefit estimates from \citet{moran2013assessing} with spatially disaggregated agricultural production data for the UK.
+> 
+> #### 1. Adaptation Options and Crop–Practice Matrix
+> 
+> Adaptation costs and benefits for soil management practices are drawn from \citet{moran2013assessing}. That study provides estimates for the following practices (hereafter “solutions”):
+> 
+> - Improved drainage (“drainage”)
+> - Compacted soils management (“compacted soils”)
+> - Cover cropping (“cover crop”)
+> - Shallow ploughing (“shallow ploughing”)
+> - Spring cultivation (“spring cultivation”)
+> - Contour ploughing (“contour ploughing”)
+> 
+> Each practice is evaluated for four crop types:
+> 
+> - Winter wheat (split into “free draining” and “required drainage” soils)
+> - Spring barley (split into “free draining” and “required drainage” soils)
+> - Potatoes
+> - Carrots
+> 
+> Not all practices are applicable to all crop–soil combinations. The feasible set of practices by crop is encoded as:
+> 
+> - Winter wheat – free draining: shallow ploughing, contour ploughing
+> - Winter wheat – required drainage: drainage, compacted soils, shallow ploughing, contour ploughing
+> - Spring barley – free draining: shallow ploughing, spring cultivation, contour ploughing
+> - Spring barley – required drainage: drainage, compacted soils, shallow ploughing, spring cultivation, contour ploughing
+> - Potatoes: drainage, compacted soils, cover crop, shallow ploughing, spring cultivation, contour ploughing
+> - Carrots: cover crop, shallow ploughing, spring cultivation, contour ploughing
+> 
+> In the code, this is captured in a `possible.solutions` table with one row per feasible (crop, solution) pair.
+> 
+> #### 2. Cost Data
+> 
+> All costs are expressed per hectare and then treated in million GBP at the national scale, as reported by \citet{moran2013assessing}. Two cost components are distinguished:
+> 
+> - Capital expenditure (capex): non-recurring per-hectare investment costs.
+> - Operating expenditure (opex): recurring per-hectare annual implementation or maintenance costs.
+> 
+> Capex and opex ranges (low and high values per hectare) are specified for each solution:
+> 
+> - Drainage: both capex and opex are non-zero.
+> - Compacted soils: opex only.
+> - Cover crop: opex only.
+> - Shallow ploughing, spring cultivation, contour ploughing: zero opex (marginal implementation costs treated as zero in \citet{moran2013assessing}).
+> 
+> Formally, for solution \(s\), the per-hectare capex and opex ranges are:
+> 
+> \[
+> \text{Capex}_{s}^{\text{lo}},\ \text{Capex}_{s}^{\text{hi}}, \qquad 
+> \text{Opex}_{s}^{\text{lo}},\ \text{Opex}_{s}^{\text{hi}}.
+> \]
+> 
+> \citet{moran2013assessing} also reports, for each solution–crop pair \((s,c)\), a total implementation cost and associated benefits under pessimistic and optimistic price scenarios, all in million GBP. These are read from a cleaned version of the original SRUC table:
+> 
+> - \(C_{s,c}\): implementation cost (million GBP)
+> - \(B_{s,c}^{\mathrm{pes}}\): crop benefit under pessimistic price scenario (million GBP)
+> - \(B_{s,c}^{\mathrm{opt}}\): crop benefit under optimistic price scenario (million GBP)
+> 
+> The code checks that pessimistic and optimistic costs are identical for each \((s,c)\) pair and stores these in a combined table `df2`.
+> 
+> To avoid problems with exact zero-cost solutions and to ensure that all solutions are visible in the marginal cost curve, we add a constant offset of 5 million GBP to the reported costs:
+> 
+> \[
+> C'_{s,c} = C_{s,c} + 5\ \text{million GBP}.
+> \]
+> 
+> \(C'_{s,c}\) is then used as the effective implementation cost in subsequent calculations.
+> 
+> #### 3. Regional Agricultural Production Data
+> 
+> To normalize benefits by the economic value at risk, we construct regional production values for cereals, potatoes, and total crops, and then further allocate these to the specific crop categories used in the adaptation analysis.
+> 
+> ##### 3.1 NUTS2-level production values
+> 
+> We use regional agricultural accounts from an official spreadsheet (`agr_r_accts__custom_2148028_spreadsheet.xlsx`) with three relevant sheets:
+> 
+> - Sheet 1: cereal production (million GBP),
+> - Sheet 5: potato production (million GBP),
+> - Sheet 10: total crop production (million GBP).
+> 
+> For each NUTS2 region \(r\), the production values are averaged over 2010–2012:
+> 
+> \[
+> \begin{aligned}
+> P^{\text{cereal}}_r &= \frac{1}{3}\sum_{y=2010}^{2012} P^{\text{cereal}}_{r,y}, \\
+> P^{\text{potato}}_r &= \frac{1}{3}\sum_{y=2010}^{2012} P^{\text{potato}}_{r,y}, \\
+> P^{\text{croptl}}_r &= \frac{1}{3}\sum_{y=2010}^{2012} P^{\text{croptl}}_{r,y}.
+> \end{aligned}
+> \]
+> 
+> These are assembled into a single NUTS2-level table with variables
+> \(P^{\text{cereal}}_r\), \(P^{\text{potato}}_r\), and \(P^{\text{croptl}}_r\).
+> 
+> ##### 3.2 Disaggregation to county (GADM3) level
+> 
+> We disaggregate NUTS2-level values to GADM level-3 units (“counties”) using an area-based weighting scheme:
+> 
+> 1. A crosswalk (`gadm2nuts.csv`) associates each GADM3 polygon \(i\) with a NUTS2 region \(r(i)\).
+> 2. Polygon areas \(A_i\) are taken from a prepared GADM3 shapefile (`gadm36_GBR_3-withattr.shp`).
+> 3. For each NUTS2 region \(r\), its total NUTS2 production values are allocated to counties proportionally to area:
+> 
+> \[
+> \begin{aligned}
+> P^{\text{croptl}}_i &= P^{\text{croptl}}_{r(i)} \cdot \frac{A_i}{\sum_{j: r(j)=r(i)} A_j}, \\
+> P^{\text{cereal}}_i &= P^{\text{cereal}}_{r(i)} \cdot \frac{A_i}{\sum_{j: r(j)=r(i)} A_j}, \\
+> P^{\text{potato}}_i &= P^{\text{potato}}_{r(i)} \cdot \frac{A_i}{\sum_{j: r(j)=r(i)} A_j}.
+> \end{aligned}
+> \]
+> 
+> This yields county-level production values \(P^{\text{croptl}}_i\), \(P^{\text{cereal}}_i\), and \(P^{\text{potato}}_i\).
+> 
+> ##### 3.3 Allocation between wheat and barley, and construction of crop categories
+> 
+> We then allocate county-level cereal production to winter wheat and spring barley under free-draining and required-drainage soil conditions.
+> 
+> First, NUTS1-level production tonnages for wheat and spring barley are obtained from `uk-cops-webseries-241212.xlsx`, for the years 2010–2012. For each NUTS1 region \(R\):
+> 
+> \[
+> \begin{aligned}
+> T^{\text{wheat}}_R &= \frac{1}{3}\sum_{y=2010}^{2012} T^{\text{wheat}}_{R,y}, \\
+> T^{\text{barley}}_R &= \frac{1}{3}\sum_{y=2010}^{2012} T^{\text{barley}}_{R,y}.
+> \end{aligned}
+> \]
+> 
+> Each county \(i\) is mapped to a NUTS1 region \(R(i)\) via the first three characters of its NUTS2 code. Following \citet{anthony2012}, we assume that 41% of arable land is free-draining. Using this fraction, the county-level cereal production \(P^{\text{cereal}}_i\) is split between wheat and barley, and between free-draining and required-drainage soils as:
+> 
+> \[
+> \begin{aligned}
+> P^{\text{W Wheat – free draining}}_i 
+> &= P^{\text{cereal}}_i \times 0.41 \times \frac{T^{\text{wheat}}_{R(i)}}{T^{\text{wheat}}_{R(i)} + T^{\text{barley}}_{R(i)}}, \\
+> P^{\text{W Wheat – required drainage}}_i 
+> &= P^{\text{cereal}}_i \times 0.59 \times \frac{T^{\text{wheat}}_{R(i)}}{T^{\text{wheat}}_{R(i)} + T^{\text{barley}}_{R(i)}}, \\
+> P^{\text{S Barley – free draining}}_i 
+> &= P^{\text{cereal}}_i \times 0.41 \times \frac{T^{\text{barley}}_{R(i)}}{T^{\text{wheat}}_{R(i)} + T^{\text{barley}}_{R(i)}}, \\
+> P^{\text{S Barley – required drainage}}_i 
+> &= P^{\text{cereal}}_i \times 0.59 \times \frac{T^{\text{barley}}_{R(i)}}{T^{\text{wheat}}_{R(i)} + T^{\text{barley}}_{R(i)}}.
+> \end{aligned}
+> \]
+> 
+> For potatoes, we directly use the potato production value:
+> 
+> \[
+> P^{\text{Potatoes}}_i = P^{\text{potato}}_i.
+> \]
+> 
+> For carrots, which are not reported separately in the agricultural accounts, we conservatively assign the residual crop value after subtracting cereals and potatoes:
+> 
+> \[
+> P^{\text{Carrots}}_i = P^{\text{croptl}}_i - P^{\text{potato}}_i - P^{\text{cereal}}_i.
+> \]
+> 
+> This construction is intentionally conservative: any unaccounted crop value is attributed to carrots, and adaptation benefits are only applied to this residual.
+> 
+> Finally, for each crop category \(c\) (winter wheat – free draining, winter wheat – required drainage, spring barley – free draining, spring barley – required drainage, potatoes, carrots), we compute the total national production value:
+> 
+> \[
+> \sum_i P^{c}_i,
+> \]
+> 
+> which is used to normalize adaptation benefits.
+> 
+> #### 4. Marginal Effectiveness of Adaptation
+> 
+> For each feasible solution–crop pair \((s,c)\) in `possible.solutions`, marginal effectiveness is defined as avoided losses (as a percentage of total crop value) per million GBP of implementation cost.
+> 
+> Let:
+> 
+> - \(C_{s,c}\) be the implementation cost (million GBP),
+> - \(B_{s,c}^{\mathrm{pes}}\) and \(B_{s,c}^{\mathrm{opt}}\) be pessimistic and optimistic crop benefits (million GBP),
+> - \(\sum_i P^{c}_i\) be the total value of crop \(c\) (million GBP).
+> 
+> We first define normalized avoided losses (as percentages of total crop value) under each price scenario:
+> 
+> \[
+> L_{s,c}^{\mathrm{pes}} = \frac{B_{s,c}^{\mathrm{pes}}}{\sum_i P^{c}_i}, \qquad
+> L_{s,c}^{\mathrm{opt}} = \frac{B_{s,c}^{\mathrm{opt}}}{\sum_i P^{c}_i}.
+> \]
+> 
+> Using the adjusted cost \(C'_{s,c} = C_{s,c} + 5\), the marginal effectiveness under pessimistic and optimistic scenarios is:
+> 
+> \[
+> \begin{aligned}
+> ME_{s,c}^{\mathrm{pes}} &= \frac{L_{s,c}^{\mathrm{pes}}}{C'_{s,c}}
+> = \frac{B_{s,c}^{\mathrm{pes}} / \sum_i P^{c}_i}{C'_{s,c}}, \\
+> ME_{s,c}^{\mathrm{opt}} &= \frac{L_{s,c}^{\mathrm{opt}}}{C'_{s,c}}
+> = \frac{B_{s,c}^{\mathrm{opt}} / \sum_i P^{c}_i}{C'_{s,c}}.
+> \end{aligned}
+> \]
+> 
+> These have units of “percentage of national crop value avoided per million GBP spent” (i.e., \% / million GBP). For each \((s,c)\), we summarize the uncertainty range by:
+> 
+> \[
+> ME_{s,c}^{\mathrm{lo}} = \min \left( ME_{s,c}^{\mathrm{pes}}, ME_{s,c}^{\mathrm{opt}} \right), \qquad
+> ME_{s,c}^{\mathrm{hi}} = \max \left( ME_{s,c}^{\mathrm{pes}}, ME_{s,c}^{\mathrm{opt}} \right).
+> \]
+> 
+> The `MaxCost` reported in the visualization is precisely \(C'_{s,c}\).
+> 
+> To facilitate plotting and ranking, the code also defines a simple scalar “total effectiveness” for each \((s,c)\) as the average marginal effectiveness times the cost:
+> 
+> \[
+> \text{total}_{s,c} = \frac{1}{2}\left(ME_{s,c}^{\mathrm{lo}} + ME_{s,c}^{\mathrm{hi}}\right) C'_{s,c},
+> \]
+> 
+> and orders solutions within each crop by decreasing average marginal effectiveness
+> \(\left(ME_{s,c}^{\mathrm{hi}} + ME_{s,c}^{
+**user**:
+> Actually, that's the calibration, but we also need to describe how we apply it, which is based on the following functions:
+> ```
+> load.agric.adapt <- function() {
+>     load("channels/agriculture/calib.RData") # agprod5, df2
+>     impacts <- read.csv("Dataset v2/agriculture.csv")
+> 
+>     df2$Crop.benefit...million. <- (df2$Crop.benefit...million..pes + df2$Crop.benefit...million..opt) / 2
+>     df2$Cost...million. <- (df2$Cost...million..pes + df2$Cost...million..opt) / 2 + 5
+>     df2$NPV...million. <- pmax(0, (df2$NPV...million..pes + df2$NPV...million..opt) / 2 - 5)
+> 
+>     options <- agprod5 %>% dplyr::select(!c(agprod.croptl, agprod.cereal, agprod.potato, nuts1, Region, tonnes.wheat, tonnes.barley)) %>%
+>         pivot_longer(cols=!c(nuts, county)) %>% left_join(df2, by=c('name'='Crop'), relationship="many-to-many")
+> 
+>     return(list(options, impacts))
+> }
+> 
+> agric.adapt.prop <- function(spend.MGBPyr, loaded) {
+>     options <- loaded[[1]]
+> 
+>     options$spend <- spend.MGBPyr * options$value * options$NPV...million. / sum(options$value * options$NPV...million., na.rm=T)
+>     options$benefit <- options$spend * options$Crop.benefit...million. / options$Cost...million.
+> 
+>     options2 <- options %>% group_by(nuts, county, name, value) %>% dplyr::summarize(benefit=sum(benefit), spend=sum(spend))
+>     options3 <- loaded[[2]] %>% left_join(options2, by='county', relationship="many-to-many") %>%
+>         group_by(scenario, year, measure, county) %>% mutate(mu=mu * value / sum(value), ci05=ci05 * value / sum(value),
+>                                                              ci95=ci95 * value / sum(value),
+>                                                              frac.mu=pmin(1, benefit / mu), frac.ci05=pmin(1, benefit / ci05),
+>                                                              frac.ci95=pmin(1, benefit / ci95)) %>%
+>         mutate(frac.mu=ifelse(frac.mu < 0, 1, frac.mu), frac.ci05=ifelse(frac.ci05 < 0, 1, frac.ci05),
+>                frac.ci95=ifelse(frac.ci95 < 0, 1, frac.ci95))
+>     ## Approximate IQR as half way between q05 and mu and q95 and mu.
+>     options4 <- options3 %>% group_by(scenario, year, measure, county) %>%
+>         dplyr::summarize(mu=1 - ifelse(all(is.na(frac.mu)), 1, sum(frac.mu * mu, na.rm=T) / sum(mu)),
+>                          ci25=(mu + 1 - ifelse(all(is.na(frac.ci05)), 1, sum(frac.ci05 * ci05, na.rm=T) / sum(ci05))) / 2,
+>                          ci75=(mu + 1 - ifelse(all(is.na(frac.ci95)), 1, sum(frac.ci95 * ci95, na.rm=T) / sum(ci95))) / 2)
+> 
+>     options4
+> }
+> ```
+> Can you incorporate this into the text? Also tighten it up, it's too long.
+**assistant**:
+> Below is a tightened, self‑contained methods description that covers both the calibration and the application of the adaptation model, including the use of the `load.agric.adapt` and `agric.adapt.prop` functions. You can trim or re-order sections to fit the rest of the appendix.
+> 
+> ---
+> 
+> ### Soil‑Management Adaptation: Calibration and Application
+> 
+> This section describes how cost–benefit information for soil management practices is calibrated to UK agricultural production data and then applied to reduce modeled climate impacts on crop yields.
+> 
+> #### 1. Adaptation options and crop coverage
+> 
+> Soil-management options are taken from \citet{moran2013assessing}: improved drainage, compacted soils management, cover crops, shallow ploughing, spring cultivation, and contour ploughing. These are evaluated for:
+> 
+> - winter wheat (split into free-draining and required-drainage soils),
+> - spring barley (free-draining and required-drainage),
+> - potatoes, and
+> - carrots.
+> 
+> A crop–practice feasibility matrix (`possible.solutions`) specifies which practices apply to each crop–soil combination; infeasible pairs are excluded from the analysis.
+> 
+> #### 2. Cost and benefit calibration
+> 
+> From \citet{moran2013assessing}, for each solution–crop pair \((s,c)\) we extract:
+> 
+> - implementation cost in a given price scenario \(k \in \{\mathrm{pes},\mathrm{opt}\}\):
+>   \[
+>   C_{s,c}^{k} \ \text{(million GBP)},
+>   \]
+> - total crop benefit:
+>   \[
+>   B_{s,c}^{k} \ \text{(million GBP)},
+>   \]
+> - net present value:
+>   \[
+>   \text{NPV}_{s,c}^{k} \ \text{(million GBP)}.
+>   \]
+> 
+> The cleaned table (`df2`) contains pessimistic (“pes”) and optimistic (“opt”) values, with a consistency check that \(C_{s,c}^{\mathrm{pes}} = C_{s,c}^{\mathrm{opt}}\).
+> 
+> We use scenario averages and apply a small cost correction:
+> 
+> \[
+> \begin{aligned}
+> \overline{B}_{s,c} &= \frac{B_{s,c}^{\mathrm{pes}} + B_{s,c}^{\mathrm{opt}}}{2},\\[3pt]
+> C'_{s,c} &= \frac{C_{s,c}^{\mathrm{pes}} + C_{s,c}^{\mathrm{opt}}}{2} + 5,\\[3pt]
+> \text{NPV}'_{s,c} &= \max\!\left(0, \frac{\text{NPV}_{s,c}^{\mathrm{pes}} + \text{NPV}_{s,c}^{\mathrm{opt}}}{2} - 5\right).
+> \end{aligned}
+> \]
+> 
+> The 5 million GBP offset in \(C'_{s,c}\) and \(\text{NPV}'_{s,c}\) (the same adjustment used for the MAC curve) (i) ensures zero‑cost options are visible in marginal analyses, and (ii) slightly penalizes options with very small positive NPVs.
+> 
+> #### 3. Spatial crop-production data
+> 
+> We construct spatially disaggregated crop values to normalize adaptation benefits.
+> 
+> 1. **NUTS2 agricultural accounts.** From official regional accounts (2010–2012 averages), we obtain for each NUTS2 region \(r\):
+> 
+>    \[
+>    P^{\text{cereal}}_r,\quad P^{\text{potato}}_r,\quad P^{\text{croptl}}_r
+>    \]
+>    (million GBP for cereals, potatoes, and total crops).
+> 
+> 2. **Downscaling to counties.** Using a NUTS2–GADM3 crosswalk and GADM3 polygon areas \(A_i\), we disaggregate NUTS2 values to counties \(i\) by area-weighting:
+>    \[
+>    P^{x}_i = P^{x}_{r(i)} \cdot \frac{A_i}{\sum_{j: r(j)=r(i)} A_j}, \qquad x \in \{\text{cereal}, \text{potato}, \text{croptl}\}.
+>    \]
+> 
+> 3. **Split cereals into wheat and barley, free-draining and required-drainage.** For each NUTS1 region \(R\), we compute mean wheat and spring barley tonnages \(T^{\text{wheat}}_R\), \(T^{\text{barley}}_R\) over 2010–2012. Each county \(i\) is linked to a NUTS1 region \(R(i)\). Following \citet{anthony2012}, 41% of arable land is assumed free‑draining:
+> 
+>    \[
+>    \begin{aligned}
+>    P^{\text{W Wheat – free}}_i 
+>    &= P^{\text{cereal}}_i \times 0.41 \times \frac{T^{\text{wheat}}_{R(i)}}{T^{\text{wheat}}_{R(i)} + T^{\text{barley}}_{R(i)}},\\
+>    P^{\text{W Wheat – req}}_i 
+>    &= P^{\text{cereal}}_i \times 0.59 \times \frac{T^{\text{wheat}}_{R(i)}}{T^{\text{wheat}}_{R(i)} + T^{\text{barley}}_{R(i)}},\\
+>    P^{\text{S Barley – free}}_i 
+>    &= P^{\text{cereal}}_i \times 0.41 \times \frac{T^{\text{barley}}_{R(i)}}{T^{\text{wheat}}_{R(i)} + T^{\text{barley}}_{R(i)}},\\
+>    P^{\text{S Barley – req}}_i 
+>    &= P^{\text{cereal}}_i \times 0.59 \times \frac{T^{\text{barley}}_{R(i)}}{T^{\text{wheat}}_{R(i)} + T^{\text{barley}}_{R(i)}}.
+>    \end{aligned}
+>    \]
+> 
+> 4. **Potatoes and carrots.** Potato value is taken directly, and carrots are treated conservatively as a residual:
+> 
+>    \[
+>    P^{\text{Potatoes}}_i = P^{\text{potato}}_i, \qquad
+>    P^{\text{Carrots}}_i = P^{\text{croptl}}_i - P^{\text{potato}}_i - P^{\text{cereal}}_i.
+>    \]
+> 
+> This yields, for each county \(i\), a value \(P^c_i\) for each crop category \(c\). The total national value of crop \(c\) is
+> \[
+> V^c = \sum_i P^c_i.
+> \]
+> 
+> The resulting county–crop table is stored as `agprod5`.
+> 
+> #### 4. Construction of adaptation options
+> 
+> The function `load.agric.adapt()` combines the calibrated cost–benefit data with the spatial production data and climate impacts:
+> 
+> 1. Load `agprod5` and `df2` (calibration) and the impact dataset `impacts` (county-level climate impact projections by scenario, year, and measure).
+> 2. Compute scenario-averaged cost, benefit, and NPV (with adjustments as in Section 2):
+>    \[
+>    \overline{B}_{s,c} \equiv \texttt{Crop.benefit...million.},\quad
+>    C'_{s,c} \equiv \texttt{Cost...million.},\quad
+>    \text{NPV}'_{s,c} \equiv \texttt{NPV...million.}.
+>    \]
+> 3. Reshape `agprod5` to long format so that each record is a county–crop pair \((i,c)\) with crop value
+>    \(\texttt{value} = P^c_i\).
+> 4. Join with `df2` on crop \(c\); this yields `options`, a table over county \(i\), crop \(c\), and solution \(s\) with:
+>    - local crop value \(P^c_i\),
+>    - calibrated \(\overline{B}_{s,c}\), \(C'_{s,c}\), \(\text{NPV}'_{s,c}\).
+> 
+> `load.agric.adapt()` returns a list \((\texttt{options}, \texttt{impacts})\).
+> 
+> #### 5. Budget allocation and impact reduction
+> 
+> Given an annual adaptation budget \(S\) (million GBP yr\(^{-1}\)), the function `agric.adapt.prop(spend.MGBPyr = S, loaded)` allocates this budget across options and translates it into reductions in modeled impacts.
+> 
+> ##### 5.1 Budget allocation across county–crop–solution options
+> 
+> For each option \((i,c,s)\) in `options`, with local crop value \(P^c_i\) and adjusted NPV \(\text{NPV}'_{s,c}\), we allocate spending proportional to \(P^c_i \times \text{NPV}'_{s,c}\):
+> 
+> \[
+> \text{spend}_{i,c,s}
+> = S \times 
+> \frac{P^c_i \, \text{NPV}'_{s,c}}
+>      {\sum_{i',c',s'} P^{c'}_{i'} \, \text{NPV}'_{s',c'}}.
+> \]
+> 
+> This favors solutions that (i) apply to higher‑value crops/locations and (ii) have higher net present values.
+> 
+> The realized benefit of that spend is taken to scale linearly with cost up to the calibrated level:
+> 
+> \[
+> \text{benefit}_{i,c,s}
+> = \text{spend}_{i,c,s} \times \frac{\overline{B}_{s,c}}{C'_{s,c}}.
+> \]
+> 
+> Benefits and spending are then summed over solutions at the county–crop level:
+> 
+> \[
+> \text{benefit}_{i,c} = \sum_s \text{benefit}_{i,c,s}, \qquad
+> \text{spend}_{i,c}   = \sum_s \text{spend}_{i,c,s}.
+> \]
+> 
+> ##### 5.2 Mapping benefits to modeled climate impacts
+> 
+> The `impacts` table contains, for each county \(i\), scenario \(q\), year \(t\), and impact measure \(m\):
+> 
+> - central impact estimate \(\mu_{qtm i}\),
+> - lower and upper 90% confidence bounds \(\text{ci05}_{qtm i}\), \(\text{ci95}_{qtm i}\).
+> 
+> These represent baseline (no‑adaptation) damages. The adaptation model proceeds in three steps.
+> 
+> 1. **Value-weighting impacts.** Within each \((q,t,m,i)\) group, impacts are reweighted by crop value so that counties with larger agricultural value contribute more to aggregate impacts. Operationally, for each county \(i\):
+> 
+>    \[
+>    \mu_{qtm i}^{\text{val}} = \mu_{qtm i} \times \frac{\texttt{value}_{i}}{\sum_{j \in i} \texttt{value}_j},
+>    \]
+>    and similarly for \(\text{ci05}\) and \(\text{ci95}\), where the inner sum is over crop categories within the county.
+> 
+> 2. **Fraction of impact mitigated.** For each \((q,t,m,i)\)
+**user**:
+> You ran out of space. Also, please do not refer to the actual functions, and avoid an overly "step-by-step" approach to writing this.
+**assistant**:
+> Below is a tighter description that (a) covers both calibration and application, (b) does not name R functions, and (c) avoids a step‑by‑step style. You can trim further if needed.
+> 
+> ---
+> 
+> ### Soil‑management adaptation: calibration and application
+> 
+> Adaptation options for soil management are taken from \citet{moran2013assessing}: improved drainage, compacted soils management, cover crops, shallow ploughing, spring cultivation, and contour ploughing. These are evaluated for winter wheat and spring barley (each split into free‑draining and required‑drainage soils), potatoes, and carrots. A feasibility matrix defines which practices are applicable to each crop–soil combination.
+> 
+> #### Calibration of costs, benefits, and spatial exposure
+> 
+> For each applicable solution–crop pair, the source provides pessimistic and optimistic estimates of implementation cost, total crop benefit, and net present value (all in million GBP). Pessimistic and optimistic costs are identical and are averaged together; pessimistic and optimistic benefits and NPVs are likewise averaged. A constant term of 5 million GBP is added to the cost and subtracted from the NPV, and the NPV is truncated below at zero. Denoting pessimistic and optimistic costs by \(C^{\mathrm{pes}}_{s,c}\) and \(C^{\mathrm{opt}}_{s,c}\), benefits by \(B^{\mathrm{pes}}_{s,c}\) and \(B^{\mathrm{opt}}_{s,c}\), and NPVs by \(\mathrm{NPV}^{\mathrm{pes}}_{s,c}\) and \(\mathrm{NPV}^{\mathrm{opt}}_{s,c}\), the calibrated quantities are
+> \[
+> \overline{B}_{s,c} = \frac{B^{\mathrm{pes}}_{s,c} + B^{\mathrm{opt}}_{s,c}}{2},\quad
+> C'_{s,c} = \frac{C^{\mathrm{pes}}_{s,c} + C^{\mathrm{opt}}_{s,c}}{2} + 5,\quad
+> \mathrm{NPV}'_{s,c} = \max\!\left(0,\frac{\mathrm{NPV}^{\mathrm{pes}}_{s,c} + \mathrm{NPV}^{\mathrm{opt}}_{s,c}}{2} - 5\right).
+> \]
+> 
+> To normalize these against exposure, agricultural production values are constructed for each crop and county. National and regional accounts are first used to obtain 2010–2012 average values of cereals, potatoes, and total crops at NUTS2 level. These are downscaled to GADM level‑3 “county” polygons using area weights. Cereal production in each county is then split into winter wheat and spring barley, and into free‑draining and required‑drainage soils, using NUTS1‑level wheat and barley tonnages and the assumption from \citet{anthony2012} that 41% of arable land is free‑draining. Potato value is taken directly, and carrot value is defined conservatively as the residual of total crops after subtracting cereals and potatoes. This yields, for each county \(i\) and crop category \(c\), a crop value \(P^c_i\); the corresponding national value is
+> \[
+> V^c = \sum_i P^c_i.
+> \]
+> 
+> #### Allocation of adaptation spending
+> 
+> Adaptation spending is assumed to be distributed across county–crop–solution combinations in proportion to both local crop value and the calibrated net present value of the solution. For a given annual budget \(S\) (million GBP yr\(^{-1}\)), the share assigned to solution \(s\) on crop \(c\) in county \(i\) is proportional to \(P^c_i \,\mathrm{NPV}'_{s,c}\). The implied annual spend is
+> \[
+> \text{spend}_{i,c,s}
+> = S \times 
+> \frac{P^c_i \,\mathrm{NPV}'_{s,c}}
+>      {\sum_{i',c',s'} P^{c'}_{i'} \,\mathrm{NPV}'_{s',c'}}.
+> \]
+> 
+> Realised adaptation benefits are assumed to scale linearly with spending up to the calibrated cost. Defining the benefit–cost ratio \(\overline{B}_{s,c}/C'_{s,c}\), the benefit associated with this spending is
+> \[
+> \text{benefit}_{i,c,s}
+> = \text{spend}_{i,c,s} \times \frac{\overline{B}_{s,c}}{C'_{s,c}}.
+> \]
+> Benefits and spending are then aggregated over solutions at the county–crop level,
+> \[
+> \text{benefit}_{i,c} = \sum_s \text{benefit}_{i,c,s},\qquad
+> \text{spend}_{i,c}   = \sum_s \text{spend}_{i,c,s}.
+> \]
+> 
+> #### Translation into reduced climate impacts
+> 
+> Baseline climate impacts on agriculture are represented as county‑level time series of damage estimates by scenario and impact measure, including a central estimate \(\mu\) and 5th and 95th percentile bounds (\(\mathrm{ci05}\), \(\mathrm{ci95}\)). These damages are first allocated across crops within each county in proportion to the corresponding crop values \(P^c_i\), so that higher‑value crops bear a larger share of local damages.
+> 
+> Adaptation benefits are then expressed as a fraction of these damages. For each county, the ratio of adaptation benefit to baseline damage is computed for the central estimate and each bound; ratios are capped above at 1 (no more than full elimination of damage), and any negative ratios are set to 1 (no worsening beyond baseline). Denoting the relevant baseline damage for a given quantile by \(D\) and the corresponding aggregate benefit by \(B\), the damage fraction remaining is
+> \[
+> f = 1 - \min\!\left(1,\max\!\left(0,\frac{B}{D}\right)\right).
+> \]
+> This is calculated separately for the central estimate and the lower and upper bounds. The resulting county‑level impact factors, lying between 0 and 1, are then applied to the corresponding baseline damages to obtain post‑adaptation impacts.
+> 
+> ---
+> 
+> If you want, the next step can be to compress this into 2–3 tight paragraphs for a very short appendix, or to match it to specific notation you already use elsewhere in the report.
+**user**:
+> That works. But I don't see the mac-soil figure. Can you just provide the latex for this, including a legend?
+**assistant**:
+> ```latex
+> \begin{figure}[htbp]
+> \centering
+> \begin{tikzpicture}
+> \begin{axis}[
+>     width=\textwidth,
+>     height=0.55\textwidth,
+>     ymin=1e-4,
+>     ymode=log,
+>     xlabel={Implementation cost (million GBP)},
+>     ylabel={Avoided losses (\% / million GBP)},
+>     ymajorgrids=true,
+>     xmajorgrids=true,
+>     legend style={
+>         at={(0.5,1.02)},
+>         anchor=south,
+>         legend columns=3,
+>         /tikz/font=\small
+>     },
+>     ticklabel style={font=\small},
+>     label style={font=\small},
+>     % nice spacing
+>     enlargelimits=0.02,
+>     clip=false,
+> ]
+> 
+> % ------------------------------------------------------------------
+> % Example data structure for one crop:
+> % For each rectangle you need:
+> %   xmin, xmax = cumulative cost bounds for the option on that crop
+> %   ylo,  yhi  = lower/upper marginal effectiveness (ME_lo, ME_hi)
+> % The dashed vertical segments connect previous option's upper bound
+> % to current option's lower bound on the left edge (xmin).
+> %
+> % Replace the coordinates below with your computed marginals3 values.
+> % ------------------------------------------------------------------
+> 
+> % === Winter wheat – required drainage (example) ===
+> % shallow ploughing
+> \addplot[fill=blue!20, draw=blue!60] coordinates {
+>     (0, 1e-3) (20, 1e-3) (20, 5e-3) (0, 5e-3)
+> };
+> % contour ploughing
+> \addplot[fill=blue!40, draw=blue!80] coordinates {
+>     (20, 5e-4) (60, 5e-4) (60, 2e-3) (20, 2e-3)
+> };
+> % drainage
+> \addplot[fill=blue!60, draw=blue!90] coordinates {
+>     (60, 2e-4) (140, 2e-4) (140, 1e-3) (60, 1e-3)
+> };
+> 
+> % dashed connectors (previous hi -> current lo at xmin)
+> \addplot[blue!80, dashed] coordinates {(20,5e-3) (20,5e-4)};
+> \addplot[blue!80, dashed] coordinates {(60,2e-3) (60,2e-4)};
+> 
+> % For the legend, we only need one representative rectangle per solution.
+> % We therefore add invisible dummy plots with "forget plot" off.
+> 
+> % Drainage (legend)
+> \addplot[fill=blue!60, draw=blue!90] coordinates {(0,1e-3) (1,1e-3) (1,2e-3) (0,2e-3)};
+> \addlegendentry{Improved drainage};
+> 
+> % Compacted soils (legend)
+> \addplot[fill=red!30, draw=red!70] coordinates {(0,2e-3) (1,2e-3) (1,4e-3) (0,4e-3)};
+> \addlegendentry{Compacted soils};
+> 
+> % Cover crops (legend)
+> \addplot[fill=green!40, draw=green!70] coordinates {(0,4e-3) (1,4e-3) (1,8e-3) (0,8e-3)};
+> \addlegendentry{Cover crops};
+> 
+> % Shallow ploughing (legend)
+> \addplot[fill=orange!40, draw=orange!80] coordinates {(0,8e-3) (1,8e-3) (1,1.6e-2) (0,1.6e-2)};
+> \addlegendentry{Shallow ploughing};
+> 
+> % Spring cultivation (legend)
+> \addplot[fill=purple!30, draw=purple!70] coordinates {(0,1.6e-2) (1,1.6e-2) (1,3.2e-2) (0,3.2e-2)};
+> \addlegendentry{Spring cultivation};
+> 
+> % Contour ploughing (legend)
+> \addplot[fill=brown!40, draw=brown!80] coordinates {(0,3.2e-2) (1,3.2e-2) (1,6.4e-2) (0,6.4e-2)};
+> \addlegendentry{Contour ploughing};
+> 
+> \end{axis}
+> \end{tikzpicture}
+> \caption{Marginal adaptation cost curve for soil management (\texttt{mac-soil}). 
+> Each rectangle represents a soil-management option for a given crop, with its horizontal extent giving the implementation cost (million~GBP) and its vertical extent giving the range of marginal effectiveness, measured as avoided losses (fraction of national crop value) per million~GBP of spending. Rectangles are ordered from left to right by decreasing average marginal effectiveness within each crop; dashed vertical lines indicate transitions between successive options. Colours distinguish adaptation options.}
+> \label{fig:mac_soil}
+> \end{figure}
+> ```
+> 
+> Notes:
+> 
+> - Replace the placeholder rectangle coordinates with your actual `xmin`, `xmax`, `marginal.lo`, and `marginal.hi` values from the MAC–soil calibration (i.e. from the object analogous to `marginals3`).
+> - The legend is driven by a set of small “dummy” rectangles, one per solution type; you only need to keep the colors consistent with those used for the real rectangles.
+**user**:
+> Haha, no. I have the actual PDF. I just need a chunk of latex that surrounds it.
+**assistant**:
+> ```latex
+> \begin{figure}[htbp]
+>   \centering
+>   % Adjust the width as needed; \linewidth usually works well
+>   \includegraphics[width=\linewidth]{figures/mac-soil.pdf}
+>   \caption{Marginal adaptation cost curve for soil management. 
+>   Each bar shows a soil-management option (drainage, compacted soils, cover crops, shallow ploughing, spring cultivation, and contour ploughing) for a given crop, with bar width indicating total implementation cost (million~GBP) and bar height indicating the range of marginal effectiveness, measured as avoided losses (fraction of national crop value) per million~GBP of spending on that option. Bars are ordered within each crop by decreasing average marginal effectiveness, and dashed vertical lines mark transitions between successive options for the same crop. Colours distinguish the different soil-management options.}
+>   \label{fig:mac-soil}
+> \end{figure}
+> ```
+**user**:
+> I have another two figures to include in the text. For agriculture, I have a final section on variability, and I want to then show the results from a dataset I make. I've already written up the variability section:
+> ```
+> To estimate the potential for extreme events, we use annual World Bank estimates of total agricultural production in the UK. In log terms, these values exhibit a linear trend, and we estimate the errors around that trend fitted to data from 1960 to 2024.
+> 
+> UK-wide variability is taken as a random sample from those annual error terms, in each year and each Monte Carlo. Individual county errors are assumed to be distributed around the UK error, with a distribution width equal to the UK-wide error distribution. That is, the damage under a Monte Carlo draw $m$ for county $i$ in year $t$ is
+> \[
+> D_{mit} = D_{mi} \exp{\epsilon_m + \epsilon_{im}}
+> \]
+> where $D_{mi}$ is the expected annual damage for that Monte Carlo and county, and $\epsilon_m$ and $\epsilon_{im}$ are drawn from the residuals of $\log{P_t} = \alpha + \beta t + \epsilon{t}$, with $\epsilon_m$ shared by all counties.
+> ```
+> 
+> You could edit that, but the key thing is that now I want to include the couple of figures that were generated using that logic. Here is the code that does it:
+> ```
+> setwd("~/Dropbox/HMT/channels/agriculture/")
+> 
+> library(dplyr)
+> library(readxl)
+> 
+> load("~/Dropbox/COACCH/channels/Agriculture/agcombo-adm3.RData")
+> 
+> combo1 <- combo %>% group_by(scenario, county, period) %>% reframe(run_id=run_id, origrid=run_id[order(damage.mgbp)], damage.mgbp=sort(damage.mgbp))
+> combo2 <- combo1 %>%
+>     group_by(scenario, county, run_id) %>% reframe(origrid=sample(origrid, 1), Year=2025:2075, damage.mgbp=approx(c(2020, 2050, 2090), damage.mgbp, Year)$y)
+> combo2$scenrid <- paste(combo2$scenario, combo2$origrid)
+> 
+> load("~/Dropbox/HMT/climate/likely.RData")
+> 
+> results <- data.frame()
+> for (climscen in c('Most Likely', 'High Risk')) {
+>     ## Annual projections
+>     for (year in 2025:2075) {
+>         if (climscen == 'Most Likely') {
+>             subfin <- subset(combo2, Year == year & scenrid %in% gsat.likely$scenrid)
+>         } else {
+>             subfin <- subset(combo2, Year == year & scenario == 'ssp370')
+>         }
+>         subfin2 <- subfin %>% group_by(county) %>% summarize(mu=mean(damage.mgbp), ci05=quantile(damage.mgbp, .05),
+>                                                              ci95=quantile(damage.mgbp, .95))
+> 
+>         results <- rbind(results, cbind(scenario=climscen, year=year, measure="EAD", subfin2))
+>     }
+> }
+> 
+> ## Estimate errors observed errors, relative to a log-trend
+> obs <- read_excel("API_NV.AGR.TOTL.KD_DS2_en_excel_v2_21118.xls", sheet=1, skip=3)
+> vals <- obs[obs$`Country Code` == 'GBR', which(names(obs) == '1960'):which(names(obs) == '2024')]
+> errdf <- as.data.frame(t(vals))
+> errdf$Year <- as.numeric(rownames(errdf))
+> 
+> library(ggplot2)
+> ggplot(errdf, aes(Year, V1)) +
+>     geom_point()
+> 
+> ## log(Value) = a + b t + e => Value = exp(a + bt) * exp(e)
+> mod <- lm(log(V1) ~ Year, data=errdf)
+> 
+> climscen <- 'High Risk'
+> ## 1-in-200 year projections
+> for (year in c(2030, 2040, 2050)) {
+>     ## 1-in-10 year outcome
+>     subfin <- subset(combo2, scenario == 'ssp370' & Year >= year & Year < year + 10)
+>     subfin2 <- subfin %>% group_by(Year, run_id) %>% mutate(ukerr=sample(resid(mod), 1), countyerr=ukerr + sample(resid(mod), n(), replace=T),
+>                                                             total=damage.mgbp * exp(countyerr))
+>     ## Choose the worst year for each MC
+>     worstyears <- subfin2 %>% group_by(Year, run_id) %>% summarize(total=sum(total)) %>%
+>         group_by(run_id) %>% summarize(Year=Year[which.max(total)])
+>     subfin3 <- subfin2 %>% left_join(worstyears, by='run_id', suffix=c('', '.worst')) %>%
+>         filter(Year == Year.worst) %>% group_by(county) %>% summarize(mu=mean(total), ci05=quantile(total, .05),
+>                                                                       ci95=quantile(total, .95))
+> 
+>     results <- rbind(results, cbind(scenario=climscen, year=year, measure="Extreme", subfin3))
+> }
+> 
+> write.csv(results, "dataset.csv", row.names=F)
+> 
+> library(ggplot2)
+> 
+> results2 <- results %>% group_by(scenario, year, measure) %>% summarize(mu=sum(mu), ci05=sum(ci05), ci95=sum(ci95))
+> 
+> ggplot(subset(results2, measure == 'EAD'), aes(year, mu)) +
+>     geom_line(data=subset(results2, measure == 'EAD'), aes(colour=scenario)) +
+>     geom_ribbon(aes(ymin=ci05, ymax=ci95, group=scenario), alpha=.5) +
+>     geom_errorbar(data=subset(results2, measure == 'Extreme'),
+>                   aes(x=year + 5, ymin=ci05, ymax=ci95), colour=scales::muted("red")) +
+>     theme_bw() + scale_x_continuous(NULL, expand=c(0, 0)) + ylab("UK-wide agriculture loss (million GBP)") +
+>     scale_colour_discrete("Scenario:") + theme(legend.justification=c(0, 1), legend.position=c(0.01, .99))
+> ggsave("dataset-uk.pdf", width=6.5, height=4)
+> 
+> ggplot(subset(results, measure == 'EAD'), aes(year, mu, group=county)) +
+>     facet_wrap(~ scenario, ncol=1) +
+>     geom_line(aes(colour=scenario), alpha=.5) +
+>     geom_jitter(data=subset(results, measure == 'Extreme'),
+>                 aes(x=year + 5, y=ci95), colour=scales::muted("red"), width=4, height=0) +
+>     theme_bw() + scale_x_continuous(NULL, expand=c(0, 0)) + ylab("Local agriculture loss (million GBP)") +
+>     scale_colour_discrete("Scenario:") + theme(legend.justification=c(1, 0), legend.position=c(.99, 0.01))
+> ggsave("dataset-adm3.pdf", width=6.5, height=4)
+> ```
+> 
+> Can you write up the new latex for that section, including these two figures?
+**assistant**:
+> Here’s a compact rewrite of the variability section plus LaTeX for the two figures. Adjust paths/labels as needed.
+> 
+> ```latex
+> \subsubsection*{Variability and extreme events}
+> 
+> To represent interannual variability and the potential for extreme agricultural losses, we use annual World Bank estimates of total agricultural production in the UK (constant prices). In log terms, these values follow an approximately linear trend over 1960–2024, which we estimate via
+> \[
+> \log P_t = \alpha + \beta t + \varepsilon_t,
+> \]
+> where \(P_t\) is total UK agricultural production in year \(t\), and \(\varepsilon_t\) are residuals around the trend.
+> 
+> UK-wide variability is modeled as a random draw of \(\varepsilon_m\) from the empirical residuals in each year \(t\) and each Monte Carlo realization \(m\). County-level deviations are then taken to be distributed around that UK-wide deviation with the same dispersion, by drawing an additional independent residual \(\varepsilon_{im}\) from the same empirical distribution for each county \(i\). Thus, the realized damage for Monte Carlo \(m\), county \(i\), and year \(t\) is
+> \[
+> D_{mit} = D_{mi} \exp(\varepsilon_m + \varepsilon_{im}),
+> \]
+> where \(D_{mi}\) is the expected (trend) annual damage for that county and Monte Carlo realization, \(\varepsilon_m\) is shared by all counties in that year, and \(\varepsilon_{im}\) captures county-specific deviations.
+> 
+> UK-wide expected annual damages (EAD) are obtained by aggregating county-level damages across all Monte Carlo runs. To approximate “1-in-200 year” extremes under a high-risk climate pathway, we consider decadal windows (e.g.\ 2030–2039, 2040–2049, 2050–2059), apply the same variability structure, and for each Monte Carlo realization retain the single year with the highest UK-wide loss. These extreme-loss outcomes are summarized at both the national and county level.
+> 
+> Figure~\ref{fig:dataset_uk} shows UK-wide projected agricultural losses under the “Most Likely” and “High Risk” climate pathways. For each scenario, the solid lines give the evolution of EAD, with shaded bands indicating the 5th–95th percentile range. Superimposed red error bars show the corresponding 5th–95th percentile range of the decadal “1-in-200 year” extreme-loss events for selected years. Figure~\ref{fig:dataset_adm3} shows the same information disaggregated to counties: thin lines show county-level EAD trajectories, and red points indicate the upper 95th percentile of the extreme-loss distribution for each county and decade under each scenario.
+> 
+> \begin{figure}[htbp]
+>   \centering
+>   \includegraphics[width=\linewidth]{figures/dataset-uk.pdf}
+>   \caption{UK-wide projected agricultural losses (million~GBP). Solid lines show expected annual damages (EAD) under the “Most Likely” and “High Risk” climate scenarios; shaded ribbons indicate the 5th–95th percentile range across Monte Carlo simulations. Red error bars depict the 5th–95th percentile range of decadal “1-in-200 year” extreme-loss outcomes, offset by +5~years for clarity.}
+>   \label{fig:dataset_uk}
+> \end{figure}
+> 
+> \begin{figure}[htbp]
+>   \centering
+>   \includegraphics[width=\linewidth]{figures/dataset-adm3.pdf}
+>   \caption{County-level projected agricultural losses (million~GBP). For each scenario, thin coloured lines show expected annual damages (EAD) by county, and red points indicate the upper 95th percentile of the decadal “1-in-200 year” extreme-loss distribution for each county (jittered in time for visibility).}
+>   \label{fig:dataset_adm3}
+> \end{figure}
+> ```

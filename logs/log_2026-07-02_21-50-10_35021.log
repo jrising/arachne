@@ -1,0 +1,1376 @@
+**user**:
+> rpart in R prints out a tree like this: 
+> ```
+>  1) root 211 2.277553e-02 -0.011190230  
+>    2) trade.method.suffix= 33 1.851614e-03 -0.026904590  
+>      4) trade.method=dd 16 3.361298e-04 -0.032400970 *
+>      5) trade.method=none 17 5.771911e-04 -0.021731530 *
+>    3) trade.method.suffix=-mcpaperall,-mcr2all 178 1.126407e-02 -0.008276888  
+>      6) persist< 0.48 64 4.030204e-03 -0.015817550  
+>       12) trade.method=dd,li 32 9.881998e-04 -0.022630360  
+>         24) persist< 0.18 16 1.614705e-07 -0.028154710 *
+>         25) persist>=0.18 16 1.144915e-05 -0.017106020 *
+>       13) trade.method=fd,none 32 7.148287e-05 -0.009004741 *
+>      7) persist>=0.48 114 1.551698e-03 -0.004043533  
+>       14) trade.method.suffix=-mcpaperall 17 1.274753e-04 -0.011748910 *
+>       15) trade.method.suffix=-mcr2all 97 2.379906e-04 -0.002693106 *
+> ```
+> That looks a little odd, because one of my factors for the "trade.method.suffix" variable is "". But anyway, my question is, how can I programmatically pull out the two sides of the first split (trade.method.suffix="" and trade.method.suffix="-mcpaperall,-mcr2all"), along with their average value?
+**assistant**:
+> You can extract that information directly from the `rpart` object; you don’t need to parse the printed text.
+> 
+> For a fitted tree `fit <- rpart(...)`, the first split is available in `fit$splits[1, ]`, and the node summaries (including the fitted means) are in `fit$frame`.
+> 
+> Below is a minimal recipe.
+> 
+> ```r
+> library(rpart)
+> 
+> ## Example: suppose your model is
+> ## fit <- rpart(y ~ trade.method.suffix + persist + trade.method, data = dat)
+> 
+> # 1. Inspect the first split
+> fit$splits[1, ]
+> #   count ncat       improve       index adj
+> #   ...   ...     ...         ...       ...
+> 
+> var1 <- rownames(fit$splits)[1]   # name of variable used in first split
+> var1
+> # "trade.method.suffix"
+> 
+> # 2. Decode which factor levels go to the left/right for the first split
+> xlevels <- fit$xlevels[[var1]]    # factor level names in order used by rpart
+> xlevels
+> 
+> sp <- fit$splits[1, ]
+> ncat <- sp["ncat"]
+> 
+> # For factor splits, ncat > 1 and 'index' encodes the split:
+> # a positive ncat means: left = levels with bit = 1; right = bit = 0
+> idx  <- as.integer(sp["index"])
+> 
+> # Convert index to binary over the levels
+> bits <- as.integer(intToBits(idx))[seq_along(xlevels)]
+> 
+> left_levels  <- xlevels[bits == 1]
+> right_levels <- xlevels[bits == 0]
+> 
+> left_levels
+> right_levels
+> ```
+> 
+> On your example, you should get something like:
+> 
+> ```r
+> left_levels
+> # ""
+> right_levels
+> # c("-mcpaperall", "-mcr2all")
+> ```
+> 
+> Now to get the *average response* (the fitted mean) in the two child nodes of the first split:
+> 
+> ```r
+> fr <- fit$frame
+> 
+> # Root is node 1; its two children are nodes 2 and 3
+> node_ids <- as.numeric(rownames(fr))
+> root_row <- which(node_ids == 1)
+> 
+> left_id  <- 2 * node_ids[root_row]
+> right_id <- left_id + 1
+> 
+> left_mean  <- fr[as.character(left_id),  "yval"]
+> right_mean <- fr[as.character(right_id), "yval"]
+> 
+> left_mean
+> right_mean
+> ```
+> 
+> If you also want the *observations* on each side in your original data:
+> 
+> ```r
+> # predict which terminal node each row falls into
+> term_nodes <- predict(fit, type = "where")
+> 
+> # All rows on the left child of the first split (node 2)
+> left_rows  <- which(term_nodes == left_id)
+> # All rows on the right child of the first split (node 3)
+> right_rows <- which(term_nodes == right_id)
+> 
+> dat_left  <- dat[left_rows, ]
+> dat_right <- dat[right_rows, ]
+> ```
+> 
+> Summary of what you asked for:
+> 
+> - First split’s left group: `trade.method.suffix %in% left_levels`
+> - First split’s right group: `trade.method.suffix %in% right_levels`
+> - Their average fitted values: `left_mean` and `right_mean` from `fit$frame`.
+> 
+> If you paste your actual `str(fit$xlevels$trade.method.suffix)` I can show the exact `left_levels` and `right_levels` you’ll see in your case.
+**user**:
+> Can you make a function like this that handles factors and numerical splits? Maybe return a list with items $variable and $left$condition, $left$mean_y, $right$condition, $right$mean_y?
+**assistant**:
+> Yes. Here’s a small helper that extracts the split information for any internal node of an `rpart` regression tree and returns a tidy list with:
+> 
+> - `$variable`
+> - `$left$condition`
+> - `$left$mean_y`
+> - `$right$condition`
+> - `$right$mean_y`
+> 
+> It handles:
+> 
+> - numeric splits like `x < 0.48`
+> - factor splits like `trade.method.suffix %in% c("", "-mcpaperall")`
+> 
+> ## Function
+> 
+> ```r
+> get_rpart_split <- function(fit, node = 1) {
+>   if (!inherits(fit, "rpart")) {
+>     stop("fit must be an rpart object")
+>   }
+>   
+>   fr <- fit$frame
+>   node_names <- rownames(fr)
+>   
+>   if (!(as.character(node) %in% node_names)) {
+>     stop("node not found in fit$frame")
+>   }
+>   
+>   node_row <- match(as.character(node), node_names)
+>   
+>   if (fr$var[node_row] == "<leaf>") {
+>     stop("node is a leaf; no split to extract")
+>   }
+>   
+>   # Internal nodes in frame correspond in order to rows of fit$splits
+>   split_row <- cumsum(fr$var != "<leaf>")[node_row]
+>   split_info <- fit$splits[split_row, , drop = FALSE]
+>   
+>   variable <- rownames(split_info)[1]
+>   ncat <- split_info[1, "ncat"]
+>   index <- split_info[1, "index"]
+>   
+>   # Children of node n are 2n and 2n+1 in rpart numbering
+>   left_node <- as.character(2 * node)
+>   right_node <- as.character(2 * node + 1)
+>   
+>   if (!(left_node %in% node_names) || !(right_node %in% node_names)) {
+>     stop("Could not find child nodes in fit$frame")
+>   }
+>   
+>   left_mean_y <- fr[left_node, "yval"]
+>   right_mean_y <- fr[right_node, "yval"]
+>   
+>   if (ncat < 0) {
+>     # Numeric split
+>     cutpoint <- index
+>     left_condition <- paste(variable, "<", format(cutpoint, digits = 12))
+>     right_condition <- paste(variable, ">=", format(cutpoint, digits = 12))
+>   } else {
+>     # Factor split
+>     levs <- fit$xlevels[[variable]]
+>     if (is.null(levs)) {
+>       stop(sprintf("No factor levels found for variable '%s'", variable))
+>     }
+>     
+>     # Decode bitmask in index
+>     bits <- as.integer(intToBits(as.integer(index)))[seq_along(levs)]
+>     left_levels <- levs[bits == 1]
+>     right_levels <- levs[bits == 0]
+>     
+>     fmt_levels <- function(x) {
+>       paste0("c(", paste(sprintf('"%s"', x), collapse = ", "), ")")
+>     }
+>     
+>     left_condition <- paste(variable, "%in%", fmt_levels(left_levels))
+>     right_condition <- paste(variable, "%in%", fmt_levels(right_levels))
+>   }
+>   
+>   list(
+>     variable = variable,
+>     left = list(
+>       condition = left_condition,
+>       mean_y = unname(left_mean_y)
+>     ),
+>     right = list(
+>       condition = right_condition,
+>       mean_y = unname(right_mean_y)
+>     )
+>   )
+> }
+> ```
+> 
+> ---
+> 
+> ## Example usage
+> 
+> ```r
+> res <- get_rpart_split(fit, node = 1)
+> str(res)
+> ```
+> 
+> You’d get something like:
+> 
+> ```r
+> $variable
+> [1] "trade.method.suffix"
+> 
+> $left
+> $left$condition
+> [1] "trade.method.suffix %in% c(\"\")"
+> 
+> $left$mean_y
+> [1] -0.02690459
+> 
+> 
+> $right
+> $right$condition
+> [1] "trade.method.suffix %in% c(\"-mcpaperall\", \"-mcr2all\")"
+> 
+> $right$mean_y
+> [1] -0.008276888
+> ```
+> 
+> ---
+> 
+> ## Notes
+> 
+> ### 1. Why `ncat < 0` means numeric
+> In `rpart$splits`, numeric splits are encoded with negative `ncat`, while factor splits use positive `ncat`.
+> 
+> ### 2. Why this works for non-root nodes too
+> `fit$frame` stores all nodes; child nodes of node `n` are numbered `2n` and `2n+1`.  
+> The only slightly tricky part is matching a node in `fit$frame` to the correct row in `fit$splits`, which is why I use:
+> 
+> ```r
+> split_row <- cumsum(fr$var != "<leaf>")[node_row]
+> ```
+> 
+> That maps the internal node to its split row.
+> 
+> ### 3. Empty-string factor levels
+> If one factor level is `""`, it will print as an empty string in the condition, e.g.:
+> 
+> ```r
+> trade.method.suffix %in% c("")
+> ```
+> 
+> That’s valid and expected.
+> 
+> ---
+> 
+> ## Optional: return actual levels too
+> If you want something more machine-friendly than condition strings, I’d slightly improve the return value:
+> 
+> ```r
+> get_rpart_split2 <- function(fit, node = 1) {
+>   if (!inherits(fit, "rpart")) stop("fit must be an rpart object")
+>   
+>   fr <- fit$frame
+>   node_names <- rownames(fr)
+>   node_chr <- as.character(node)
+>   
+>   if (!(node_chr %in% node_names)) stop("node not found")
+>   node_row <- match(node_chr, node_names)
+>   if (fr$var[node_row] == "<leaf>") stop("node is a leaf")
+>   
+>   split_row <- cumsum(fr$var != "<leaf>")[node_row]
+>   split_info <- fit$splits[split_row, , drop = FALSE]
+>   
+>   variable <- rownames(split_info)[1]
+>   ncat <- split_info[1, "ncat"]
+>   index <- split_info[1, "index"]
+>   
+>   left_node <- as.character(2 * node)
+>   right_node <- as.character(2 * node + 1)
+>   
+>   left_mean_y <- unname(fr[left_node, "yval"])
+>   right_mean_y <- unname(fr[right_node, "yval"])
+>   
+>   out <- list(
+>     variable = variable,
+>     left = list(mean_y = left_mean_y),
+>     right = list(mean_y = right_mean_y)
+>   )
+>   
+>   if (ncat < 0) {
+>     out$type <- "numeric"
+>     out$split_point <- unname(index)
+>     out$left$condition <- paste(variable, "<", format(index, digits = 12))
+>     out$right$condition <- paste(variable, ">=", format(index, digits = 12))
+>   } else {
+>     levs <- fit$xlevels[[variable]]
+>     bits <- as.integer(intToBits(as.integer(index)))[seq_along(levs)]
+>     left_levels <- levs[bits == 1]
+>     right_levels <- levs[bits == 0]
+>     
+>     out$type <- "factor"
+>     out$left$levels <- left_levels
+>     out$right$levels <- right_levels
+>     out$left$condition <- paste0(variable, " %in% c(",
+>                                  paste(sprintf('"%s"', left_levels), collapse = ", "),
+>                                  ")")
+>     out$right$condition <- paste0(variable, " %in% c(",
+>                                   paste(sprintf('"%s"', right_levels), collapse = ", "),
+>                                   ")")
+>   }
+>   
+>   out
+> }
+> ```
+> 
+> That version is better if you want to use the result programmatically rather than just print it.
+> 
+> If you want, I can also make a version that extracts **all splits in the tree** into a data frame.
+**user**:
+> I get "Error in get_rpart_split(mod) : 
+>   No factor levels found for variable 'trade.method.suffix'".
+> That was a string, but I even tried making it a factor in the data frame, but it still doesn't work.
+**assistant**:
+> Yes — `fit$xlevels` is not reliable for this. `rpart` often stores factor split details in `fit$csplit`, while `fit$splits["index"]` points into that matrix rather than encoding the bitmask directly.
+> 
+> So the robust way is:
+> 
+> - use `fit$frame` to find the node/split variable
+> - if numeric: use `fit$frame$split`
+> - if categorical: use `fit$splits[node_split_row, "index"]` as a row index into `fit$csplit`
+> - use the predictor values from the model frame to recover the actual factor/character levels
+> 
+> Here’s a version that should work with character, factor, and numeric predictors.
+> 
+> ## Robust function
+> 
+> ```r
+> get_rpart_split <- function(fit, node = 1, data = NULL) {
+>   if (!inherits(fit, "rpart")) {
+>     stop("fit must be an rpart object")
+>   }
+>   
+>   fr <- fit$frame
+>   node_chr <- as.character(node)
+>   
+>   if (!(node_chr %in% rownames(fr))) {
+>     stop("node not found in fit$frame")
+>   }
+>   
+>   node_row <- match(node_chr, rownames(fr))
+>   
+>   if (fr$var[node_row] == "<leaf>") {
+>     stop("node is a leaf; no split to extract")
+>   }
+>   
+>   variable <- fr$var[node_row]
+>   split_point <- fr$split[node_row]
+>   
+>   left_node <- as.character(2 * node)
+>   right_node <- as.character(2 * node + 1)
+>   
+>   if (!(left_node %in% rownames(fr)) || !(right_node %in% rownames(fr))) {
+>     stop("Could not find child nodes in fit$frame")
+>   }
+>   
+>   left_mean_y <- unname(fr[left_node, "yval"])
+>   right_mean_y <- unname(fr[right_node, "yval"])
+>   
+>   # Try to recover original data if not supplied
+>   if (is.null(data)) {
+>     data <- tryCatch(model.frame(fit), error = function(e) NULL)
+>   }
+>   
+>   # Determine whether split is numeric or categorical
+>   # Internal nodes correspond in order to non-leaf rows
+>   split_row <- cumsum(fr$var != "<leaf>")[node_row]
+>   split_info <- fit$splits[split_row, , drop = FALSE]
+>   ncat <- split_info[1, "ncat"]
+>   
+>   out <- list(
+>     variable = variable,
+>     left = list(mean_y = left_mean_y),
+>     right = list(mean_y = right_mean_y)
+>   )
+>   
+>   if (ncat < 0) {
+>     # Numeric split
+>     out$type <- "numeric"
+>     out$split_point <- unname(split_point)
+>     out$left$condition <- paste(variable, "<", format(split_point, digits = 12))
+>     out$right$condition <- paste(variable, ">=", format(split_point, digits = 12))
+>     return(out)
+>   }
+>   
+>   # Categorical split
+>   if (is.null(data)) {
+>     stop("For categorical splits, please supply `data=` or fit the model so model.frame(fit) is available.")
+>   }
+>   
+>   if (!(variable %in% names(data))) {
+>     stop(sprintf("Variable '%s' not found in supplied data/model.frame", variable))
+>   }
+>   
+>   vals <- data[[variable]]
+>   levs <- sort(unique(as.character(vals)))
+>   
+>   # For factor splits, index points to a row of csplit
+>   csplit_row <- as.integer(split_info[1, "index"])
+>   
+>   if (is.null(fit$csplit)) {
+>     stop("fit$csplit is missing; cannot decode categorical split")
+>   }
+>   if (csplit_row < 1 || csplit_row > nrow(fit$csplit)) {
+>     stop("Invalid csplit row index")
+>   }
+>   
+>   codes <- fit$csplit[csplit_row, ]
+>   codes <- codes[seq_along(levs)]
+>   
+>   # rpart coding:
+>   #  1 = left
+>   #  3 = right
+>   #  2 = absent/not used
+>   left_levels <- levs[codes == 1]
+>   right_levels <- levs[codes == 3]
+>   
+>   fmt_levels <- function(x) {
+>     paste0("c(", paste(sprintf('"%s"', x), collapse = ", "), ")")
+>   }
+>   
+>   out$type <- "categorical"
+>   out$left$levels <- left_levels
+>   out$right$levels <- right_levels
+>   out$left$condition <- paste(variable, "%in%", fmt_levels(left_levels))
+>   out$right$condition <- paste(variable, "%in%", fmt_levels(right_levels))
+>   
+>   out
+> }
+> ```
+> 
+> ## Usage
+> 
+> ```r
+> get_rpart_split(mod, node = 1, data = your_data)
+> ```
+> 
+> If `model.frame(mod)` works, you may not need `data=`. But passing the original data is safest.
+> 
+> ---
+> 
+> ## Why your earlier version failed
+> 
+> This part was the problem:
+> 
+> ```r
+> levs <- fit$xlevels[[variable]]
+> ```
+> 
+> `rpart` does not always populate `xlevels` the way `lm`/`glm` do, especially when the predictor was character or otherwise internally converted. For categorical splits, the real split definition is typically in:
+> 
+> ```r
+> fit$csplit
+> ```
+> 
+> with the row chosen by:
+> 
+> ```r
+> fit$splits[split_row, "index"]
+> ```
+> 
+> ---
+> 
+> ## One more subtlety
+> 
+> For character variables, `rpart` may internally treat them as categorical, but the ordering of categories used in `csplit` must match the ordering of levels seen by the fit. I used:
+> 
+> ```r
+> levs <- sort(unique(as.character(vals)))
+> ```
+> 
+> which usually matches `rpart`’s internal ordering. If you want maximum robustness, we can do even better by pulling the exact level order from the fitted object internals if present.
+> 
+> ---
+> 
+> ## Debug helper
+> 
+> If this still mislabels the levels, run:
+> 
+> ```r
+> fr <- mod$frame
+> split_row <- cumsum(fr$var != "<leaf>")[match("1", rownames(fr))]
+> mod$splits[split_row, , drop = FALSE]
+> mod$csplit
+> sort(unique(as.character(your_data[["trade.method.suffix"]])))
+> ```
+> 
+> and send me that output. Then I can tune the decoding exactly for your object.
+> 
+> If you want, I can also give you a function that returns a **data frame of every internal node and its left/right conditions**.
+**user**:
+> Two problems. Numerical values end up with condition like "persist < NULL", rather than having the value. And on another tree that looks like this:
+> ```
+> 1) root 55 0.2125885000 0.046794720  
+>   2) persist>=0.18 47 0.0044686020 0.021448270  
+>     4) persist>=0.69 11 0.0001680729 0.008942701 *
+>     5) persist< 0.69 36 0.0020546050 0.025269420 *
+>   3) persist< 0.18 8 0.0005307641 0.195705100 *
+> ```
+> I get the error:
+> Error in get_rpart_split(mod, 1, subset(allassumps, ISO == iso)) : 
+>   Invalid csplit row index
+**assistant**:
+> Yep — both errors come from a wrong assumption about how `rpart` stores splits.
+> 
+> ## What’s going on
+> 
+> ### 1. `"persist < NULL"`
+> `fit$frame$split` is not the numeric cutoff in standard `rpart` objects, so using it gives `NULL`.
+> 
+> For numeric splits, the split point is in:
+> 
+> ```r
+> fit$splits[split_row, "index"]
+> ```
+> 
+> not `fit$frame$split`.
+> 
+> ### 2. `"Invalid csplit row index"` on a numeric tree
+> That means the function misclassified a numeric split as categorical. In `rpart`, using only `ncat < 0` is not always robust enough in practice for all objects.
+> 
+> A safer approach is:
+> 
+> - if the split variable in the original data is numeric/integer: treat as numeric
+> - otherwise: treat as categorical
+> 
+> That avoids trying to decode `csplit` for `persist`.
+> 
+> ---
+> 
+> ## A more reliable version
+> 
+> ```r
+> get_rpart_split <- function(fit, node = 1, data = NULL) {
+>   if (!inherits(fit, "rpart")) {
+>     stop("fit must be an rpart object")
+>   }
+>   
+>   fr <- fit$frame
+>   node_chr <- as.character(node)
+>   
+>   if (!(node_chr %in% rownames(fr))) {
+>     stop("node not found in fit$frame")
+>   }
+>   
+>   node_row <- match(node_chr, rownames(fr))
+>   
+>   if (fr$var[node_row] == "<leaf>") {
+>     stop("node is a leaf; no split to extract")
+>   }
+>   
+>   variable <- fr$var[node_row]
+>   
+>   left_node <- as.character(2 * node)
+>   right_node <- as.character(2 * node + 1)
+>   
+>   if (!(left_node %in% rownames(fr)) || !(right_node %in% rownames(fr))) {
+>     stop("Could not find child nodes in fit$frame")
+>   }
+>   
+>   left_mean_y <- unname(fr[left_node, "yval"])
+>   right_mean_y <- unname(fr[right_node, "yval"])
+>   
+>   if (is.null(data)) {
+>     data <- tryCatch(model.frame(fit), error = function(e) NULL)
+>   }
+>   
+>   if (is.null(data) || !(variable %in% names(data))) {
+>     stop("Please provide `data=` containing the predictor variables used in the tree")
+>   }
+>   
+>   # Map this internal node to the corresponding row of fit$splits
+>   split_row <- cumsum(fr$var != "<leaf>")[node_row]
+>   split_info <- fit$splits[split_row, , drop = FALSE]
+>   
+>   out <- list(
+>     variable = variable,
+>     left = list(mean_y = left_mean_y),
+>     right = list(mean_y = right_mean_y)
+>   )
+>   
+>   x <- data[[variable]]
+>   
+>   # Treat numeric/integer as numeric split
+>   if (is.numeric(x) || is.integer(x)) {
+>     cutpoint <- unname(split_info[1, "index"])
+>     out$type <- "numeric"
+>     out$split_point <- cutpoint
+>     out$left$condition <- paste(variable, "<", format(cutpoint, digits = 12))
+>     out$right$condition <- paste(variable, ">=", format(cutpoint, digits = 12))
+>     return(out)
+>   }
+>   
+>   # Otherwise treat as categorical
+>   vals <- as.character(x)
+>   
+>   # Use factor levels if present; otherwise sorted unique values
+>   if (is.factor(x)) {
+>     levs <- levels(x)
+>   } else {
+>     levs <- sort(unique(vals))
+>   }
+>   
+>   csplit_row <- as.integer(split_info[1, "index"])
+>   
+>   if (is.null(fit$csplit)) {
+>     stop("fit$csplit is missing; cannot decode categorical split")
+>   }
+>   if (csplit_row < 1 || csplit_row > nrow(fit$csplit)) {
+>     stop("Invalid csplit row index for categorical split")
+>   }
+>   
+>   codes <- fit$csplit[csplit_row, ]
+>   codes <- codes[seq_along(levs)]
+>   
+>   # rpart uses:
+>   # 1 = left, 3 = right, 2 = absent
+>   left_levels <- levs[codes == 1]
+>   right_levels <- levs[codes == 3]
+>   
+>   fmt_levels <- function(x) {
+>     paste0("c(", paste(sprintf('"%s"', x), collapse = ", "), ")")
+>   }
+>   
+>   out$type <- "categorical"
+>   out$left$levels <- left_levels
+>   out$right$levels <- right_levels
+>   out$left$condition <- paste(variable, "%in%", fmt_levels(left_levels))
+>   out$right$condition <- paste(variable, "%in%", fmt_levels(right_levels))
+>   
+>   out
+> }
+> ```
+> 
+> ---
+> 
+> ## Why this should fix your examples
+> 
+> For this tree:
+> 
+> ```r
+> 1) root
+>   2) persist>=0.18
+>   3) persist<0.18
+> ```
+> 
+> the root split variable is `persist`, and if `data$persist` is numeric, the function will:
+> 
+> - read the cutoff from `fit$splits[split_row, "index"]`
+> - return conditions like:
+>   - `persist < 0.18`
+>   - `persist >= 0.18`
+> 
+> No `csplit` involved.
+> 
+> For your categorical split on `trade.method.suffix`, it will:
+> 
+> - detect non-numeric data
+> - decode `fit$csplit`
+> - return the left/right level sets
+> 
+> ---
+> 
+> ## One caveat: printed left/right order
+> 
+> `rpart` prints trees sometimes as:
+> 
+> ```r
+> 2) persist>=0.18
+> 3) persist<0.18
+> ```
+> 
+> which can make it look like the "left child" is `>=` and the "right child" is `<`.
+> 
+> But internally, node numbering is always:
+> 
+> - node `2n` = left daughter
+> - node `2n+1` = right daughter
+> 
+> For numeric splits, the conventional internal rule is usually:
+> 
+> - left child: `< cutpoint`
+> - right child: `>= cutpoint`
+> 
+> So the printed order can feel visually reversed depending on formatting, but the node IDs and means are what matter.
+> 
+> If you want, I can make the function return:
+> 
+> - `left$node`
+> - `right$node`
+> 
+> too, so you can verify against the printed tree.
+> 
+> ---
+> 
+> ## Better version: include node IDs
+> 
+> ```r
+> get_rpart_split <- function(fit, node = 1, data = NULL) {
+>   if (!inherits(fit, "rpart")) stop("fit must be an rpart object")
+>   
+>   fr <- fit$frame
+>   node_chr <- as.character(node)
+>   
+>   if (!(node_chr %in% rownames(fr))) stop("node not found in fit$frame")
+>   node_row <- match(node_chr, rownames(fr))
+>   if (fr$var[node_row] == "<leaf>") stop("node is a leaf; no split to extract")
+>   
+>   variable <- fr$var[node_row]
+>   left_node <- as.character(2 * node)
+>   right_node <- as.character(2 * node + 1)
+>   
+>   if (!(left_node %in% rownames(fr)) || !(right_node %in% rownames(fr))) {
+>     stop("Could not find child nodes in fit$frame")
+>   }
+>   
+>   left_mean_y <- unname(fr[left_node, "yval"])
+>   right_mean_y <- unname(fr[right_node, "yval"])
+>   
+>   if (is.null(data)) {
+>     data <- tryCatch(model.frame(fit), error = function(e) NULL)
+>   }
+>   if (is.null(data) || !(variable %in% names(data))) {
+>     stop("Please provide `data=` containing the predictor variables used in the tree")
+>   }
+>   
+>   split_row <- cumsum(fr$var != "<leaf>")[node_row]
+>   split_info <- fit$splits[split_row, , drop = FALSE]
+>   x <- data[[variable]]
+>   
+>   out <- list(
+>     variable = variable,
+>     node = node,
+>     left = list(node = as.integer(left_node), mean_y = left_mean_y),
+>     right = list(node = as.integer(right_node), mean_y = right_mean_y)
+>   )
+>   
+>   if (is.numeric(x) || is.integer(x)) {
+>     cutpoint <- unname(split_info[1, "index"])
+>     out$type <- "numeric"
+>     out$split_point <- cutpoint
+>     out$left$condition <- paste(variable, "<", format(cutpoint, digits = 12))
+>     out$right$condition <- paste(variable, ">=", format(cutpoint, digits = 12))
+>   } else {
+>     levs <- if (is.factor(x)) levels(x) else sort(unique(as.character(x)))
+>     csplit_row <- as.integer(split_info[1, "index"])
+>     
+>     if (is.null(fit$csplit)) stop("fit$csplit is missing; cannot decode categorical split")
+>     if (csplit_row < 1 || csplit_row > nrow(fit$csplit)) {
+>       stop("Invalid csplit row index for categorical split")
+>     }
+>     
+>     codes <- fit$csplit[csplit_row, seq_along(levs)]
+>     left_levels <- levs[codes == 1]
+>     right_levels <- levs[codes == 3]
+>     
+>     fmt_levels <- function(x) {
+>       paste0("c(", paste(sprintf('"%s"', x), collapse = ", "), ")")
+>     }
+>     
+>     out$type <- "categorical"
+>     out$left$levels <- left_levels
+>     out$right$levels <- right_levels
+>     out$left$condition <- paste(variable, "%in%", fmt_levels(left_levels))
+>     out$right$condition <- paste(variable, "%in%", fmt_levels(right_levels))
+>   }
+>   
+>   out
+> }
+> ```
+> 
+> ---
+> 
+> If you want, I can make one final version that is even nicer:
+> 
+> - auto-detects whether the printed condition is `<` vs `>=` for node 2/3
+> - returns a one-row data frame instead of a nested list
+> - works for all internal nodes in the tree at once
+**user**:
+> I'm using your last version, but I think something is wrong about the order of numerical splits. It's always < on the left, according to your code, but it should be that the left gives the smaller or more negative numbers. In some cases (I can see from the fitted models), that's actually the >= side of the condition on the left.
+**assistant**:
+> You're right. For `rpart`, the left child is not always the `<` side in the way I wrote it. The printed tree can show either `<` or `>=` on node 2 depending on which side `rpart` sent left to improve fit. So for numeric splits, the safe thing is to infer which child corresponds to `< cutpoint` versus `>= cutpoint` from the training data.
+> 
+> Here’s a corrected version that:
+> 
+> - works for numeric and categorical splits
+> - determines numeric left/right conditions by checking which observations from `data` actually land in child node `2*node` vs `2*node+1`
+> - returns conditions aligned with the actual children and means
+> 
+> ```r
+> get_rpart_split <- function(fit, node = 1, data = NULL) {
+>   if (!inherits(fit, "rpart")) stop("fit must be an rpart object")
+>   
+>   fr <- fit$frame
+>   node_chr <- as.character(node)
+>   if (!(node_chr %in% rownames(fr))) stop("node not found in fit$frame")
+>   node_row <- match(node_chr, rownames(fr))
+>   if (fr$var[node_row] == "<leaf>") stop("node is a leaf; no split to extract")
+>   
+>   variable <- fr$var[node_row]
+>   left_node <- 2 * node
+>   right_node <- 2 * node + 1
+>   
+>   if (!(as.character(left_node) %in% rownames(fr)) ||
+>       !(as.character(right_node) %in% rownames(fr))) {
+>     stop("Could not find child nodes in fit$frame")
+>   }
+>   
+>   left_mean_y <- unname(fr[as.character(left_node), "yval"])
+>   right_mean_y <- unname(fr[as.character(right_node), "yval"])
+>   
+>   if (is.null(data)) {
+>     data <- tryCatch(model.frame(fit), error = function(e) NULL)
+>   }
+>   if (is.null(data) || !(variable %in% names(data))) {
+>     stop("Please provide `data=` containing the predictor variables used in the tree")
+>   }
+>   
+>   split_row <- cumsum(fr$var != "<leaf>")[node_row]
+>   split_info <- fit$splits[split_row, , drop = FALSE]
+>   x <- data[[variable]]
+>   
+>   out <- list(
+>     variable = variable,
+>     node = node,
+>     left = list(node = left_node, mean_y = left_mean_y),
+>     right = list(node = right_node, mean_y = right_mean_y)
+>   )
+>   
+>   # Find which observations are at/below this node, then which child they go to
+>   where <- predict(fit, newdata = data, type = "where")
+>   node_num <- as.integer(rownames(fr))
+>   
+>   descendants <- function(n, candidates) {
+>     candidates[(candidates %/% n) > 0 & sapply(candidates, function(k) {
+>       m <- k
+>       while (m > n) m <- m %/% 2
+>       m == n
+>     })]
+>   }
+>   
+>   left_desc <- descendants(left_node, node_num)
+>   right_desc <- descendants(right_node, node_num)
+>   
+>   in_left <- where %in% left_desc
+>   in_right <- where %in% right_desc
+>   in_parent <- in_left | in_right
+>   
+>   if (is.numeric(x) || is.integer(x)) {
+>     cutpoint <- unname(split_info[1, "index"])
+>     out$type <- "numeric"
+>     out$split_point <- cutpoint
+>     
+>     x_parent <- x[in_parent]
+>     left_parent <- in_left[in_parent]
+>     
+>     # Determine which side of the threshold maps to the left child
+>     lt_side <- !is.na(x_parent) & (x_parent < cutpoint)
+>     ge_side <- !is.na(x_parent) & (x_parent >= cutpoint)
+>     
+>     # If all < values go left and all >= values go right, use that.
+>     # Otherwise if reversed, flip.
+>     if (any(lt_side) && all(left_parent[lt_side]) &&
+>         any(ge_side) && all(!left_parent[ge_side])) {
+>       out$left$condition <- paste(variable, "<", format(cutpoint, digits = 12))
+>       out$right$condition <- paste(variable, ">=", format(cutpoint, digits = 12))
+>     } else if (any(lt_side) && all(!left_parent[lt_side]) &&
+>                any(ge_side) && all(left_parent[ge_side])) {
+>       out$left$condition <- paste(variable, ">=", format(cutpoint, digits = 12))
+>       out$right$condition <- paste(variable, "<", format(cutpoint, digits = 12))
+>     } else {
+>       stop("Could not determine orientation of numeric split from data")
+>     }
+>     
+>   } else {
+>     levs <- if (is.factor(x)) levels(x) else sort(unique(as.character(x)))
+>     csplit_row <- as.integer(split_info[1, "index"])
+>     
+>     if (is.null(fit$csplit)) stop("fit$csplit is missing; cannot decode categorical split")
+>     if (csplit_row < 1 || csplit_row > nrow(fit$csplit)) {
+>       stop("Invalid csplit row index for categorical split")
+>     }
+>     
+>     codes <- fit$csplit[csplit_row, seq_along(levs)]
+>     left_levels <- levs[codes == 1]
+>     right_levels <- levs[codes == 3]
+>     
+>     fmt_levels <- function(x) {
+>       paste0("c(", paste(sprintf('"%s"', x), collapse = ", "), ")")
+>     }
+>     
+>     out$type <- "categorical"
+>     out$left$levels <- left_levels
+>     out$right$levels <- right_levels
+>     out$left$condition <- paste(variable, "%in%", fmt_levels(left_levels))
+>     out$right$condition <- paste(variable, "%in%", fmt_levels(right_levels))
+>   }
+>   
+>   out
+> }
+> ```
+> 
+> ## Why this fixes it
+> 
+> For a numeric split, `fit$splits[split_row, "index"]` gives the threshold, but not necessarily whether node `2n` is `< threshold` or `>= threshold` in the printed sense you care about. So this version checks the actual observations:
+> 
+> - which rows under the parent went to the left child subtree
+> - whether those rows are the `< cutoff` rows or the `>= cutoff` rows
+> 
+> Then it labels the conditions accordingly.
+> 
+> ## Simpler intuition
+> 
+> You want:
+> 
+> - `left$condition` to describe the actual child node `2n`
+> - `right$condition` to describe the actual child node `2n+1`
+> 
+> not some assumed convention.
+> 
+> That’s what this does.
+> 
+> If you want, I can also give you a shorter version that uses `path.rpart()` instead of manually tracing descendants.
+**user**:
+> I get "Error in match.arg(type) : 
+>   'arg' should be one of “vector”, “prob”, “class”, “matrix”"
+**assistant**:
+> That's from `predict.rpart(..., type="where")` — `where` isn't a valid `type` there.
+> 
+> Use the fitted object's `where` component for the training data instead. Since you're passing the training `data`, we can avoid `predict(..., type="where")` entirely.
+> 
+> Here's a fixed version:
+> 
+> ```r
+> get_rpart_split <- function(fit, node = 1, data = NULL) {
+>   if (!inherits(fit, "rpart")) stop("fit must be an rpart object")
+>   
+>   fr <- fit$frame
+>   node_chr <- as.character(node)
+>   if (!(node_chr %in% rownames(fr))) stop("node not found in fit$frame")
+>   node_row <- match(node_chr, rownames(fr))
+>   if (fr$var[node_row] == "<leaf>") stop("node is a leaf; no split to extract")
+>   
+>   variable <- fr$var[node_row]
+>   left_node <- 2 * node
+>   right_node <- 2 * node + 1
+>   
+>   if (!(as.character(left_node) %in% rownames(fr)) ||
+>       !(as.character(right_node) %in% rownames(fr))) {
+>     stop("Could not find child nodes in fit$frame")
+>   }
+>   
+>   left_mean_y <- unname(fr[as.character(left_node), "yval"])
+>   right_mean_y <- unname(fr[as.character(right_node), "yval"])
+>   
+>   if (is.null(data)) {
+>     data <- tryCatch(model.frame(fit), error = function(e) NULL)
+>   }
+>   if (is.null(data) || !(variable %in% names(data))) {
+>     stop("Please provide `data=` containing the predictor variables used in the tree")
+>   }
+>   
+>   if (is.null(fit$where)) {
+>     stop("fit$where is missing; need the fitted training assignments")
+>   }
+>   if (length(fit$where) != nrow(data)) {
+>     stop("length(fit$where)) does not match nrow(data); supply the original training data")
+>   }
+>   
+>   split_row <- cumsum(fr$var != "<leaf>")[node_row]
+>   split_info <- fit$splits[split_row, , drop = FALSE]
+>   x <- data[[variable]]
+>   
+>   out <- list(
+>     variable = variable,
+>     node = node,
+>     left = list(node = left_node, mean_y = left_mean_y),
+>     right = list(node = right_node, mean_y = right_mean_y)
+>   )
+>   
+>   # helper: descendants of a node among the terminal nodes in fit$where
+>   is_descendant <- function(k, ancestor) {
+>     while (k > ancestor) k <- k %/% 2
+>     k == ancestor
+>   }
+>   
+>   terminal_nodes <- unique(fit$where)
+>   left_desc <- terminal_nodes[vapply(terminal_nodes, is_descendant, logical(1), ancestor = left_node)]
+>   right_desc <- terminal_nodes[vapply(terminal_nodes, is_descendant, logical(1), ancestor = right_node)]
+>   
+>   in_left <- fit$where %in% left_desc
+>   in_right <- fit$where %in% right_desc
+>   in_parent <- in_left | in_right
+>   
+>   if (is.numeric(x) || is.integer(x)) {
+>     cutpoint <- unname(split_info[1, "index"])
+>     out$type <- "numeric"
+>     out$split_point <- cutpoint
+>     
+>     x_parent <- x[in_parent]
+>     left_parent <- in_left[in_parent]
+>     
+>     lt_side <- !is.na(x_parent) & (x_parent < cutpoint)
+>     ge_side <- !is.na(x_parent) & (x_parent >= cutpoint)
+>     
+>     # infer orientation from actual routing
+>     if (sum(lt_side) > 0 && sum(ge_side) > 0) {
+>       prop_lt_left <- mean(left_parent[lt_side])
+>       prop_ge_left <- mean(left_parent[ge_side])
+>       
+>       if (prop_lt_left > prop_ge_left) {
+>         out$left$condition <- paste(variable, "<", format(cutpoint, digits = 12))
+>         out$right$condition <- paste(variable, ">=", format(cutpoint, digits = 12))
+>       } else {
+>         out$left$condition <- paste(variable, ">=", format(cutpoint, digits = 12))
+>         out$right$condition <- paste(variable, "<", format(cutpoint, digits = 12))
+>       }
+>     } else {
+>       # fallback
+>       out$left$condition <- paste(variable, "< or >=", format(cutpoint, digits = 12))
+>       out$right$condition <- paste(variable, "complement of left at", format(cutpoint, digits = 12))
+>     }
+>     
+>   } else {
+>     levs <- if (is.factor(x)) levels(x) else sort(unique(as.character(x)))
+>     csplit_row <- as.integer(split_info[1, "index"])
+>     
+>     if (is.null(fit$csplit)) stop("fit$csplit is missing; cannot decode categorical split")
+>     if (csplit_row < 1 || csplit_row > nrow(fit$csplit)) {
+>       stop("Invalid csplit row index for categorical split")
+>     }
+>     
+>     codes <- fit$csplit[csplit_row, seq_along(levs)]
+>     left_levels <- levs[codes == 1]
+>     right_levels <- levs[codes == 3]
+>     
+>     fmt_levels <- function(x) {
+>       paste0("c(", paste(sprintf('"%s"', x), collapse = ", "), ")")
+>     }
+>     
+>     out$type <- "categorical"
+>     out$left$levels <- left_levels
+>     out$right$levels <- right_levels
+>     out$left$condition <- paste(variable, "%in%", fmt_levels(left_levels))
+>     out$right$condition <- paste(variable, "%in%", fmt_levels(right_levels))
+>   }
+>   
+>   out
+> }
+> ```
+> 
+> Key change:
+> - replaced `predict(fit, ..., type="where")` with `fit$where`
+> 
+> If you want, I can also simplify the numeric orientation logic further, since for the immediate split we can often detect the side just by comparing the child means or membership at that node.
+**user**:
+> Now it's "Error in get_rpart_split(mod, 1, subset(allassumps, ISO == iso)) : 
+>   length(fit$where)) does not match nrow(data); supply the original training data"
+**assistant**:
+> Right — because `subset(allassumps, ISO == iso)` is not exactly the rows `rpart` used after dropping NAs and applying its internal model frame. So `fit$where` only matches the actual training rows inside the fitted model.
+> 
+> The clean fix is: ignore the external `data` for row routing, and instead use `model.frame(fit)` as the authoritative training data aligned with `fit$where`.
+> 
+> ## Version that uses the fitted model frame
+> 
+> ```r
+> get_rpart_split <- function(fit, node = 1) {
+>   if (!inherits(fit, "rpart")) stop("fit must be an rpart object")
+>   
+>   fr <- fit$frame
+>   node_chr <- as.character(node)
+>   if (!(node_chr %in% rownames(fr))) stop("node not found in fit$frame")
+>   node_row <- match(node_chr, rownames(fr))
+>   if (fr$var[node_row] == "<leaf>") stop("node is a leaf; no split to extract")
+>   
+>   mf <- model.frame(fit)
+>   if (is.null(mf)) stop("model.frame(fit) is unavailable")
+>   if (is.null(fit$where)) stop("fit$where is unavailable")
+>   if (length(fit$where) != nrow(mf)) {
+>     stop("fit$where and model.frame(fit) are not aligned")
+>   }
+>   
+>   variable <- fr$var[node_row]
+>   if (!(variable %in% names(mf))) {
+>     stop(sprintf("Variable '%s' not found in model.frame(fit)", variable))
+>   }
+>   
+>   left_node <- 2 * node
+>   right_node <- 2 * node + 1
+>   
+>   if (!(as.character(left_node) %in% rownames(fr)) ||
+>       !(as.character(right_node) %in% rownames(fr))) {
+>     stop("Could not find child nodes in fit$frame")
+>   }
+>   
+>   left_mean_y <- unname(fr[as.character(left_node), "yval"])
+>   right_mean_y <- unname(fr[as.character(right_node), "yval"])
+>   
+>   split_row <- cumsum(fr$var != "<leaf>")[node_row]
+>   split_info <- fit$splits[split_row, , drop = FALSE]
+>   x <- mf[[variable]]
+>   
+>   out <- list(
+>     variable = variable,
+>     node = node,
+>     left = list(node = left_node, mean_y = left_mean_y),
+>     right = list(node = right_node, mean_y = right_mean_y)
+>   )
+>   
+>   is_descendant <- function(k, ancestor) {
+>     while (k > ancestor) k <- k %/% 2
+>     k == ancestor
+>   }
+>   
+>   terminal_nodes <- unique(fit$where)
+>   left_desc <- terminal_nodes[vapply(terminal_nodes, is_descendant, logical(1), ancestor = left_node)]
+>   right_desc <- terminal_nodes[vapply(terminal_nodes, is_descendant, logical(1), ancestor = right_node)]
+>   
+>   in_left <- fit$where %in% left_desc
+>   in_right <- fit$where %in% right_desc
+>   in_parent <- in_left | in_right
+>   
+>   if (is.numeric(x) || is.integer(x)) {
+>     cutpoint <- unname(split_info[1, "index"])
+>     out$type <- "numeric"
+>     out$split_point <- cutpoint
+>     
+>     x_parent <- x[in_parent]
+>     left_parent <- in_left[in_parent]
+>     
+>     lt_side <- !is.na(x_parent) & (x_parent < cutpoint)
+>     ge_side <- !is.na(x_parent) & (x_parent >= cutpoint)
+>     
+>     if (sum(lt_side) == 0 || sum(ge_side) == 0) {
+>       # Degenerate case: all values on one side among parent rows
+>       out$left$condition <- paste(variable, "<", format(cutpoint, digits = 12))
+>       out$right$condition <- paste(variable, ">=", format(cutpoint, digits = 12))
+>     } else {
+>       prop_lt_left <- mean(left_parent[lt_side])
+>       prop_ge_left <- mean(left_parent[ge_side])
+>       
+>       if (prop_lt_left >= prop_ge_left) {
+>         out$left$condition <- paste(variable, "<", format(cutpoint, digits = 12))
+>         out$right$condition <- paste(variable, ">=", format(cutpoint, digits = 12))
+>       } else {
+>         out$left$condition <- paste(variable, ">=", format(cutpoint, digits = 12))
+>         out$right$condition <- paste(variable, "<", format(cutpoint, digits = 12))
+>       }
+>     }
+>     
+>   } else {
+>     levs <- if (is.factor(x)) levels(x) else sort(unique(as.character(x)))
+>     csplit_row <- as.integer(split_info[1, "index"])
+>     
+>     if (is.null(fit$csplit)) stop("fit$csplit is missing; cannot decode categorical split")
+>     if (csplit_row < 1 || csplit_row > nrow(fit$csplit)) {
+>       stop("Invalid csplit row index for categorical split")
+>     }
+>     
+>     codes <- fit$csplit[csplit_row, seq_along(levs)]
+>     left_levels <- levs[codes == 1]
+>     right_levels <- levs[codes == 3]
+>     
+>     fmt_levels <- function(x) {
+>       paste0("c(", paste(sprintf('"%s"', x), collapse = ", "), ")")
+>     }
+>     
+>     out$type <- "categorical"
+>     out$left$levels <- left_levels
+>     out$right$levels <- right_levels
+>     out$left$condition <- paste(variable, "%in%", fmt_levels(left_levels))
+>     out$right$condition <- paste(variable, "%in%", fmt_levels(right_levels))
+>   }
+>   
+>   out
+> }
+> ```
+> 
+> ## Why this should work
+> 
+> `model.frame(fit)` gives the exact rows that were used to fit the tree:
+> 
+> - after subsetting
+> - after NA omission
+> - with factor handling aligned to the model
+> 
+> And `fit$where` is indexed to exactly those rows.
+> 
+> So this avoids the mismatch entirely.
+> 
+> ## Important implication
+> 
+> You should now call it as:
+> 
+> ```r
+> get_rpart_split(mod, 1)
+> ```
+> 
+> not with a separate `data` argument.
+> 
+> ---
+> 
+> ## One more thing: there is an even easier way for numeric splits
+> 
+> For the root and other nodes, the printed split direction is already encoded by which child has which mean, but inferring it from `fit$where` is safer. Still, if you want, I can simplify this further by using `path.rpart()` to recover the exact textual rule to each child node. That might actually be the most robust solution if your goal is human-readable conditions rather than low-level decoding.
+**user**:
+> Now: "Error in if (length(fit$where) != nrow(mf)) { : 
+>   argument is of length zero"
+**assistant**:
+> `fit$where` is missing in your object. That can happen depending on how the tree was created/stored.
+> 
+> Most robust fix: avoid `where` entirely and recover the child conditions from the node paths. `path.rpart()` gives the exact split text that `rpart` uses, including the correct direction for numeric splits. Then we only need to extract the last rule on the path to each child.
+> 
+> This is much better for your use case.
+> 
+> ## Function using `path.rpart`
+> 
+> ```r
+> get_rpart_split <- function(fit, node = 1, pretty = 0) {
+>   if (!inherits(fit, "rpart")) stop("fit must be an rpart object")
+>   
+>   fr <- fit$frame
+>   node_chr <- as.character(node)
+>   
+>   if (!(node_chr %in% rownames(fr))) stop("node not found in fit$frame")
+>   node_row <- match(node_chr, rownames(fr))
+>   
+>   if (fr$var[node_row] == "<leaf>") stop("node is a leaf; no split to extract")
+>   
+>   left_node <- 2 * node
+>   right_node <- 2 * node + 1
+>   
+>   if (!(as.character(left_node) %in% rownames(fr)) ||
+>       !(as.character(right_node) %in% rownames(fr))) {
+>     stop("Could not find child nodes in fit$frame")
+>   }
+>   
+>   variable <- fr$var[node_row]
+>   left_mean_y <- unname(fr[as.character(left_node), "yval"])
+>   right_mean_y <- unname(fr[as.character(right_node), "yval"])
+>   
+>   # path.rpart returns the sequence of rules to reach a node
+>   left_path <- path.rpart(fit, nodes = left_node, print.it = FALSE)[[1]]
+>   right_path <- path.rpart(fit, nodes = right_node, print.it = FALSE)[[1]]
+>   
+>   # Drop the "root" entry if present, then take the last rule
+>   clean_last_rule <- function(path_vec) {
+>     path_vec <- path_vec[path_vec != "root"]
+>     if (length(path_vec) == 0) return(NA_character_)
+>     tail(path_vec, 1)
+>   }
+>   
+>   left_condition <- clean_last_rule(left_path)
+>   right_condition <- clean_last_rule(right_path)
+>   
+>   # Optionally prettify spacing a little
+>   if (pretty > 0) {
+>     prettify <- function(s) {
+>       s <- gsub("< ", "< ", s, fixed = TRUE)
+>       s <- gsub(">=", ">= ", s, fixed = TRUE)
+>       s <- gsub("=  ", "= ", s, fixed = TRUE)
+>       s
+>     }
+>     left_condition <- prettify(left_condition)
+>     right_condition <- prettify(right_condition)
+>   }
+>   
+>   list(
+>     variable = variable,
+>     node = node,
+>     left = list(
+>       node = left_node,
+>       condition = left_condition,
+>       mean_y = left_mean_y
+>     ),
+>     right = list(
+>       node = right_node,
+>       condition = right_condition,
+>       mean_y = right_mean_y
+>     )
+>   )
+> }
+> ```
+> 
+> ## Example
+> 
+> For your tree
+> 
+> ```r
+> 1) root 55 0.2125885000 0.046794720  
+>   2) persist>=0.18 47 0.0044686020 0.021448270  
+>     4) persist>=0.69 11 0.0001680729 0.008942701 *
+>     5) persist< 0.69 36 0.0020546050 0.025269420 *
+>   3) persist< 0.18 8 0.0005307641 0.195705100 *
+> ```
+> 
+> calling
+> 
+> ```r
+> get_rpart_split(mod, 1)
+> ```
+> 
+> should give something like
+> 
+> ```r
+> $variable
+> [1] "persist"
+> 
+> $left
+> $left$node
+> [1] 2
+> 
+> $left$condition
+> [1] "persist>=0.18"
+> 
+> $left$mean_y
+> [1] 0.02144827
+> 
+> $right
+> $right$node
+> [1] 3
+> 
+> $right$condition
+> [1] "persist< 0.18"
+> 
+> $right$mean_y
+> [1] 0.1957051
+> ```
+> 
+> which matches the actual tree orientation.
+> 
+> ## Why this is the best approach here
+> 
+> Instead of reverse-engineering:
+> 
+> - `splits`
+> - `csplit`
+> - `where`
+> - level order
+> - left/right numeric orientation
+> 
+> we just ask `rpart` for the path text it already knows. That makes it:
+> 
+> - simpler
+> - more robust
+> - aligned with what gets printed
+> 
+> ## If you want parsed output
+> If you'd like, I can also make a version that parses the returned condition into structured pieces, e.g.
+> 
+> ```r
+> $left$operator
+> $left$value
+> $left$levels
+> ```
+> 
+> so numeric and factor splits become machine-readable, not just strings.

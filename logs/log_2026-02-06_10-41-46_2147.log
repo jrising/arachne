@@ -1,0 +1,138 @@
+**user**:
+> I have an Shiny app in a sister directory to where I have the code for my analysis. Now I want to share some of that code between the Shiny app and the analysis. Where do I put this to make it work for both?
+**assistant**:
+> To share code between your Shiny app and your separate analysis project, you can create a centralized location for the code you want to share. Here's a simple and effective approach:
+> 
+> 1. **Create a Shared Directory**: Place your shared code in a new directory that both the Shiny app and analysis project can access. This directory should be at the same level or above the directories for your Shiny app and analysis scripts, so both can reference it easily.
+> 
+>    For example:
+>    ```
+>    /project-root/
+>        /shared-code/
+>            shared_script.R
+>        /shiny-app/
+>            app.R
+>        /analysis/
+>            analysis_script.R
+>    ```
+> 
+> 2. **Referencing Shared Code**: In both your Shiny app and analysis scripts, source the shared code. You can use `here::here` or `rprojroot::find_root` to manage paths more dynamically, but if you maintain a consistent project structure, relative paths can suffice.
+> 
+>    In your Shiny app (`app.R`):
+>    ```r
+>    source("../shared-code/shared_script.R")
+>    ```
+> 
+>    In your analysis script (`analysis_script.R`):
+>    ```r
+>    source("../shared-code/shared_script.R")
+>    ```
+> 
+> 3. **Consistency and Version Control**: Ensure all shared components are properly managed and documented. Placing them under version control will help track changes and ensure consistency across uses.
+> 
+> By following this structure, you not only share code but also keep your project organized and maintainable. It's a good practice to modularize where possible, keeping shared logic separated from application-specific code.
+**user**:
+> When I push the app to an online server, will this get shared too?
+**assistant**:
+> When you push your Shiny app to an online server, whether the shared code is included depends on how you deploy the app. Here are some key points to consider:
+> 
+> 1. **Deployment Method**:
+>    - If you're using a deployment service like **ShinyApps.io**, **RStudio Connect**, or **Docker** to deploy your Shiny app, you need to ensure that the shared code is included in your deployment package.
+>    - Most of these services will only include files from the app directory (like `app.R` and other associated files) that you specifically configure for deployment.
+> 
+> 2. **Including Shared Code**:
+>    - Make sure to copy or reference the shared code directly within the Shiny app's directory before deployment. This can be done by:
+>      - Copying the shared code into a subdirectory within the Shiny app directory (e.g., `shiny-app/shared/`) and updating the `source` path accordingly:
+>        ```r
+>        source("shared/shared_script.R")
+>        ```
+>      - Alternatively, you can use a version control system (like Git) to manage the shared code along with the Shiny app.
+> 
+> 3. **Absolute vs. Relative Paths**: 
+>    - If your app references shared code using relative paths pointing outside its directory (like `../shared-code/shared_script.R`), this may not work after deployment, as the server's directory structure may differ from your local setup.
+> 
+> 4. **Testing**: 
+>    - Always test the deployed app to ensure that all dependencies, including shared code, are working correctly. Use logging or debugging tools to troubleshoot if something doesn't appear to function as expected.
+> 
+> In summary, for your shared code to be accessible after deployment, include it in the directory structure of your Shiny app, or update the deployment settings to ensure that it is included.
+**user**:
+> So, it sounds like the only way to make this work without having to make a copy of the code in two spots is for it to just live within the shiny app. Am I interpreting this correctly?
+**assistant**:
+> Yes, you're interpreting it correctly. For seamless deployment without copying the shared code to multiple locations, you have a couple of options:
+> 
+> 1. **Place Shared Code Within the Shiny App**:
+>    - Store the shared code in a subdirectory within your Shiny app (e.g., `shiny-app/shared/`) and source it from there. This way, you maintain a single codebase that gets deployed together with your app:
+>      ```r
+>      source("shared/shared_script.R")
+>      ```
+> 
+> 2. **Use Package Structure**:
+>    - Another approach is to organize your shared code as an R package. This allows you to keep it separate while making it easy to install and load in both your Shiny app and analysis scripts. However, this requires some upfront work to package and manage dependencies.
+> 
+> 3. **Common Library Directory**:
+>    - You could also create a common library folder in your project root that both the Shiny app and analysis can access. The key here is to ensure that this folder gets included in the deployment process and that you reference it properly.
+> 
+> In summary, placing the shared code within the Shiny app's directory is the most straightforward solution to avoid duplicating code, especially for deployment scenarios. If you want to keep it separate, consider wrapping it into a package, but be prepared for some additional complexity in setup.
+**user**:
+> For the "Common Library Directory", how would I make sure it gets uploaded? Here is my deploy code:
+> ```
+> setwd("~/Dropbox/HMT/online")
+> 
+> rsconnect::setAccountInfo(name='openmodels',  token=..., secret=...)
+> 
+> library(rsconnect)
+> deployApp(appTitle='PROSPER - UK Adapatation Support', appName='prosper')
+> ```
+**assistant**:
+> To ensure the "Common Library Directory" (let’s call it `shared-code`) gets uploaded with your Shiny app when you deploy using `rsconnect::deployApp`, you’ll need to follow these steps:
+> 
+> ### Step 1: Directory Structure
+> 
+> Make sure your project directory is structured like this:
+> 
+> ```
+> /online/
+>     /shared-code/
+>         shared_script.R
+>     /shiny-app/
+>         app.R
+> ```
+> 
+> ### Step 2: Update Deployment Code
+> 
+> Modify the `deployApp` function to specify the app directory correctly while including the `shared-code` directory. You can set the `appFiles` parameter to include the shared code. Here’s how you might modify your deploy code:
+> 
+> ```r
+> setwd("~/Dropbox/HMT/online")
+> 
+> rsconnect::setAccountInfo(name='openmodels',  token=..., secret=...)
+> 
+> library(rsconnect)
+> 
+> # Deploy with shared code
+> deployApp(appTitle='PROSPER - UK Adaptation Support',
+>           appName='prosper',
+>           appDir = "shiny-app",  # Specify the app directory
+>           appFiles = c("shared-code/shared_script.R",  # Include shared code
+>                        "app.R"))  # Include necessary app files
+> ```
+> 
+> ### Step 3: Update Sourcing in the App
+> 
+> Within your `app.R`, ensure you correctly source the shared script:
+> 
+> ```r
+> source("shared-code/shared_script.R")
+> ```
+> 
+> ### Step 4: Confirm Deployment
+> 
+> When you deploy the app, `rsconnect` will include the specified files in `appFiles`. After deployment, check the deployed app's file structure (if possible) to confirm that the `shared-code` directory and its contents are uploaded.
+> 
+> ### Step 5: Test the App
+> 
+> After deployment, test the app to confirm that it can access the shared code correctly. If you encounter issues, check the logs for errors and ensure that the paths used in `app.R` are correct.
+> 
+> ### Additional Note
+> 
+> If you find yourself adding multiple files or folders to `appFiles`, you can also consider using glob patterns to automatically include specific files or organize your main file structure to streamline this process.

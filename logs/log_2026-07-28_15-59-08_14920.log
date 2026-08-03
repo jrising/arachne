@@ -1,0 +1,1510 @@
+**user**:
+> I have a collection of data, and I want to combine it all into a common dataset. It consists of:
+> Streamflow station data - `grdd-meta.csv`:
+> ```
+> ,station_id,country,station_name,river,area,area_units,lat,lon,source,point_id,discharge_units,starting_year,ending_year,total_years,total_usable_years,discharge_units_norm,area_units_norm
+> 1,1,Brasil,Estirao do Repouso,Javari,58107.0,km2,-4.37,-70.93,ANEEL,1,m3/sec,1980,1995,16,14,m3/s,km2
+> 2,10,Central_African_Rep.,Bangui,Oubangui,500000.0,km2,4.37,18.5,RivDIS,10,m3/sec,1911,1990,80,63,m3/s,km2
+> 3,100,India,Ashti,Wainganga,299320.0,km2,19.78,79.78,RivDIS,100,m3/sec,1968,1979,12,11,m3/s,km2
+> ...
+> ```
+> Streamflow monthly flows, indexed by station - `grdd-data.csv`:
+> ```
+> ,station_id,year,month,discharge
+> 0,1,1980,1,
+> 1,1,1981,1,2417.0
+> 2,1,1982,1,3847.0
+> 3,1,1983,1,3984.0
+> 4,1,1984,1,2828.0
+> ```
+> Monthly total precip. and temperature, by grid cell - `REGION_monthly_ttp.nc4`, where REGION is divided into bounding boxes for ['asia_east', 'australia', 'brazil', 'europe', 'india', 'latam', 'mexico_south', 'usa'] (note the streamflows are global):
+> ```
+> netcdf asia_east_monthly_ttp {
+> dimensions:
+> 	latitude = 548 ;
+> 	longitude = 300 ;
+> 	valid_time = 600 ;
+> variables:
+> 	int64 number ;
+> 		number:long_name = "ensemble member numerical id" ;
+> 		number:units = "1" ;
+> 		number:standard_name = "realization" ;
+> 	double latitude(latitude) ;
+> 		latitude:_FillValue = NaN ;
+> 		latitude:units = "degrees_north" ;
+> 		latitude:standard_name = "latitude" ;
+> 		latitude:long_name = "latitude" ;
+> 		latitude:stored_direction = "decreasing" ;
+> 	double longitude(longitude) ;
+> 		longitude:_FillValue = NaN ;
+> 		longitude:units = "degrees_east" ;
+> 		longitude:standard_name = "longitude" ;
+> 		longitude:long_name = "longitude" ;
+> 	int64 valid_time(valid_time) ;
+> 		valid_time:long_name = "time" ;
+> 		valid_time:standard_name = "time" ;
+> 		valid_time:units = "days since 1975-01-01 00:00:00" ;
+> 		valid_time:calendar = "proleptic_gregorian" ;
+> 	float tp(valid_time, latitude, longitude) ;
+> 		tp:_FillValue = NaNf ;
+> 		tp:GRIB_paramId = 228LL ;
+> 		tp:GRIB_dataType = "fc" ;
+> 		tp:GRIB_numberOfPoints = 164400LL ;
+> 		tp:GRIB_typeOfLevel = "surface" ;
+> 		tp:GRIB_stepUnits = 1LL ;
+> 		tp:GRIB_stepType = "accum" ;
+> 		tp:GRIB_gridType = "regular_ll" ;
+> 		tp:GRIB_uvRelativeToGrid = 0LL ;
+> 		tp:GRIB_NV = 0LL ;
+> 		tp:GRIB_Nx = 300LL ;
+> 		tp:GRIB_Ny = 548LL ;
+> 		tp:GRIB_cfName = "unknown" ;
+> 		tp:GRIB_cfVarName = "tp" ;
+> 		tp:GRIB_gridDefinitionDescription = "Latitude/Longitude Grid" ;
+> 		tp:GRIB_iDirectionIncrementInDegrees = 0.1 ;
+> 		tp:GRIB_iScansNegatively = 0LL ;
+> 		tp:GRIB_jDirectionIncrementInDegrees = 0.1 ;
+> 		tp:GRIB_jPointsAreConsecutive = 0LL ;
+> 		tp:GRIB_jScansPositively = 0LL ;
+> 		tp:GRIB_latitudeOfFirstGridPointInDegrees = 55.9 ;
+> 		tp:GRIB_latitudeOfLastGridPointInDegrees = 1.2 ;
+> 		tp:GRIB_longitudeOfFirstGridPointInDegrees = 120.1 ;
+> 		tp:GRIB_longitudeOfLastGridPointInDegrees = 150. ;
+> 		tp:GRIB_missingValue = 3.40282346638529e+38 ;
+> 		tp:GRIB_name = "Total precipitation" ;
+> 		tp:GRIB_shortName = "tp" ;
+> 		tp:GRIB_totalNumber = 0LL ;
+> 		tp:GRIB_units = "m" ;
+> 		tp:long_name = "Daily total precipitation" ;
+> 		tp:units = "mm" ;
+> 		tp:standard_name = "unknown" ;
+> 		tp:GRIB_surface = 0. ;
+> 		tp:note = "Computed from ERA5-Land accumulated hourly precipitation. Timestamps shifted back 1 hour, daily maximum accumulation used, converted m to mm." ;
+> 		tp:coordinates = "number" ;
+> 	float tmean(valid_time, latitude, longitude) ;
+> 		tmean:_FillValue = NaNf ;
+> 		tmean:GRIB_paramId = 167LL ;
+> 		tmean:GRIB_dataType = "fc" ;
+> 		tmean:GRIB_numberOfPoints = 164400LL ;
+> 		tmean:GRIB_typeOfLevel = "surface" ;
+> 		tmean:GRIB_stepUnits = 1LL ;
+> 		tmean:GRIB_stepType = "instant" ;
+> 		tmean:GRIB_gridType = "regular_ll" ;
+> 		tmean:GRIB_uvRelativeToGrid = 0LL ;
+> 		tmean:GRIB_NV = 0LL ;
+> 		tmean:GRIB_Nx = 300LL ;
+> 		tmean:GRIB_Ny = 548LL ;
+> 		tmean:GRIB_cfName = "unknown" ;
+> 		tmean:GRIB_cfVarName = "t2m" ;
+> 		tmean:GRIB_gridDefinitionDescription = "Latitude/Longitude Grid" ;
+> 		tmean:GRIB_iDirectionIncrementInDegrees = 0.1 ;
+> 		tmean:GRIB_iScansNegatively = 0LL ;
+> 		tmean:GRIB_jDirectionIncrementInDegrees = 0.1 ;
+> 		tmean:GRIB_jPointsAreConsecutive = 0LL ;
+> 		tmean:GRIB_jScansPositively = 0LL ;
+> 		tmean:GRIB_latitudeOfFirstGridPointInDegrees = 55.9 ;
+> 		tmean:GRIB_latitudeOfLastGridPointInDegrees = 1.2 ;
+> 		tmean:GRIB_longitudeOfFirstGridPointInDegrees = 120.1 ;
+> 		tmean:GRIB_longitudeOfLastGridPointInDegrees = 150. ;
+> 		tmean:GRIB_missingValue = 3.40282346638529e+38 ;
+> 		tmean:GRIB_name = "2 metre temperature" ;
+> 		tmean:GRIB_shortName = "2t" ;
+> 		tmean:GRIB_totalNumber = 0LL ;
+> 		tmean:GRIB_units = "K" ;
+> 		tmean:long_name = "Daily mean 2m air temperature" ;
+> 		tmean:units = "degC" ;
+> 		tmean:standard_name = "unknown" ;
+> 		tmean:GRIB_surface = 0. ;
+> 		tmean:coordinates = "number" ;
+> ```
+> Monthly computed runoff and melt, by grid cell - `REGION_monthly.nc4`:
+> ```
+> netcdf asia_east_monthly {
+> dimensions:
+> 	latitude = 548 ;
+> 	longitude = 300 ;
+> 	valid_time = 600 ;
+> variables:
+> 	int64 number ;
+> 		number:long_name = "ensemble member numerical id" ;
+> 		number:units = "1" ;
+> 		number:standard_name = "realization" ;
+> 	double latitude(latitude) ;
+> 		latitude:_FillValue = NaN ;
+> 		latitude:units = "degrees_north" ;
+> 		latitude:standard_name = "latitude" ;
+> 		latitude:long_name = "latitude" ;
+> 		latitude:stored_direction = "decreasing" ;
+> 	double longitude(longitude) ;
+> 		longitude:_FillValue = NaN ;
+> 		longitude:units = "degrees_east" ;
+> 		longitude:standard_name = "longitude" ;
+> 		longitude:long_name = "longitude" ;
+> 	int64 valid_time(valid_time) ;
+> 		valid_time:long_name = "time" ;
+> 		valid_time:standard_name = "time" ;
+> 		valid_time:units = "days since 1975-01-01 00:00:00" ;
+> 		valid_time:calendar = "proleptic_gregorian" ;
+> 	float rainfall(valid_time, latitude, longitude) ;
+> 		rainfall:_FillValue = NaNf ;
+> 		rainfall:coordinates = "number" ;
+> 	float era5melt(latitude, longitude, valid_time) ;
+> 		era5melt:_FillValue = NaNf ;
+> 		era5melt:coordinates = "number" ;
+> 	float tempmelt(valid_time, latitude, longitude) ;
+> 		tempmelt:_FillValue = NaNf ;
+> 		tempmelt:coordinates = "number" ;
+> }
+> ```
+> and Monthly accumulated streamflow components, by grid cell - `REGION_monthly_flow.nc4`:
+> ```
+> netcdf asia_east_monthly_flow {
+> dimensions:
+> 	latitude = 564 ;
+> 	longitude = 1265 ;
+> 	time = 888 ;
+> variables:
+> 	int64 number ;
+> 		number:long_name = "ensemble member numerical id" ;
+> 		number:units = "1" ;
+> 		number:standard_name = "realization" ;
+> 	double latitude(latitude) ;
+> 		latitude:_FillValue = NaN ;
+> 		latitude:units = "degrees_north" ;
+> 		latitude:standard_name = "latitude" ;
+> 		latitude:long_name = "latitude" ;
+> 		latitude:stored_direction = "decreasing" ;
+> 	double longitude(longitude) ;
+> 		longitude:_FillValue = NaN ;
+> 		longitude:units = "degrees_east" ;
+> 		longitude:standard_name = "longitude" ;
+> 		longitude:long_name = "longitude" ;
+> 	double rainfall(time, latitude, longitude) ;
+> 		rainfall:_FillValue = NaN ;
+> 		rainfall:coordinates = "number" ;
+> 	double era5melt(time, latitude, longitude) ;
+> 		era5melt:_FillValue = NaN ;
+> 		era5melt:coordinates = "number" ;
+> 	double tempmelt(time, latitude, longitude) ;
+> 		tempmelt:_FillValue = NaN ;
+> 		tempmelt:coordinates = "number" ;
+> }
+> ```
+> 
+> I want a dataset that's organized by streamflow observation (so, station, month, year). I think this should have columns:
+> station_id,country,lat,lon,year,month,discharge,tp,tmean,rainfall,era5melt,tempmelt,rainfall_flow,era5melt_flow,tempmelt_flow
+> 
+> Can you construct this for me using Python?
+**assistant**:
+> Here is a concrete Python workflow that builds the dataset you want, using `pandas`, `xarray`, and `dask`. I will assume:
+> 
+> - Your NetCDF grids’ lat/lon are on the same global ERA5(-Land) grid as the flow grids (even if some region tiles differ in extent / resolution, you’ll call them appropriately).
+> - Each station is associated with the nearest model grid cell in each REGIONS file (we can refine this later if you have a basin–grid mapping).
+> - You are happy to keep things lazy with dask and only compute when writing out.
+> 
+> I will organise it as:
+> 
+> 1. Load and prepare the station and discharge tables.
+> 2. Load all regional NetCDFs into “global-ish” lazy xarray datasets for:
+>    - `ttp` (tp, tmean)
+>    - `runoff` (rainfall, era5melt, tempmelt)
+>    - `flow` (rainfall_flow, era5melt_flow, tempmelt_flow)
+> 3. For each observation (station, year, month), look up the grid cell and time index, and attach the model values.
+> 4. Return a single pandas DataFrame with the columns you specified.
+> 
+> You will probably want to adapt region selection (e.g. map stations to a specific REGION). I’ll show it in a way that’s explicit but still scalable.
+> 
+> ---
+> 
+> ### 0. Imports and dask configuration
+> 
+> ```python
+> import os
+> import glob
+> import numpy as np
+> import pandas as pd
+> import xarray as xr
+> 
+> from dask.distributed import Client
+> 
+> # Optional: spin up a local dask client for parallelism
+> client = Client()  # or Client(n_workers=8, threads_per_worker=1, memory_limit="8GB")
+> ```
+> 
+> ---
+> 
+> ### 1. Load station metadata and discharge data
+> 
+> ```python
+> # 1.1 Metadata
+> meta = pd.read_csv("grdd-meta.csv")
+> 
+> # Ensure station_id is integer
+> meta["station_id"] = meta["station_id"].astype(int)
+> 
+> # 1.2 Monthly discharge table
+> discharge = pd.read_csv("grdd-data.csv")
+> 
+> discharge["station_id"] = discharge["station_id"].astype(int)
+> discharge["year"] = discharge["year"].astype(int)
+> discharge["month"] = discharge["month"].astype(int)
+> 
+> # Some rows have blank discharge entries; convert them to NaN
+> discharge["discharge"] = pd.to_numeric(discharge["discharge"], errors="coerce")
+> 
+> # Merge station metadata onto the discharge records
+> obs = discharge.merge(
+>     meta[["station_id", "country", "lat", "lon"]],
+>     on="station_id",
+>     how="left"
+> )
+> ```
+> 
+> At this point, `obs` has a row per (station_id, year, month) with discharge and location info.
+> 
+> ---
+> 
+> ### 2. Helper: convert year/month to valid_time / time index
+> 
+> Your `ttp` and `runoff` datasets use `valid_time` as days since `1975-01-01`. The `*_flow` datasets use a `time` dimension instead (no `valid_time` shown), but from your description I’ll assume it’s the same monthly sequence starting at the same origin; we will align by an explicit time coordinate where possible.
+> 
+> Define a helper function that adds a real datetime coordinate to each dataset, then we can join by year and month.
+> 
+> ```python
+> import cftime
+> import datetime as dt
+> 
+> def add_monthly_datetime_coord(ds, time_dim="valid_time", origin="1975-01-01"):
+>     """
+>     For datasets with a 'valid_time' dimension (days since origin),
+>     attach a 'time' coordinate as monthly datetimes (or daily if that is how
+>     it's encoded, but we'll convert to month-year).
+>     """
+>     if time_dim not in ds.dims and time_dim not in ds.coords:
+>         return ds  # nothing to do
+> 
+>     units = ds[time_dim].attrs.get("units", f"days since {origin}")
+>     calendar = ds[time_dim].attrs.get("calendar", "proleptic_gregorian")
+> 
+>     # Convert to cftime datetimes
+>     times = xr.cftime_range(
+>         start=origin,
+>         periods=ds.dims[time_dim],
+>         freq="D"  # dataset says "days since"
+>     )
+> 
+>     # Replace numeric valid_time with a datetime-like coordinate
+>     ds = ds.assign_coords(time=(time_dim, times))
+>     ds = ds.swap_dims({time_dim: "time"})
+>     ds = ds.drop_vars(time_dim)
+> 
+>     # For safety, store year and month as coordinates
+>     ds = ds.assign_coords(
+>         year=("time", np.array([t.year for t in ds["time"].values])),
+>         month=("time", np.array([t.month for t in ds["time"].values])),
+>     )
+>     return ds
+> ```
+> 
+> For the `*_flow` files, which have `time` but no `valid_time`, we’ll similarly assign a year/month coordinate, assuming the same start and monthly steps. If you know the actual calendar (e.g. from another metadata file) you can use that instead.
+> 
+> ```python
+> def add_year_month_from_time_index(ds, start="1975-01-01"):
+>     if "time" not in ds.dims:
+>         return ds
+>     n = ds.dims["time"]
+>     # monthly sequence starting at start
+>     times = pd.date_range(start=start, periods=n, freq="MS")
+>     ds = ds.assign_coords(time=("time", times))
+>     ds = ds.assign_coords(
+>         year=("time", ds["time"].dt.year.values),
+>         month=("time", ds["time"].dt.month.values),
+>     )
+>     return ds
+> ```
+> 
+> You will need to confirm that the sequences really align across files; if not, we can later replace this with a mapping.
+> 
+> ---
+> 
+> ### 3. Load and combine regional NetCDFs
+> 
+> We will:
+> 
+> - Build three high-level datasets:
+>   - `ds_ttp_global`: monthly tp and tmean (from `*_monthly_ttp.nc4`)
+>   - `ds_runoff_global`: monthly rainfall, era5melt, tempmelt (from `*_monthly.nc4`)
+>   - `ds_flow_global`: monthly accumulated components (from `*_monthly_flow.nc4`)
+> - Concatenate along a synthetic `region` dimension, but for lookups we will simply select by nearest (lon, lat) within each region and then combine the values; if grid extents overlap, we will rely on “first match” or you can impose a priority.
+> 
+> Adjust `root` to where your NetCDFs live.
+> 
+> ```python
+> root = "/path/to/netcdf/files"
+> 
+> regions = ['asia_east', 'australia', 'brazil', 'europe',
+>            'india', 'latam', 'mexico_south', 'usa']
+> 
+> ttp_datasets = []
+> runoff_datasets = []
+> flow_datasets = []
+> 
+> for region in regions:
+>     # 3.1 ttp
+>     f_ttp = os.path.join(root, f"{region}_monthly_ttp.nc4")
+>     if os.path.exists(f_ttp):
+>         ds_ttp = xr.open_dataset(
+>             f_ttp,
+>             chunks={"valid_time": 50}  # chunk only in time dim
+>         )
+>         ds_ttp = add_monthly_datetime_coord(ds_ttp, time_dim="valid_time")
+>         ds_ttp = ds_ttp.assign_coords(region=region)
+>         ttp_datasets.append(ds_ttp[["tp", "tmean"]])
+> 
+>     # 3.2 runoff
+>     f_runoff = os.path.join(root, f"{region}_monthly.nc4")
+>     if os.path.exists(f_runoff):
+>         ds_runoff = xr.open_dataset(
+>             f_runoff,
+>             chunks={"valid_time": 50}
+>         )
+>         ds_runoff = add_monthly_datetime_coord(ds_runoff, time_dim="valid_time")
+>         ds_runoff = ds_runoff.assign_coords(region=region)
+>         runoff_datasets.append(ds_runoff[["rainfall", "era5melt", "tempmelt"]])
+> 
+>     # 3.3 flow
+>     f_flow = os.path.join(root, f"{region}_monthly_flow.nc4")
+>     if os.path.exists(f_flow):
+>         ds_flow = xr.open_dataset(
+>             f_flow,
+>             chunks={"time": 50}
+>         )
+>         ds_flow = add_year_month_from_time_index(ds_flow)
+>         ds_flow = ds_flow.assign_coords(region=region)
+>         # Rename variables to avoid name clash with runoff rainfall
+>         ds_flow = ds_flow.rename({
+>             "rainfall": "rainfall_flow",
+>             "era5melt": "era5melt_flow",
+>             "tempmelt": "tempmelt_flow",
+>         })
+>         flow_datasets.append(ds_flow[["rainfall_flow",
+>                                       "era5melt_flow",
+>                                       "tempmelt_flow"]])
+> 
+> # 3.4 Concatenate by region (so dims: region, time, lat, lon)
+> ds_ttp_global = xr.concat(ttp_datasets, dim="region") if ttp_datasets else None
+> ds_runoff_global = xr.concat(runoff_datasets, dim="region") if runoff_datasets else None
+> ds_flow_global = xr.concat(flow_datasets, dim="region") if flow_datasets else None
+> ```
+> 
+> You now have lazily-loaded dask-backed datasets that span all regions.
+> 
+> ---
+> 
+> ### 4. Helper for nearest-grid lookup
+> 
+> We want, for each observation row, to pull values from (lat, lon, year, month). We will:
+> 
+> - Use `sel(lat=..., lon=..., method="nearest")` on the union-of-regions dataset.
+> - Further subselect by `year` and `month`.
+> 
+> Because `ds_*_global` has a `region` dimension and the coordinate axes repeat per region, `sel` will give us one value per region; if a region does not cover that lat/lon, the values will typically be NaN. We can then take the first non-NaN region.
+> 
+> To avoid a Python loop over every row (which could be slow), we’ll:
+> 
+> - Build an xarray “observation” dataset with coordinates (obs_id, lat, lon, year, month).
+> - Use `xr.Dataset.sel` with `xarray`’s vectorised indexing via `xr.Dataset.interp` or indexing by constructing appropriate indexers. For simplicity and clarity, I’ll show a row-wise loop first (which is easy to debug), then notes on vectorisation.
+> 
+> #### Simple row-wise extractor
+> 
+> If you have O(10^4–10^5) observations this may still be acceptable with dask; if it’s much larger we can optimise.
+> 
+> ```python
+> def extract_values_for_obs_row(row,
+>                                ds_ttp=None,
+>                                ds_runoff=None,
+>                                ds_flow=None):
+>     lat = row["lat"]
+>     lon = row["lon"]
+>     year = row["year"]
+>     month = row["month"]
+> 
+>     result = {
+>         "tp": np.nan,
+>         "tmean": np.nan,
+>         "rainfall": np.nan,
+>         "era5melt": np.nan,
+>         "tempmelt": np.nan,
+>         "rainfall_flow": np.nan,
+>         "era5melt_flow": np.nan,
+>         "tempmelt_flow": np.nan,
+>     }
+> 
+>     # 4.1 ttp: tp, tmean
+>     if ds_ttp is not None:
+>         try:
+>             # select nearest grid cell spatially
+>             da = ds_ttp.sel(
+>                 latitude=lat,
+>                 longitude=lon,
+>                 method="nearest"
+>             )
+>             # then select by year / month
+>             da_tm = da.where(
+>                 (da["year"] == year) & (da["month"] == month),
+>                 drop=True
+>             )
+>             # collapse region/time dims after filtering
+>             # take first non-nan across region and time
+>             tp_val = da_tm["tp"].load().values
+>             tmean_val = da_tm["tmean"].load().values
+> 
+>             if tp_val.size > 0:
+>                 result["tp"] = np.nanmean(tp_val)
+> 
+>             if tmean_val.size > 0:
+>                 result["tmean"] = np.nanmean(tmean_val)
+>         except Exception:
+>             pass
+> 
+>     # 4.2 runoff: rainfall, era5melt, tempmelt
+>     if ds_runoff is not None:
+>         try:
+>             da = ds_runoff.sel(
+>                 latitude=lat,
+>                 longitude=lon,
+>                 method="nearest"
+>             )
+>             da_tm = da.where(
+>                 (da["year"] == year) & (da["month"] == month),
+>                 drop=True
+>             )
+>             r_val = da_tm["rainfall"].load().values
+>             e_val = da_tm["era5melt"].load().values
+>             t_val = da_tm["tempmelt"].load().values
+> 
+>             if r_val.size > 0:
+>                 result["rainfall"] = np.nanmean(r_val)
+>             if e_val.size > 0:
+>                 result["era5melt"] = np.nanmean(e_val)
+>             if t_val.size > 0:
+>                 result["tempmelt"] = np.nanmean(t_val)
+>         except Exception:
+>             pass
+> 
+>     # 4.3 flow: rainfall_flow, era5melt_flow, tempmelt_flow
+>     if ds_flow is not None:
+>         try:
+>             da = ds_flow.sel(
+>                 latitude=lat,
+>                 longitude=lon,
+>                 method="nearest"
+>             )
+>             da_tm = da.where(
+>                 (da["year"] == year) & (da["month"] == month),
+>                 drop=True
+>             )
+>             rf_val = da_tm["rainfall_flow"].load().values
+>             ef_val = da_tm["era5melt_flow"].load().values
+>             tf_val = da_tm["tempmelt_flow"].load().values
+> 
+>             if rf_val.size > 0:
+**user**:
+> Keep going.
+**assistant**:
+> Continuing from the row-wise extractor, let’s finish the pipeline and then talk about better (vectorised) options if you need speed.
+> 
+> ---
+> 
+> ### 5. Apply the extractor to all observations
+> 
+> We now apply `extract_values_for_obs_row` across `obs` to fill in the model-based columns.
+> 
+> ```python
+> from tqdm import tqdm  # optional progress bar
+> 
+> def attach_model_values(
+>     obs_df,
+>     ds_ttp_global=None,
+>     ds_runoff_global=None,
+>     ds_flow_global=None,
+> ):
+>     results = []
+> 
+>     # iterate over rows; for many rows you may want to use tqdm
+>     for _, row in tqdm(obs_df.iterrows(), total=len(obs_df)):
+>         vals = extract_values_for_obs_row(
+>             row,
+>             ds_ttp=ds_ttp_global,
+>             ds_runoff=ds_runoff_global,
+>             ds_flow=ds_flow_global,
+>         )
+>         results.append(vals)
+> 
+>     model_df = pd.DataFrame(results, index=obs_df.index)
+>     return pd.concat([obs_df.reset_index(drop=True),
+>                       model_df.reset_index(drop=True)], axis=1)
+> 
+> 
+> combined = attach_model_values(
+>     obs,
+>     ds_ttp_global=ds_ttp_global,
+>     ds_runoff_global=ds_runoff_global,
+>     ds_flow_global=ds_flow_global,
+> )
+> ```
+> 
+> At this point, `combined` should have columns:
+> 
+> ```text
+> station_id, country, lat, lon, year, month, discharge,
+> tp, tmean, rainfall, era5melt, tempmelt,
+> rainfall_flow, era5melt_flow, tempmelt_flow
+> ```
+> 
+> which matches what you described.
+> 
+> ---
+> 
+> ### 6. Save the final dataset
+> 
+> You can save to CSV or parquet (parquet is preferable for size and speed):
+> 
+> ```python
+> # CSV
+> combined.to_csv("streamflow_model_monthly_combined.csv", index=False)
+> 
+> # or Parquet
+> combined.to_parquet("streamflow_model_monthly_combined.parquet", index=False)
+> ```
+> 
+> ---
+> 
+> ### 7. Notes / caveats to check
+> 
+> 1. **Time alignment**  
+>    I assumed:
+>    - All `valid_time` axes are daily steps from 1975-01-01.
+>    - Each index corresponds to a monthly aggregated value in order (i.e. first 600 days actually represent 600 months etc.), which may *not* be true.
+>    More likely, `valid_time` has 600 monthly points (each encoded as a day offset). In that case, instead of fabricating daily `cftime_range`, you should decode the units directly:
+> 
+>    ```python
+>    from cftime import num2date
+> 
+>    def add_monthly_datetime_coord_from_units(ds, time_var="valid_time"):
+>        tv = ds[time_var]
+>        units = tv.attrs["units"]          # e.g. "days since 1975-01-01 00:00:00"
+>        calendar = tv.attrs.get("calendar", "proleptic_gregorian")
+>        dates = num2date(tv.values, units=units, calendar=calendar)
+>        ds = ds.assign_coords(time=(time_var, dates))
+>        ds = ds.swap_dims({time_var: "time"})
+>        ds = ds.drop_vars(time_var)
+>        ds = ds.assign_coords(
+>            year=("time", np.array([d.year for d in dates])),
+>            month=("time", np.array([d.month for d in dates])),
+>        )
+>        return ds
+>    ```
+> 
+>    And then use this instead of the earlier `add_monthly_datetime_coord`. That is probably what you actually want.
+> 
+> 2. **Flow files’ `time` dimension**  
+>    For `*_monthly_flow.nc4` we need to confirm the actual calendar. If `time` already has a date-like coordinate (check `print(ds_flow)`), you can derive year and month directly:
+> 
+>    ```python
+>    ds_flow = xr.open_dataset(f_flow, chunks={"time": 50})
+>    ds_flow = ds_flow.assign_coords(
+>        year=("time", ds_flow["time"].dt.year),
+>        month=("time", ds_flow["time"].dt.month),
+>    )
+>    ```
+> 
+> 3. **Nearest-grid cell vs basin-averaged values**  
+>    This workflow simply takes the nearest grid cell to the station point. If you have or want a basin mask (e.g. a list of grid cells per station), we can:
+>    - Build a lookup table mapping `station_id → list[(lat, lon, weight)]`, then
+>    - Replace the single-cell `.sel` with a weighted mean over all those grid cells.
+> 
+> 4. **Performance and vectorisation**  
+>    The row-wise loop is simple but may be slow if you have hundreds of thousands of observations.
+> 
+>    A more scalable approach is:
+> 
+>    - Build an xarray Dataset of observation points:
+> 
+>      ```python
+>      obs_ds = xr.Dataset(
+>          coords=dict(
+>              obs_id=("obs_id", np.arange(len(obs))),
+>              lat_obs=("obs_id", obs["lat"].values),
+>              lon_obs=("obs_id", obs["lon"].values),
+>              year_obs=("obs_id", obs["year"].values),
+>              month_obs=("obs_id", obs["month"].values),
+>          )
+>      )
+>      ```
+> 
+>    - Use `xr.Dataset.sel` with `xarray`’s “indexer arrays” to pick the nearest grid cell for **all obs at once** (or `interp` if you prefer bilinear). Then:
+>      - Create a monthly index for ds_ttp_global (e.g. `time_index = year*12 + month`) and similarly for obs; then use `.sel(time_index=obs_time_index, method='nearest')`.
+> 
+>    That’s a bit more code but would leverage dask and avoid Python loops. If the row-wise solution is adequate for now, we can leave it; otherwise I can write the fully vectorised version.
+> 
+> ---
+> 
+> Would you like me to (a) adjust the time-handling to decode the actual NetCDF `units` properly, or (b) prioritise a vectorised, dask-friendly lookup so this will scale to all your stations and years?
+**user**:
+> I don't think you ever finished writing out "extract_values_for_obs_row".
+**assistant**:
+> You are right, that function got cut off mid-way. Here is a complete, self‑contained version of `extract_values_for_obs_row`, plus the minimal surrounding pieces so you can drop it straight in.
+> 
+> I will:
+> 
+> - Decode time from the NetCDF `units` properly (using `num2date`), which is almost certainly what you want.
+> - Keep the logic simple and row‑wise for now; we can later swap it for a vectorised version if needed.
+> 
+> ---
+> 
+> ### 1. Time-handling helpers (final form)
+> 
+> ```python
+> import numpy as np
+> import xarray as xr
+> from cftime import num2date
+> 
+> def add_monthly_datetime_coord_from_units(ds, time_var="valid_time"):
+>     """
+>     For datasets where `time_var` stores numeric times with CF-style
+>     'units' and 'calendar' attributes, decode into a real datetime-like
+>     'time' coordinate, and also add 'year' and 'month' coordinates.
+>     """
+>     if time_var not in ds.coords and time_var not in ds.dims:
+>         return ds
+> 
+>     tv = ds[time_var]
+>     units = tv.attrs.get("units", None)
+>     calendar = tv.attrs.get("calendar", "proleptic_gregorian")
+> 
+>     if units is None:
+>         raise ValueError(f"{time_var} has no 'units' attribute")
+> 
+>     dates = num2date(tv.values, units=units, calendar=calendar)
+> 
+>     ds = ds.assign_coords(time=(time_var, dates))
+>     ds = ds.swap_dims({time_var: "time"})
+>     ds = ds.drop_vars(time_var)
+> 
+>     years = np.array([d.year for d in dates])
+>     months = np.array([d.month for d in dates])
+> 
+>     ds = ds.assign_coords(
+>         year=("time", years),
+>         month=("time", months),
+>     )
+>     return ds
+> 
+> 
+> def add_year_month_from_time_index(ds):
+>     """
+>     For datasets that already have a proper datetime-like 'time' coordinate,
+>     just add 'year' and 'month' coordinates from it.
+>     """
+>     if "time" not in ds.coords:
+>         return ds
+> 
+>     # If it's not yet a datetime64, try converting (xarray often decodes this for ERA5)
+>     if not np.issubdtype(ds["time"].dtype, np.datetime64):
+>         # xarray may already have decoded CFTime; but if not, leave it as-is
+>         try:
+>             t = xr.decode_cf(ds).time
+>             ds = ds.assign_coords(time=t)
+>         except Exception:
+>             pass
+> 
+>     ds = ds.assign_coords(
+>         year=("time", ds["time"].dt.year.values),
+>         month=("time", ds["time"].dt.month.values),
+>     )
+>     return ds
+> ```
+> 
+> ---
+> 
+> ### 2. Loading the regional datasets
+> 
+> ```python
+> import os
+> 
+> regions = ['asia_east', 'australia', 'brazil', 'europe',
+>            'india', 'latam', 'mexico_south', 'usa']
+> 
+> root = "/path/to/netcdf/files"
+> 
+> ttp_datasets = []
+> runoff_datasets = []
+> flow_datasets = []
+> 
+> for region in regions:
+>     # ttp
+>     f_ttp = os.path.join(root, f"{region}_monthly_ttp.nc4")
+>     if os.path.exists(f_ttp):
+>         ds_ttp = xr.open_dataset(f_ttp, chunks={"valid_time": 50})
+>         ds_ttp = add_monthly_datetime_coord_from_units(ds_ttp, time_var="valid_time")
+>         ds_ttp = ds_ttp.assign_coords(region=region)
+>         ttp_datasets.append(ds_ttp[["tp", "tmean"]])
+> 
+>     # runoff
+>     f_runoff = os.path.join(root, f"{region}_monthly.nc4")
+>     if os.path.exists(f_runoff):
+>         ds_runoff = xr.open_dataset(f_runoff, chunks={"valid_time": 50})
+>         ds_runoff = add_monthly_datetime_coord_from_units(ds_runoff, time_var="valid_time")
+>         ds_runoff = ds_runoff.assign_coords(region=region)
+>         runoff_datasets.append(ds_runoff[["rainfall", "era5melt", "tempmelt"]])
+> 
+>     # flow
+>     f_flow = os.path.join(root, f"{region}_monthly_flow.nc4")
+>     if os.path.exists(f_flow):
+>         ds_flow = xr.open_dataset(f_flow, chunks={"time": 50})
+>         # if time is CF-encoded, xarray may already decode it; just add year/month
+>         ds_flow = add_year_month_from_time_index(ds_flow)
+>         ds_flow = ds_flow.assign_coords(region=region)
+>         ds_flow = ds_flow.rename({
+>             "rainfall": "rainfall_flow",
+>             "era5melt": "era5melt_flow",
+>             "tempmelt": "tempmelt_flow",
+>         })
+>         flow_datasets.append(ds_flow[["rainfall_flow",
+>                                       "era5melt_flow",
+>                                       "tempmelt_flow"]])
+> 
+> ds_ttp_global   = xr.concat(ttp_datasets,   dim="region") if ttp_datasets   else None
+> ds_runoff_global= xr.concat(runoff_datasets,dim="region") if runoff_datasets else None
+> ds_flow_global  = xr.concat(flow_datasets,  dim="region") if flow_datasets   else None
+> ```
+> 
+> ---
+> 
+> ### 3. The completed `extract_values_for_obs_row`
+> 
+> Here is the function in full. It:
+> 
+> - Takes a `pandas.Series` row with `lat`, `lon`, `year`, `month`.
+> - Looks up model outputs from each dataset.
+> - Returns a dict with all the desired variables, defaulting to `NaN` if anything fails.
+> 
+> ```python
+> def extract_values_for_obs_row(
+>     row,
+>     ds_ttp=None,
+>     ds_runoff=None,
+>     ds_flow=None,
+> ):
+>     """
+>     Given a single observation row with columns:
+>         lat, lon, year, month
+>     extract model values from the provided xarray datasets.
+> 
+>     Returns a dict with keys:
+>         tp, tmean, rainfall, era5melt, tempmelt,
+>         rainfall_flow, era5melt_flow, tempmelt_flow
+>     """
+>     lat = float(row["lat"])
+>     lon = float(row["lon"])
+>     year = int(row["year"])
+>     month = int(row["month"])
+> 
+>     result = {
+>         "tp": np.nan,
+>         "tmean": np.nan,
+>         "rainfall": np.nan,
+>         "era5melt": np.nan,
+>         "tempmelt": np.nan,
+>         "rainfall_flow": np.nan,
+>         "era5melt_flow": np.nan,
+>         "tempmelt_flow": np.nan,
+>     }
+> 
+>     # --- 3.1 ttp: tp, tmean ---
+>     if ds_ttp is not None:
+>         try:
+>             # nearest grid cell in space
+>             da = ds_ttp.sel(latitude=lat, longitude=lon, method="nearest")
+> 
+>             # filter to matching year & month
+>             da_tm = da.where(
+>                 (da["year"] == year) & (da["month"] == month),
+>                 drop=True
+>             )
+> 
+>             # extract arrays (region, time) after filtering
+>             if da_tm.sizes.get("time", 0) > 0:
+>                 tp_vals    = da_tm["tp"].values
+>                 tmean_vals = da_tm["tmean"].values
+> 
+>                 # average across region/time if multiple matches
+>                 if tp_vals.size > 0:
+>                     result["tp"] = float(np.nanmean(tp_vals))
+>                 if tmean_vals.size > 0:
+>                     result["tmean"] = float(np.nanmean(tmean_vals))
+>         except Exception:
+>             # silently ignore and keep NaNs
+>             pass
+> 
+>     # --- 3.2 runoff: rainfall, era5melt, tempmelt ---
+>     if ds_runoff is not None:
+>         try:
+>             da = ds_runoff.sel(latitude=lat, longitude=lon, method="nearest")
+> 
+>             da_tm = da.where(
+>                 (da["year"] == year) & (da["month"] == month),
+>                 drop=True
+>             )
+> 
+>             if da_tm.sizes.get("time", 0) > 0:
+>                 r_vals = da_tm["rainfall"].values
+>                 e_vals = da_tm["era5melt"].values
+>                 t_vals = da_tm["tempmelt"].values
+> 
+>                 if r_vals.size > 0:
+>                     result["rainfall"] = float(np.nanmean(r_vals))
+>                 if e_vals.size > 0:
+>                     result["era5melt"] = float(np.nanmean(e_vals))
+>                 if t_vals.size > 0:
+>                     result["tempmelt"] = float(np.nanmean(t_vals))
+>         except Exception:
+>             pass
+> 
+>     # --- 3.3 flow: rainfall_flow, era5melt_flow, tempmelt_flow ---
+>     if ds_flow is not None:
+>         try:
+>             da = ds_flow.sel(latitude=lat, longitude=lon, method="nearest")
+> 
+>             da_tm = da.where(
+>                 (da["year"] == year) & (da["month"] == month),
+>                 drop=True
+>             )
+> 
+>             if da_tm.sizes.get("time", 0) > 0:
+>                 rf_vals = da_tm["rainfall_flow"].values
+>                 ef_vals = da_tm["era5melt_flow"].values
+>                 tf_vals = da_tm["tempmelt_flow"].values
+> 
+>                 if rf_vals.size > 0:
+>                     result["rainfall_flow"] = float(np.nanmean(rf_vals))
+>                 if ef_vals.size > 0:
+>                     result["era5melt_flow"] = float(np.nanmean(ef_vals))
+>                 if tf_vals.size > 0:
+>                     result["tempmelt_flow"] = float(np.nanmean(tf_vals))
+>         except Exception:
+>             pass
+> 
+>     return result
+> ```
+> 
+> ---
+> 
+> ### 4. Attach to your observation table
+> 
+> Assuming you already have:
+> 
+> ```python
+> import pandas as pd
+> 
+> meta = pd.read_csv("grdd-meta.csv")
+> meta["station_id"] = meta["station_id"].astype(int)
+> 
+> discharge = pd.read_csv("grdd-data.csv")
+> discharge["station_id"] = discharge["station_id"].astype(int)
+> discharge["year"] = discharge["year"].astype(int)
+> discharge["month"] = discharge["month"].astype(int)
+> discharge["discharge"] = pd.to_numeric(discharge["discharge"], errors="coerce")
+> 
+> obs = discharge.merge(
+>     meta[["station_id", "country", "lat", "lon"]],
+>     on="station_id",
+>     how="left",
+> )
+> ```
+> 
+> then:
+> 
+> ```python
+> from tqdm import tqdm  # optional
+> 
+> def attach_model_values(
+>     obs_df,
+>     ds_ttp_global=None,
+>     ds_runoff_global=None,
+>     ds_flow_global=None,
+> ):
+>     records = []
+>     for _, row in tqdm(obs_df.iterrows(), total=len(obs_df)):
+>         vals = extract_values_for_obs_row(
+>             row,
+>             ds_ttp=ds_ttp_global,
+>             ds_runoff=ds_runoff_global,
+>             ds_flow=ds_flow_global,
+>         )
+>         records.append(vals)
+> 
+>     model_df = pd.DataFrame(records, index=obs_df.index)
+>     return pd.concat([obs_df.reset_index(drop=True),
+>                       model_df.reset_index(drop=True)], axis=1)
+> 
+> 
+> combined = attach_model_values(
+>     obs,
+>     ds_ttp_global=ds_ttp_global,
+>     ds_runoff_global=ds_runoff_global,
+>     ds_flow_global=ds_flow_global,
+> )
+> 
+> combined.to_parquet("streamflow_model_monthly_combined.parquet", index=False)
+> # or:
+> combined.to_csv("streamflow_model_monthly_combined.csv", index=False)
+> ```
+> 
+> ---
+> 
+> If you are happy with this structure, next step would be to:
+> 
+> - Confirm that the `year`/`month
+**user**:
+> The valid_time variable (which all of the weather datasets share) does not have "units":
+> ```
+> >>> ds_ttp.valid_time
+> <xarray.DataArray 'valid_time' (valid_time: 600)> Size: 5kB
+> array(['1975-01-01T00:00:00.000000000', '1975-02-01T00:00:00.000000000',
+>        '1975-03-01T00:00:00.000000000', ..., '2024-10-01T00:00:00.000000000',
+>        '2024-11-01T00:00:00.000000000', '2024-12-01T00:00:00.000000000'],
+>       dtype='datetime64[ns]')
+> Coordinates:
+>     number      int64 8B ...
+>   * valid_time  (valid_time) datetime64[ns] 5kB 1975-01-01 ... 2024-12-01
+> Attributes:
+>     long_name:      time
+>     standard_name:  time
+> ```
+**assistant**:
+> Good, that simplifies things: `valid_time` is already decoded to `datetime64[ns]`, so we should *not* try to reinterpret units; we just use it directly.
+> 
+> Below is a streamlined, working version of the pipeline that:
+> 
+> - Uses the existing `valid_time` (or `time`) coords.
+> - Derives `year`/`month` from these.
+> - Joins each station–year–month row to the nearest grid cell in space and matching year/month in time.
+> 
+> I’ll give you a single coherent script you can adapt.
+> 
+> ---
+> 
+> ## 1. Load station metadata and discharge
+> 
+> ```python
+> import numpy as np
+> import pandas as pd
+> import xarray as xr
+> 
+> # ---- Station metadata ----
+> meta = pd.read_csv("grdd-meta.csv")
+> meta["station_id"] = meta["station_id"].astype(int)
+> 
+> # ---- Monthly discharge data ----
+> discharge = pd.read_csv("grdd-data.csv")
+> discharge["station_id"] = discharge["station_id"].astype(int)
+> discharge["year"] = discharge["year"].astype(int)
+> discharge["month"] = discharge["month"].astype(int)
+> discharge["discharge"] = pd.to_numeric(discharge["discharge"], errors="coerce")
+> 
+> # Combine
+> obs = discharge.merge(
+>     meta[["station_id", "country", "lat", "lon"]],
+>     on="station_id",
+>     how="left",
+> )
+> ```
+> 
+> `obs` now has `station_id,country,lat,lon,year,month,discharge`.
+> 
+> ---
+> 
+> ## 2. Load regional NetCDFs and add year/month
+> 
+> Because `valid_time` is already datetime-like, we just:
+> 
+> - Rename `valid_time → time`
+> - Add `year` and `month` coords from that.
+> 
+> ```python
+> import os
+> 
+> regions = ['asia_east', 'australia', 'brazil', 'europe',
+>            'india', 'latam', 'mexico_south', 'usa']
+> 
+> root = "/path/to/netcdf/files"
+> 
+> ttp_datasets = []
+> runoff_datasets = []
+> flow_datasets = []
+> 
+> def add_year_month_from_any_time(ds, time_name):
+>     """
+>     Ensure ds has a datetime64[ns]-like coord named 'time',
+>     then add 'year' and 'month' coordinates.
+>     """
+>     if time_name not in ds.coords and time_name not in ds.dims:
+>         return ds
+> 
+>     if time_name != "time":
+>         ds = ds.rename({time_name: "time"})
+> 
+>     # if CFTime or similar, xr will still expose .dt.year/month for many types
+>     ds = ds.assign_coords(
+>         year=("time", ds["time"].dt.year.values),
+>         month=("time", ds["time"].dt.month.values),
+>     )
+>     return ds
+> 
+> 
+> for region in regions:
+>     # ---- ttp ----
+>     f_ttp = os.path.join(root, f"{region}_monthly_ttp.nc4")
+>     if os.path.exists(f_ttp):
+>         ds_ttp = xr.open_dataset(f_ttp, chunks={"valid_time": 100})
+>         ds_ttp = add_year_month_from_any_time(ds_ttp, time_name="valid_time")
+>         ds_ttp = ds_ttp.assign_coords(region=region)
+>         ttp_datasets.append(ds_ttp[["tp", "tmean"]])
+> 
+>     # ---- runoff ----
+>     f_runoff = os.path.join(root, f"{region}_monthly.nc4")
+>     if os.path.exists(f_runoff):
+>         ds_runoff = xr.open_dataset(f_runoff, chunks={"valid_time": 100})
+>         ds_runoff = add_year_month_from_any_time(ds_runoff, time_name="valid_time")
+>         ds_runoff = ds_runoff.assign_coords(region=region)
+>         runoff_datasets.append(ds_runoff[["rainfall", "era5melt", "tempmelt"]])
+> 
+>     # ---- flow ----
+>     f_flow = os.path.join(root, f"{region}_monthly_flow.nc4")
+>     if os.path.exists(f_flow):
+>         ds_flow = xr.open_dataset(f_flow, chunks={"time": 100})
+>         # assumes ds_flow already has a 'time' coordinate (check with print(ds_flow))
+>         ds_flow = add_year_month_from_any_time(ds_flow, time_name="time")
+>         ds_flow = ds_flow.assign_coords(region=region)
+>         ds_flow = ds_flow.rename({
+>             "rainfall": "rainfall_flow",
+>             "era5melt": "era5melt_flow",
+>             "tempmelt": "tempmelt_flow",
+>         })
+>         flow_datasets.append(ds_flow[["rainfall_flow",
+>                                       "era5melt_flow",
+>                                       "tempmelt_flow"]])
+> 
+> ds_ttp_global    = xr.concat(ttp_datasets,    dim="region") if ttp_datasets    else None
+> ds_runoff_global = xr.concat(runoff_datasets, dim="region") if runoff_datasets else None
+> ds_flow_global   = xr.concat(flow_datasets,   dim="region") if flow_datasets   else None
+> ```
+> 
+> Now each global dataset has dims something like `region, time, latitude, longitude` and coords `year(time), month(time)`.
+> 
+> ---
+> 
+> ## 3. Row-wise extractor (completed)
+> 
+> ```python
+> def extract_values_for_obs_row(
+>     row,
+>     ds_ttp=None,
+>     ds_runoff=None,
+>     ds_flow=None,
+> ):
+>     """
+>     For a single observation row with lat, lon, year, month,
+>     extract model values from each dataset.
+>     """
+>     lat = float(row["lat"])
+>     lon = float(row["lon"])
+>     year = int(row["year"])
+>     month = int(row["month"])
+> 
+>     result = {
+>         "tp": np.nan,
+>         "tmean": np.nan,
+>         "rainfall": np.nan,
+>         "era5melt": np.nan,
+>         "tempmelt": np.nan,
+>         "rainfall_flow": np.nan,
+>         "era5melt_flow": np.nan,
+>         "tempmelt_flow": np.nan,
+>     }
+> 
+>     # ---- tp, tmean ----
+>     if ds_ttp is not None:
+>         try:
+>             da = ds_ttp.sel(latitude=lat, longitude=lon, method="nearest")
+>             da_tm = da.where(
+>                 (da["year"] == year) & (da["month"] == month),
+>                 drop=True
+>             )
+>             if da_tm.sizes.get("time", 0) > 0:
+>                 tp_vals    = da_tm["tp"].values
+>                 tmean_vals = da_tm["tmean"].values
+>                 if tp_vals.size > 0:
+>                     result["tp"] = float(np.nanmean(tp_vals))
+>                 if tmean_vals.size > 0:
+>                     result["tmean"] = float(np.nanmean(tmean_vals))
+>         except Exception:
+>             pass
+> 
+>     # ---- runoff rainfall, era5melt, tempmelt ----
+>     if ds_runoff is not None:
+>         try:
+>             da = ds_runoff.sel(latitude=lat, longitude=lon, method="nearest")
+>             da_tm = da.where(
+>                 (da["year"] == year) & (da["month"] == month),
+>                 drop=True
+>             )
+>             if da_tm.sizes.get("time", 0) > 0:
+>                 r_vals = da_tm["rainfall"].values
+>                 e_vals = da_tm["era5melt"].values
+>                 t_vals = da_tm["tempmelt"].values
+>                 if r_vals.size > 0:
+>                     result["rainfall"] = float(np.nanmean(r_vals))
+>                 if e_vals.size > 0:
+>                     result["era5melt"] = float(np.nanmean(e_vals))
+>                 if t_vals.size > 0:
+>                     result["tempmelt"] = float(np.nanmean(t_vals))
+>         except Exception:
+>             pass
+> 
+>     # ---- flow rainfall_flow, era5melt_flow, tempmelt_flow ----
+>     if ds_flow is not None:
+>         try:
+>             da = ds_flow.sel(latitude=lat, longitude=lon, method="nearest")
+>             da_tm = da.where(
+>                 (da["year"] == year) & (da["month"] == month),
+>                 drop=True
+>             )
+>             if da_tm.sizes.get("time", 0) > 0:
+>                 rf_vals = da_tm["rainfall_flow"].values
+>                 ef_vals = da_tm["era5melt_flow"].values
+>                 tf_vals = da_tm["tempmelt_flow"].values
+>                 if rf_vals.size > 0:
+>                     result["rainfall_flow"] = float(np.nanmean(rf_vals))
+>                 if ef_vals.size > 0:
+>                     result["era5melt_flow"] = float(np.nanmean(ef_vals))
+>                 if tf_vals.size > 0:
+>                     result["tempmelt_flow"] = float(np.nanmean(tf_vals))
+>         except Exception:
+>             pass
+> 
+>     return result
+> ```
+> 
+> ---
+> 
+> ## 4. Apply to all observations
+> 
+> ```python
+> from tqdm import tqdm  # optional
+> 
+> def attach_model_values(
+>     obs_df,
+>     ds_ttp_global=None,
+>     ds_runoff_global=None,
+>     ds_flow_global=None,
+> ):
+>     records = []
+>     for _, row in tqdm(obs_df.iterrows(), total=len(obs_df)):
+>         vals = extract_values_for_obs_row(
+>             row,
+>             ds_ttp=ds_ttp_global,
+>             ds_runoff=ds_runoff_global,
+>             ds_flow=ds_flow_global,
+>         )
+>         records.append(vals)
+> 
+>     model_df = pd.DataFrame(records, index=obs_df.index)
+>     return pd.concat(
+>         [obs_df.reset_index(drop=True),
+>          model_df.reset_index(drop=True)],
+>         axis=1,
+>     )
+> 
+> combined = attach_model_values(
+>     obs,
+>     ds_ttp_global=ds_ttp_global,
+>     ds_runoff_global=ds_runoff_global,
+>     ds_flow_global=ds_flow_global,
+> )
+> ```
+> 
+> `combined` should have:
+> 
+> `station_id,country,lat,lon,year,month,discharge,tp,tmean,rainfall,era5melt,tempmelt,rainfall_flow,era5melt_flow,tempmelt_flow`.
+> 
+> Save:
+> 
+> ```python
+> combined.to_parquet("streamflow_model_monthly_combined.parquet", index=False)
+> # or:
+> combined.to_csv("streamflow_model_monthly_combined.csv", index=False)
+> ```
+> 
+> ---
+> 
+> If you paste the `print(ds_ttp)` / `print(ds_flow)` outputs, I can sanity‑check the time and lat/lon names and tweak `sel`/renames so you don’t hit subtle dimension mismatches.
+**user**:
+> Okay, now I get this error:
+> `xarray.core.merge.MergeError: conflicting values for variable 'year' on objects to be combined. You can skip this check by specifying compat='override'.`
+> 
+> Don't worry about writing out the whole script. Just let me know what needs to be changed. The years are not consistent across the regions, and they may not overlap with all of the years that the streamflow is available.
+**assistant**:
+> You’re hitting that merge/concat error because we’re trying to concatenate regional datasets that each have a *coordinate variable* called `year` on the `time` dimension, and xarray wants those coordinates to agree wherever dimensions align. Across regions they don’t, so `xr.concat` complains.
+> 
+> Key point: you don’t actually need a `year` coordinate on the datasets at all; you can just use the native `time` coordinate (already monthly) and match by year/month in the pandas side, or derive `year`/`month` *after* concatenation.
+> 
+> There are two clean options:
+> 
+> ---
+> 
+> ### Option A (simplest): drop `year`/`month` from the xarray side
+> 
+> Change the loader so we never add `year` and `month` coords to the regional datasets.
+> 
+> Concretely, **remove or comment out** this in the previous code:
+> 
+> ```python
+> ds_ttp = ds_ttp.assign_coords(
+>     year=("time", ds["time"].dt.year.values),
+>     month=("time", ds["time"].dt.month.values),
+> )
+> ```
+> 
+> and similarly for `ds_runoff` and `ds_flow`.
+> 
+> Then adjust `extract_values_for_obs_row` to match on `time` directly instead of `year`/`month`:
+> 
+> ```python
+> def extract_values_for_obs_row(
+>     row,
+>     ds_ttp=None,
+>     ds_runoff=None,
+>     ds_flow=None,
+> ):
+>     lat = float(row["lat"])
+>     lon = float(row["lon"])
+>     year = int(row["year"])
+>     month = int(row["month"])
+> 
+>     result = {
+>         "tp": np.nan,
+>         "tmean": np.nan,
+>         "rainfall": np.nan,
+>         "era5melt": np.nan,
+>         "tempmelt": np.nan,
+>         "rainfall_flow": np.nan,
+>         "era5melt_flow": np.nan,
+>         "tempmelt_flow": np.nan,
+>     }
+> 
+>     # build the target month start as a pandas Timestamp
+>     import pandas as pd
+>     target_time = pd.Timestamp(year=year, month=month, day=1)
+> 
+>     # helper closure
+>     def _time_filter(da):
+>         # match exact month, or nearest within a tolerance if you prefer
+>         # exact monthly grid:
+>         return da.sel(time=target_time, method="nearest")
+> 
+>     # --- tp, tmean ---
+>     if ds_ttp is not None:
+>         try:
+>             da = ds_ttp.sel(latitude=lat, longitude=lon, method="nearest")
+>             da_t = _time_filter(da)
+>             result["tp"]    = float(da_t["tp"].values.mean())
+>             result["tmean"] = float(da_t["tmean"].values.mean())
+>         except Exception:
+>             pass
+> 
+>     # --- runoff rainfall, era5melt, tempmelt ---
+>     if ds_runoff is not None:
+>         try:
+>             da = ds_runoff.sel(latitude=lat, longitude=lon, method="nearest")
+>             da_t = _time_filter(da)
+>             result["rainfall"] = float(da_t["rainfall"].values.mean())
+>             result["era5melt"] = float(da_t["era5melt"].values.mean())
+>             result["tempmelt"] = float(da_t["tempmelt"].values.mean())
+>         except Exception:
+>             pass
+> 
+>     # --- flow rainfall_flow, era5melt_flow, tempmelt_flow ---
+>     if ds_flow is not None:
+>         try:
+>             da = ds_flow.sel(latitude=lat, longitude=lon, method="nearest")
+>             da_t = _time_filter(da)
+>             result["rainfall_flow"] = float(da_t["rainfall_flow"].values.mean())
+>             result["era5melt_flow"] = float(da_t["era5melt_flow"].values.mean())
+>             result["tempmelt_flow"] = float(da_t["tempmelt_flow"].values.mean())
+>         except Exception:
+>             pass
+> 
+>     return result
+> ```
+> 
+> Notes:
+> 
+> - `sel(time=target_time, method="nearest")` will naturally handle:
+>   - Regions that don’t cover that year at all → raises or returns nearest outside range; if you want “NaN if outside range”, we can check `time.min()`/`max()` first.
+> - No `year` coordinate is present, so no conflict on concat.
+> 
+> If you want to be stricter (only accept exact month, not nearest), replace the `_time_filter` with something like:
+> 
+> ```python
+> def _time_filter(da):
+>     # exact equality on year/month
+>     t = da["time"]
+>     mask = (t.dt.year == year) & (t.dt.month == month)
+>     da_tm = da.where(mask, drop=True)
+>     if da_tm.sizes.get("time", 0) == 0:
+>         raise KeyError("No matching time")
+>     return da_tm.isel(time=0)  # if there are multiple, just take first
+> ```
+> 
+> That fully avoids having a `year` variable on the xarray side.
+> 
+> ---
+> 
+> ### Option B: keep `year`/`month`, but drop them before concatenation
+> 
+> If you like having `year` and `month` in each regional dataset for debugging, you can keep them during loading but **drop them just before concatenation** so that `ds_ttp_global` et al. don’t carry those coordinates:
+> 
+> ```python
+> # after building ttp_datasets list:
+> ttp_datasets_no_ym = [ds.drop_vars(["year", "month"]) for ds in ttp_datasets]
+> runoff_datasets_no_ym = [ds.drop_vars(["year", "month"]) for ds in runoff_datasets]
+> flow_datasets_no_ym = [ds.drop_vars(["year", "month"]) for ds in flow_datasets]
+> 
+> ds_ttp_global    = xr.concat(ttp_datasets_no_ym,    dim="region") if ttp_datasets    else None
+> ds_runoff_global = xr.concat(runoff_datasets_no_ym, dim="region") if runoff_datasets else None
+> ds_flow_global   = xr.concat(flow_datasets_no_ym,   dim="region") if flow_datasets   else None
+> ```
+> 
+> Then use the `time`-based matching in `extract_values_for_obs_row` exactly as in Option A.
+> 
+> ---
+> 
+> Given your note that:
+> 
+> > The years are not consistent across the regions, and they may not overlap with all of the years that the streamflow is available.
+> 
+> I recommend:
+> 
+> - Option A or B (time-based matching, no `year` coord in concatenated datasets).
+> - Use the strict `_time_filter` variant that returns NaN when there is no exact month match, so you clearly see gaps rather than “nearest” years being pulled in.
+> 
+> If you paste one example `print(ds_ttp)` and `print(ds_flow)` I can give you a minimal, precise `_time_filter` that’s guaranteed to align with how those time axes are defined.
+**user**:
+> Okay, that all seems fine, but why are there lines like `float(da_t["rainfall"].values.mean())`? Won't da_t have an entry for every region, and then take the mean of them, rather than just getting the one region value that the lat,lon is actually within?
+**assistant**:
+> You’re right to be suspicious of that `.mean()` – that was a defensive hack for the earlier “multiple matches” situation, and with the current concatenation-by-region it does exactly what you’re worried about: it will average across all regions that happen to return a value for that lat/lon/time.
+> 
+> Given your setup, the “correct” behavior is:
+> 
+> - For a given station (lat, lon), only one region should actually contain that point.
+> - All other regions, if they cover a different bounding box, should be missing (NaN) at that lat/lon.
+> - So when we `sel(latitude=lat, longitude=lon, method="nearest")` on the concatenated dataset, we ideally want to end up with one non-NaN value along `region` (the containing region), and NaN elsewhere.
+> - Instead of averaging over `region`, we should pick the single non-NaN region (or, if truly multiple are non-NaN, pick one deterministically).
+> 
+> So the fix is:
+> 
+> 1. Do not take `.mean()` over `.values`.
+> 2. Instead, reduce over the `region` dimension by taking the first non-NaN entry, and then use that scalar.
+> 
+> Concretely, change the extraction pattern from:
+> 
+> ```python
+> da = ds_runoff.sel(latitude=lat, longitude=lon, method="nearest")
+> da_t = _time_filter(da)  # or your year/month filter
+> result["rainfall"] = float(da_t["rainfall"].values.mean())
+> ```
+> 
+> to something like:
+> 
+> ```python
+> def pick_first_non_nan(da_var, dim="region"):
+>     """Collapse the region dimension by taking the first non-NaN value."""
+>     if dim not in da_var.dims:
+>         # no region dimension, just return the scalar (or 1D-over-time)
+>         return da_var
+> 
+>     # Move region to front, flatten other dims (time should already be single)
+>     arr = da_var.transpose(dim, ...).values  # shape (n_region, ...)
+>     # For our use, all other dims should be length-1, so flatten:
+>     flat = arr.reshape(arr.shape[0], -1)
+> 
+>     # Find first region with any finite value
+>     for i in range(flat.shape[0]):
+>         if np.isfinite(flat[i]).any():
+>             # return that region's value (reshape back)
+>             return da_var.isel({dim: i})
+> 
+>     # If all-NaN, just return as-is (it’s all NaNs)
+>     return da_var.isel({dim: 0})  # will be NaN
+> ```
+> 
+> Then, in `extract_values_for_obs_row`, use it like this:
+> 
+> ```python
+> # --- runoff rainfall, era5melt, tempmelt ---
+> if ds_runoff is not None:
+>     try:
+>         da = ds_runoff.sel(latitude=lat, longitude=lon, method="nearest")
+>         da_tm = _time_filter(da)  # e.g. exact month filter
+>         # now da_tm still has a 'region' dim; pick the one that has data
+>         r_var = pick_first_non_nan(da_tm["rainfall"], dim="region")
+>         e_var = pick_first_non_nan(da_tm["era5melt"], dim="region")
+>         t_var = pick_first_non_nan(da_tm["tempmelt"], dim="region")
+> 
+>         # each should now be scalar (or 0D array)
+>         result["rainfall"] = float(r_var.values)
+>         result["era5melt"] = float(e_var.values)
+>         result["tempmelt"] = float(t_var.values)
+>     except Exception:
+>         pass
+> ```
+> 
+> Likewise for `tp` / `tmean` and the `*_flow` variables.
+> 
+> If you want to stay purely in xarray without manual `.values` reshaping, an alternative is:
+> 
+> ```python
+> def collapse_region_first_non_nan(da_var):
+>     if "region" not in da_var.dims:
+>         return da_var
+> 
+>     # mask: True where finite
+>     mask = np.isfinite(da_var.values)
+>     # indices of finite values along region axis
+>     # assume only 'region' and possibly scalar other dims
+>     # we find the first region index i where any value is finite
+>     mask_region_any = mask.reshape(mask.shape[0], -1).any(axis=1)
+>     if not mask_region_any.any():
+>         # all-NaN; take region=0 (NaN)
+>         return da_var.isel(region=0)
+> 
+>     first_region = int(np.argmax(mask_region_any))
+>     return da_var.isel(region=first_region)
+> ```
+> 
+> and then:
+> 
+> ```python
+> r_var = collapse_region_first_non_nan(da_tm["rainfall"])
+> result["rainfall"] = float(r_var.values)
+> ```
+> 
+> The key conceptual change:
+> 
+> - You are no longer “averaging across regions”.
+> - You explicitly **choose one region per station** (the first that actually has non-NaN data for that point), and use its value.
+> 
+> If you’d like, I can help you add an assertion to verify that for each (lat, lon) there is at most one region with non-NaN data, so you catch any accidental overlaps in the region tiling rather than silently picking one.

@@ -1,0 +1,115 @@
+**user**:
+> How can I add a "loading" graphic over a Leaflet map in Shiny while a new set of data is being loaded onto it?
+**assistant**:
+> To include a "loading" graphic while your Leaflet map in a Shiny application is getting updated with new data, you can leverage JavaScript and CSS along with Shiny's reactivity. Here's a step-by-step approach to achieve this:
+> 
+> 1. **Create a Loading Graphic**: You can use CSS to create a simple loading spinner. Add the CSS in the `www` directory or embedded within your UI.
+> 
+> 2. **Integrate JavaScript**: Use JavaScript to control the visibility of the loading spinner according to the data loading process.
+> 
+> 3. **Update the Shiny App**: Use Shiny reactive functions to toggle the loading spinner.
+> 
+> Here's a sample implementation:
+> 
+> ### 1. CSS for the Loading Spinner
+> 
+> Add the following CSS to your `www` directory in a file called `styles.css`, or directly in the `tags$head()` of your UI:
+> 
+> ```css
+> #loading-spinner {
+>   display: none;
+>   position: fixed;
+>   z-index: 1000; /* Ensure it is above everything */
+>   top: 50%;
+>   left: 50%;
+>   margin-top: -30px; /* Half the height of the spinner */
+>   margin-left: -30px; /* Half the width of the spinner */
+> }
+> 
+> .spinner {
+>   border: 4px solid rgba(0, 0, 0, 0.1);
+>   border-left: 4px solid #4285f4;
+>   border-radius: 50%;
+>   width: 60px;
+>   height: 60px;
+>   animation: spin 1s linear infinite;
+> }
+> 
+> @keyframes spin {
+>   to { transform: rotate(360deg); }
+> }
+> ```
+> 
+> ### 2. JavaScript for Showing/Hiding the Spinner
+> 
+> Include a bit of JavaScript in your UI (within `tags$head()`):
+> 
+> ```html
+> <script type="text/javascript">
+>   function showSpinner() {
+>     document.getElementById('loading-spinner').style.display = 'block';
+>   }
+> 
+>   function hideSpinner() {
+>     document.getElementById('loading-spinner').style.display = 'none';
+>   }
+> 
+>   Shiny.addCustomMessageHandler('show-loading', function(message) {
+>     if (message === 'show') {
+>       showSpinner();
+>     } else if (message === 'hide') {
+>       hideSpinner();
+>     }
+>   });
+> </script>
+> ```
+> 
+> ### 3. Modify Your Shiny Server and UI Code
+> 
+> In your `ui` function, include a placeholder for the spinner:
+> 
+> ```r
+> library(shiny)
+> 
+> ui <- fluidPage(
+>   tags$head(
+>     tags$link(rel = "stylesheet", type = "text/css", href = "styles.css")
+>   ),
+>   div(id = "loading-spinner", class = "spinner"),
+>   leafletOutput("mymap"),
+>   actionButton("loadData", "Load New Data")
+> )
+> ```
+> 
+> In your `server` function, show and hide the spinner during the data loading process:
+> 
+> ```r
+> server <- function(input, output, session) {
+>   data <- reactiveVal(data.frame())
+> 
+>   observeEvent(input$loadData, {
+>     session$sendCustomMessage(type = 'show-loading', message = 'show')
+> 
+>     # Simulate data loading with a delay
+>     Sys.sleep(2) # replace with your actual data loading code
+>     new_data <- data.frame(lat = runif(10, -90, 90), lng = runif(10, -180, 180))
+>     data(new_data)
+> 
+>     session$sendCustomMessage(type = 'show-loading', message = 'hide')
+>   })
+> 
+>   output$mymap <- renderLeaflet({
+>     leaflet() %>%
+>       addTiles() %>%
+>       observe({
+>         d <- data()
+>         if(nrow(d) > 0) {
+>           clearMarkers()
+>           addMarkers(data = d, ~lng, ~lat)
+>         }
+>       })
+>   })
+> }
+> ```
+> 
+> With this setup, the "loading" graphic will appear while the data is being processed and will disappear once the map has been updated. Adjust the simulated `Sys.sleep(2)` with the actual time taken by your data-loading process or remove it if it’s unnecessary in the real scenario.

@@ -1,0 +1,197 @@
+**user**:
+> I have Stable Diffusion working now using webui.sh, but I would like to call it programmatically, ideally with the same configuration that I've been using but with different prompt and negative prompt text. How can I do that?
+**assistant**:
+> You have a few options, depending on how much you want to stay inside the existing web UI vs. bypass it. I’ll walk through the most practical ones, starting with the least invasive.
+> 
+> ---
+> 
+> ## 1. Use the SD WebUI’s built‑in API (recommended)
+> 
+> If you’re using AUTOMATIC1111’s Stable Diffusion WebUI (what `webui.sh` usually launches), it already exposes a REST API that uses **the same config, model, sampler, etc.** as the UI.
+> 
+> ### Step 1 – Enable the API
+> 
+> Edit your `webui-user.sh` (or however you start it) to include `--api`, e.g.:
+> 
+> ```bash
+> # in webui-user.sh
+> export COMMANDLINE_ARGS="--api --xformers"  # add any flags you already use
+> ```
+> 
+> Then restart with:
+> 
+> ```bash
+> ./webui.sh
+> ```
+> 
+> By default it runs at `http://127.0.0.1:7860`.
+> 
+> You can see the interactive docs at:
+> - `http://127.0.0.1:7860/docs` (FastAPI docs)
+> - `http://127.0.0.1:7860/redoc`
+> 
+> ---
+> 
+> ### Step 2 – Mirror your current WebUI settings in the API payload
+> 
+> Almost everything you set in the WebUI (steps, sampler, CFG, size, seed, etc.) can be sent as JSON.
+> 
+> Typical text‑to‑image request fields (the key ones):
+> 
+> - `prompt`: your main prompt
+> - `negative_prompt`: your negative prompt
+> - `steps`
+> - `sampler_name`
+> - `cfg_scale`
+> - `width`, `height`
+> - `seed` (use `-1` to randomize)
+> - `batch_size`, `n_iter`
+> - `restore_faces`, `tiling`, `enable_hr`, etc.
+> 
+> You can inspect your current settings:
+> 
+> 1. In the WebUI, click the **“Generate”** you like.
+> 2. In the **PNG info** tab, click **“Send to txt2img”** then “Copy generation parameters”.
+> 3. Compare with the JSON fields in `/docs` – they map almost 1‑to‑1.
+> 
+> ---
+> 
+> ### Step 3 – Example: Python script using the WebUI API
+> 
+> Create `sd_generate.py`:
+> 
+> ```python
+> import base64
+> import json
+> import os
+> import requests
+> 
+> WEBUI_URL = "http://127.0.0.1:7860"
+> 
+> def txt2img(prompt, negative_prompt="", outdir="outputs", filename_prefix="image"):
+>     payload = {
+>         "prompt": prompt,
+>         "negative_prompt": negative_prompt,
+>         # Mirror your UI configuration here:
+>         "steps": 30,
+>         "sampler_name": "Euler a",
+>         "cfg_scale": 7.0,
+>         "width": 512,
+>         "height": 512,
+>         "seed": -1,        # -1 for random seed
+>         "batch_size": 1,
+>         "n_iter": 1,
+>     }
+> 
+>     response = requests.post(
+>         f"{WEBUI_URL}/sdapi/v1/txt2img",
+>         json=payload,
+>         timeout=600,
+>     )
+>     response.raise_for_status()
+>     r = response.json()
+> 
+>     os.makedirs(outdir, exist_ok=True)
+>     saved_files = []
+> 
+>     for i, img_b64 in enumerate(r["images"]):
+>         img_data = base64.b64decode(img_b64.split(",", 1)[-1])
+>         fname = f"{filename_prefix}_{i:03d}.png"
+>         path = os.path.join(outdir, fname)
+>         with open(path, "wb") as f:
+>             f.write(img_data)
+>         saved_files.append(path)
+> 
+>     return saved_files
+> 
+> if __name__ == "__main__":
+>     files = txt2img(
+>         prompt="a photorealistic portrait of a scientist in a futuristic greenhouse",
+>         negative_prompt="low quality, blurry, extra limbs, distorted face",
+>         outdir="outputs/demo",
+>         filename_prefix="demo",
+>     )
+>     print("Saved:", files)
+> ```
+> 
+> Run with:
+> 
+> ```bash
+> python sd_generate.py
+> ```
+> 
+> As long as `./webui.sh` is running with `--api`, this will use your existing model + settings (except where you explicitly override in the payload).
+> 
+> ---
+> 
+> ## 2. Call the API from the command line or other languages
+> 
+> ### Bash / curl example
+> 
+> ```bash
+> curl -X POST "http://127.0.0.1:7860/sdapi/v1/txt2img" \
+>   -H "Content-Type: application/json" \
+>   -d '{
+>     "prompt": "a watercolor landscape of coastal wetlands at sunrise",
+>     "negative_prompt": "lowres, text, jpeg artifacts",
+>     "steps": 25,
+>     "cfg_scale": 8,
+>     "width": 768,
+>     "height": 512,
+>     "seed": -1
+>   }' \
+>   -o response.json
+> ```
+> 
+> Then decode the base64 image from `response.json` with a small script, or you can pipe through `jq` and `base64 -d`.
+> 
+> ---
+> 
+> ## 3. Keep UI config but change prompts programmatically
+> 
+> If you want to **fully reuse the UI’s last-used settings** (even as you change them through the interface) and only override the prompt/negative prompt:
+> 
+> 1. In the UI, pick your configuration and generate once.
+> 2. In your script, send a payload with just the fields you want to override plus a few safe defaults. By default, the WebUI API uses the current global options (e.g., current model, clip skip, etc.) but not the last txt2img parameters. So to really mimic your exact “panel” settings, you generally still need to send steps, sampler, etc.
+> 
+> If you tell me:
+> - the model you’re using,
+> - your standard sampler / steps / CFG / size,
+> I can give you a tailored payload template that should match your UI output almost exactly.
+> 
+> ---
+> 
+> ## 4. Alternative: call Python directly (bypassing WebUI)
+> 
+> If you decide you don’t need the WebUI at all in production, you can load the same model with `diffusers` or SD’s original scripts. That gives you more control but **won’t automatically mirror** the UI’s config (you’ll have to replicate it).
+> 
+> Example with `diffusers`:
+> 
+> ```python
+> from diffusers import StableDiffusionPipeline
+> import torch
+> 
+> pipe = StableDiffusionPipeline.from_pretrained(
+>     "runwayml/stable-diffusion-v1-5",
+>     torch_dtype=torch.float16,
+> ).to("cuda")
+> 
+> image = pipe(
+>     "a satellite image of a coastal city with visible flood defenses",
+>     negative_prompt="lowres, artifacts, bad anatomy",
+>     num_inference_steps=30,
+>     guidance_scale=7.5,
+> ).images[0]
+> 
+> image.save("ciam_coast.png")
+> ```
+> 
+> Useful when you want to integrate generation tightly in a Python pipeline and don’t care about the WebUI.
+> 
+> ---
+> 
+> If you share:
+> - your current launch command (the `COMMANDLINE_ARGS` from `webui-user.sh`),
+> - a screenshot or text of your “Generation parameters” from PNG Info,
+> 
+> I can write a drop‑in script that should reproduce your current images while only varying `prompt` and `negative_prompt`.

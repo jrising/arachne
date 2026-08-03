@@ -1,0 +1,634 @@
+**assistant**:
+> The following past discussions are relevant to inferring a mapping between two datasets with the sam
+**assistant**:
+> The retrieved discussions do not contain information directly relevant to extracting the raw data fr
+**user**:
+> I am producing a bunch of figures in ggplot, but the editor wants to have the raw data for each plot as well (so they can presumably remake all the figures). Is there a way to extract this from the ggplot object?
+**assistant**:
+> Yes, you can extract the raw data from a `ggplot` object. A `ggplot` object contains the associated data frame, and you can access it using the `ggplot_build()` function. Here's a step-by-step guide on how to do it:
+> 
+> 1. Create your `ggplot` object as usual.
+> 2. Use `ggplot_build()` to access the underlying data.
+> 3. Depending on your plot, extract the data from the appropriate structure in the `ggplot` object.
+> 
+> Here's an example:
+> 
+> ```R
+> library(ggplot2)
+> 
+> # Example ggplot
+> p <- ggplot(mtcars, aes(mpg, wt)) + geom_point()
+> 
+> # Extract the data used in the plot
+> plot_data <- ggplot_build(p)$data[[1]]
+> 
+> # View the raw data
+> print(plot_data)
+> ```
+> 
+> In this example, `plot_data` would contain the data frame used for plotting, including any transformations applied during the ggplot processes. You can then export this data to a file format that the editor prefers, such as CSV, using `write.csv()`:
+> 
+> ```R
+> write.csv(plot_data, "plot_raw_data.csv", row.names = FALSE)
+> ```
+> 
+> This will give your editor the underlying data needed to recreate the figures.
+**user**:
+> This is pretty good, but it shows everything in raw terms (like colors are reported as hex codes), while it would be much nicer if the legend/labels/catagorical variables were reported. Is that possible?
+**assistant**:
+> Yes, and this is an important distinction:  
+> 
+> - `ggplot_build(p)$data` gives you **stat/scale-transformed data** (what’s drawn on the screen: hex colors, numeric positions, etc.).  
+> - The journal almost certainly wants the **original data** (with your factor labels, categorical variables, etc.).
+> 
+> You usually want to extract from the `data` slot of the ggplot object and/or the individual layers, *not* from `ggplot_build`.
+> 
+> ### 1. Get the original data used in the plot
+> 
+> If you passed a data frame to `ggplot(...)`, you can access it directly:
+> 
+> ```r
+> p <- ggplot(df, aes(x = group, y = value, color = treatment)) +
+>   geom_point()
+> 
+> raw_data <- p$data
+> str(raw_data)
+> ```
+> 
+> This `raw_data` will have your original factor levels, labels, etc. You can export it:
+> 
+> ```r
+> write.csv(raw_data, "figureX_data.csv", row.names = FALSE)
+> ```
+> 
+> ### 2. If layers have their own data
+> 
+> Sometimes layers override `data =`:
+> 
+> ```r
+> p <- ggplot() +
+>   geom_point(data = df1, aes(x, y, color = group)) +
+>   geom_smooth(data = df2, aes(x, y), method = "lm")
+> ```
+> 
+> Then you have separate data per layer:
+> 
+> ```r
+> layer1_data <- p$layers[[1]]$data
+> layer2_data <- p$layers[[2]]$data
+> ```
+> 
+> You can save each, or merge them with identifiers:
+> 
+> ```r
+> layer1_data$._layer <- "points"
+> layer2_data$._layer <- "smooth"
+> plot_raw_data <- rbind(layer1_data, layer2_data)
+> ```
+> 
+> ### 3. If aesthetics are mapped via `aes()`
+> 
+> If you used:
+> 
+> ```r
+> ggplot(df, aes(color = treatment))
+> ```
+> 
+> then the column `treatment` in `df` *is* the categorical variable you should deliver. You typically **don’t** want the scale-resolved hex colors at all; the editor can re-apply their own color scheme.
+> 
+> So, for most journal purposes, the best answer is:
+> 
+> > Give them the original data frame(s) that went into your ggplot call(s), possibly filtered/aggregated exactly as used for plotting, *not* `ggplot_build(p)$data`.
+> 
+> ### 4. Reconstructing “plot-ready” data if needed
+> 
+> If your plot uses `dplyr` pipes and on-the-fly transforms:
+> 
+> ```r
+> p <- df %>%
+>   filter(!is.na(y)) %>%
+>   group_by(group) %>%
+>   summarize(mean_y = mean(y)) %>%
+>   ggplot(aes(group, mean_y)) +
+>   geom_col()
+> ```
+> 
+> Then the data you likely want to send is the summarized output:
+> 
+> ```r
+> plot_df <- df %>%
+>   filter(!is.na(y)) %>%
+>   group_by(group) %>%
+>   summarize(mean_y = mean(y))
+> 
+> write.csv(plot_df, "figureX_data.csv", row.names = FALSE)
+> ```
+> 
+> That mirrors exactly what the figure shows and preserves categorical labels.
+> 
+> ---
+> 
+> If you show me one of your actual `ggplot` calls, I can give you a short snippet that extracts exactly the dataset the editor probably wants for that figure.
+**user**:
+> Okay, now I have a function that works in some cases:
+> ```
+>     plotdata <- ggplot_build(plot)$data
+>     if (length(plot$layers) > 1) {
+>         sheets <- list()
+>         for (ii in 1:length(plot$layers)) {
+>             sheets[[ii]] <- plot$layers[[ii]]$data
+>             if (is.null(nrow(sheets[[ii]]))) {
+>                 sheets[[ii]] <- plotdata[[ii]]
+>             } else if (nrow(sheets[[ii]]) == nrow(plotdata[[ii]])) {
+>                 sheets[[ii]] <- cbind(sheets[[ii]], plotdata[[ii]])
+>             } else {
+>                 print("Plot data rows do not match.")
+>             }
+>         }
+>     } else {
+>         sheets <- plot$data
+>         if (nrow(sheets) == nrow(plotdata[[1]])) {
+>             sheets <- cbind(sheets, plotdata[[1]])
+>         } else {
+>             print("Plot data rows do not match.")
+>         }
+>     }
+> 
+>     write.xlsx(sheets, file=file.path("For Share", paste0(filebase, ".xlsx")))
+> ```
+> 
+> But I've just run it with this ggplot command:
+> ```
+> ggplot(df, aes(IDYEARS, frac, colour=VARIABLE)) +
+>     geom_hline(aes(yintercept=0)) +
+>     geom_line(linewidth=1) +
+>     theme_bw() +
+>     scale_colour_manual(name="Long-term climate action\ncost estimates", breaks=c("Investment", "Cost|Cost Nodal Net", "GDP|PPP"),
+>                         labels=c("Investment costs only", "All engineering costs", "Engineering costs and\ndeadweight losses"),
+>                         values=c('#7fc97f', '#beaed4', '#fdc086')) +
+>     xlab(NULL) + scale_y_continuous("Long-Term Climate Action Costs\n(% of global GDP, vs. Baseline)", labels=scales::percent)
+> ```
+**assistant**:
+> The issue is coming from this layer:
+> 
+> ```r
+> geom_hline(aes(yintercept = 0))
+> ```
+> 
+> `geom_hline()` is a special case: it does not use the main `df` data; it creates its own data internally. That means:
+> 
+> - `plot$layers[[1]]$data` is empty (because you didn’t give `data =`),
+> - but `ggplot_build(p)$data[[1]]` has one row (the drawn horizontal line).
+> 
+> So in your loop, for that first layer:
+> 
+> ```r
+> sheets[[ii]] <- plot$layers[[ii]]$data        # empty
+> if (is.null(nrow(sheets[[ii]]))) {            # FALSE: it's a data.frame with 0 rows
+>     sheets[[ii]] <- plotdata[[ii]]
+> } else if (nrow(sheets[[ii]]) == nrow(...)) { # 0 == 1? FALSE
+>     ...
+> } else {
+>     print("Plot data rows do not match.")
+> }
+> ```
+> 
+> You end up in the `"Plot data rows do not match."` case.
+> 
+> You don’t actually want to combine anything for `geom_hline()`; the editor doesn’t need a “dataset” for that layer beyond “a reference line at 0”.
+> 
+> ### A simpler, more robust approach for this kind of plot
+> 
+> Your plot only has one “real” dataset: `df`. The horizontal line is just decoration. For the editor, the useful spreadsheet is:
+> 
+> - `IDYEARS`
+> - `frac`
+> - `VARIABLE` (with its levels)
+> - Plus, if you want, the transformed y values (percent) and legend labels, but that’s optional.
+> 
+> So for this particular figure, I’d do something much simpler:
+> 
+> ```r
+> plot_df <- df |> 
+>   dplyr::select(IDYEARS, frac, VARIABLE)
+> 
+> writexl::write_xlsx(plot_df,
+>     path = file.path("For Share", paste0(filebase, ".xlsx")))
+> ```
+> 
+> That’s exactly the data they’d need to recreate the line plot and legend.
+> 
+> ### If you want to keep your generic function
+> 
+> You can make it resilient to “stat-like” layers such as `geom_hline`, `geom_vline`, `geom_abline`, `geom_smooth`, etc., by:
+> 
+> 1. Skipping layers with zero rows in both original and built data.
+> 2. Using the built data when original is empty but built has rows.
+> 3. Only `cbind` when row counts match and both have > 0 rows.
+> 
+> Here’s a drop‑in revised version of your logic:
+> 
+> ```r
+> build <- ggplot_build(plot)
+> plotdata <- build$data
+> 
+> if (length(plot$layers) > 1) {
+>   sheets <- list()
+> 
+>   for (ii in seq_along(plot$layers)) {
+>     layer_raw   <- plot$layers[[ii]]$data
+>     layer_built <- plotdata[[ii]]
+> 
+>     # If user didn't supply layer-specific data, fall back to plot$data
+>     if (is.null(layer_raw) || (is.data.frame(layer_raw) && nrow(layer_raw) == 0)) {
+>       layer_raw <- plot$data
+>     }
+> 
+>     # If we still have no rows, just store built data (e.g. hline)
+>     if (is.null(layer_raw) || nrow(layer_raw) == 0) {
+>       sheets[[ii]] <- layer_built
+>       next
+>     }
+> 
+>     # If we can't sensibly combine, just store the raw
+>     if (is.null(layer_built) || nrow(layer_built) == 0) {
+>       sheets[[ii]] <- layer_raw
+>       next
+>     }
+> 
+>     if (nrow(layer_raw) == nrow(layer_built)) {
+>       sheets[[ii]] <- cbind(layer_raw, layer_built)
+>     } else {
+>       message("Layer ", ii, ": plot data rows do not match, returning raw data only.")
+>       sheets[[ii]] <- layer_raw
+>     }
+>   }
+> 
+> } else {
+>   # Single-layer case
+>   layer_raw   <- plot$data
+>   layer_built <- plotdata[[1]]
+> 
+>   if (!is.null(layer_raw) &&
+>       !is.null(layer_built) &&
+>       nrow(layer_raw) > 0 &&
+>       nrow(layer_raw) == nrow(layer_built)) {
+>     sheets <- cbind(layer_raw, layer_built)
+>   } else if (!is.null(layer_raw) && nrow(layer_raw) > 0) {
+>     sheets <- layer_raw
+>   } else {
+>     sheets <- layer_built
+>   }
+> }
+> 
+> openxlsx::write.xlsx(
+>   sheets,
+>   file = file.path("For Share", paste0(filebase, ".xlsx"))
+> )
+> ```
+> 
+> For your specific example:
+> 
+> ```r
+> ggplot(df, aes(IDYEARS, frac, colour = VARIABLE)) +
+>   geom_hline(aes(yintercept = 0)) +  # becomes a tiny 1-row sheet from built data
+>   geom_line(linewidth = 1) +
+>   ...
+> ```
+> 
+> You will get:
+> 
+> - One sheet for the `geom_hline` layer (just yintercept etc.)  
+> - One sheet for the `geom_line` layer with `df` plus its plotted coordinates.
+> 
+> If you want only one sheet per figure, I’d instead:
+> 
+> - Ignore purely decorative layers (`geom_hline`, `geom_vline`, etc.), and  
+> - Take `plot$data` (or the data for the main geom) as the “figure dataset.”
+> 
+> You can implement that by checking `class(plot$layers[[ii]]$geom)` and skipping when it’s `"GeomHline"`.
+> 
+> If you show me your broader use cases (e.g., faceting, stats, smooths), I can tune this into a compact “export_figure_data(plot, filebase)” that behaves sensibly for all of them.
+**user**:
+> What I don't understand is why plot$layers doesn't have the underlying data:
+> ```
+> > plot$layers
+> $geom_hline
+> mapping: yintercept = 0 
+> geom_hline: na.rm = FALSE
+> stat_identity: na.rm = FALSE
+> position_identity 
+> 
+> $geom_line
+> geom_line: na.rm = FALSE, orientation = NA, arrow = NULL, arrow.fill = NULL, lineend = butt, linejoin = round, linemitre = 10
+> stat_identity: na.rm = FALSE
+> position_identity 
+> 
+> > plot$layers[[1]]$data
+> list()
+> attr(,"class")
+> [1] "waiver"
+> > plot$layers[[2]]$data
+> list()
+> attr(,"class")
+> [1] "waiver"
+> ```
+**assistant**:
+> Because in this plot there is literally no layer‑specific data yet; both layers are “waiving” back to the main `ggplot()` data and/or internal defaults.
+> 
+> Two key ideas:
+> 
+> 1. **`plot$layers[[i]]$data` only contains data if you *explicitly* supplied `data =` in that layer.**  
+>    You didn’t, so each layer’s `$data` is just a **waiver**.
+> 
+> 2. **The actual data that gets drawn only exists *after* ggplot has been built**, i.e. after scales, stats, etc. That’s what `ggplot_build(plot)$data` gives you.
+> 
+> Let’s walk through your example.
+> 
+> ```r
+> plot <- ggplot(df, aes(IDYEARS, frac, colour=VARIABLE)) +
+>     geom_hline(aes(yintercept=0)) +
+>     geom_line(linewidth=1)
+> ```
+> 
+> ### What’s in `plot$data` and `plot$layers[[i]]$data`?
+> 
+> - `plot$data` is your `df`.
+> - Each layer inherits that data **unless** you pass `data =` in the layer:
+> 
+> ```r
+> geom_line(data = df_subset, ...)
+> ```
+> 
+> Because you didn’t, both layers’ `$data` are just “use the default”:
+> 
+> ```r
+> plot$layers[[1]]$data
+> # list()
+> # attr(,"class")
+> # [1] "waiver"
+> 
+> plot$layers[[2]]$data
+> # list()
+> # attr(,"class")
+> # [1] "waiver"
+> ```
+> 
+> `waiver` is a special ggplot2 sentinel meaning “not specified; please inherit from the parent”.
+> 
+> So at this stage:
+> 
+> - There is **one** actual data frame (`df`) at `plot$data`.
+> - The layers don’t carry their own copies of it; they just point back via the waiver.
+> 
+> ### Where does `ggplot_build(plot)$data` come from then?
+> 
+> When you do:
+> 
+> ```r
+> build <- ggplot_build(plot)
+> build$data
+> ```
+> 
+> ggplot2 does the full pipeline:
+> 
+> 1. Start from `plot$data` (`df`) and inherited mappings (`aes(IDYEARS, frac, colour=VARIABLE)`).
+> 2. For each layer:
+>    - Resolve data inheritance (replace `waiver` with `plot$data` where appropriate).
+>    - Apply stats, positions, transformations, etc.
+>    - Produce the actual data frame used for drawing.
+> 
+> For your layers:
+> 
+> - `geom_hline(aes(yintercept = 0))`  
+>   This doesn’t use `df` rows; it creates a one-row “dummy” data frame:
+> 
+>   ```r
+>   build$data[[1]]
+>   #   yintercept x y PANEL group colour size linetype alpha
+>   # 1          0 NA NA     1    -1   ...   ...
+>   ```
+> 
+> - `geom_line()`  
+>   This uses the inherited `df`, turned into plotting coordinates:
+> 
+>   ```r
+>   build$data[[2]]
+>   # same number of rows as df, plus .panel, .group, scaled x/y, etc.
+>   ```
+> 
+> But the important bit: **this constructed data lives only in the built object, not back in `plot$layers[[i]]$data`.**
+> 
+> ### Why your function struggles
+> 
+> Your code assumes:
+> 
+> - `plot$layers[[i]]$data` holds “raw” data for each layer.
+> - `ggplot_build(plot)$data[[i]]` holds “plot” data, and you might `cbind` them.
+> 
+> For this plot:
+> 
+> - `plot$layers[[1]]$data` is a *waiver*, not a data.frame.
+> - `plot$layers[[2]]$data` is also a *waiver*.
+> - The only “true” original data is `plot$data` (your `df`).
+> - The only “plot-ready” data is in `build$data[[1]]` and `build$data[[2]]`.
+> 
+> So it’s not that “ggplot forgot the data”, it’s that the design is:
+> 
+> - Global data at `plot$data`
+> - Per‑layer data **only when you override**
+> - Fully materialized per‑layer data only after `ggplot_build()`
+> 
+> ### What to do in practice
+> 
+> For the kind of export your editor wants, I’d recommend:
+> 
+> 1. **Prefer `plot$data` as the “raw” dataset** for the figure.
+> 2. Only look at `plot$layers[[i]]$data` when it’s *not* a waiver (i.e., someone explicitly supplied `data =`).
+> 3. Use `ggplot_build(plot)$data` **only** if you truly need the post‑stat/scale data.
+> 
+> A minimal, robust pattern:
+> 
+> ```r
+> export_plot_data <- function(plot, path) {
+>   build <- ggplot_build(plot)
+> 
+>   # base data (what user supplied to ggplot())
+>   base_data <- plot$data
+> 
+>   # resolve per-layer "raw" data: fallback to base_data when data is a waiver
+>   layer_raw <- lapply(plot$layers, function(lyr) {
+>     if (inherits(lyr$data, "waiver")) base_data else lyr$data
+>   })
+> 
+>   # built data (one per layer)
+>   layer_built <- build$data
+> 
+>   # build sheets
+>   sheets <- vector("list", length(plot$layers))
+>   names(sheets) <- paste0("layer_", seq_along(plot$layers))
+> 
+>   for (i in seq_along(plot$layers)) {
+>     raw   <- layer_raw[[i]]
+>     built <- layer_built[[i]]
+> 
+>     # If no raw data (e.g. pure hline from mapping only), just use built
+>     if (is.null(raw) || nrow(raw) == 0) {
+>       sheets[[i]] <- built
+>       next
+>     }
+> 
+>     # If built data is empty or mismatched in length, just use raw
+>     if (is.null(built) || nrow(built) == 0 || nrow(raw) != nrow(built)) {
+>       sheets[[i]] <- raw
+>       next
+>     }
+> 
+>     # Otherwise, combine
+>     sheets[[i]] <- cbind(raw, built)
+>   }
+> 
+>   openxlsx::write.xlsx(sheets, file = path)
+> }
+> ```
+> 
+> For your specific plot, though, the cleanest “editor-facing” dataset is simply:
+> 
+> ```r
+> plot_df <- df[, c("IDYEARS", "frac", "VARIABLE")]
+> ```
+> 
+> The `geom_hline(yintercept = 0)` is just an annotation, not really “data.”
+> 
+> ---
+> 
+> If you’d like, I can help you turn this into an `export_figure_data(plot, filebase, mode = c("raw", "built", "both"))` helper, with rules like “ignore GeomHline/GeomVline for the export”.
+**user**:
+> I also see that even though $data and plotdata have the same number of rows, they aren't ordered the same. Is there a way to infer the mapping between them?
+**assistant**:
+> Yes, you can, but you have to be explicit about *how* you match them. ggplot doesn’t store a direct “row index” linking `plot$data` to `ggplot_build(plot)$data[[i]]`, and stats/positions can reorder rows. So any mapping has to be inferred from variables that uniquely identify each row.
+> 
+> ### 1. When a clean mapping is possible
+> 
+> If the layer is essentially `stat_identity` (no aggregation) and you haven’t dropped/duplicated rows, then the built data will typically be a permutation of the original data with extra columns (like `x`, `y`, `PANEL`, `group`, etc.).
+> 
+> In that case you can:
+> 
+> 1. Define a set of *key columns* that together uniquely identify each row in the original data.
+> 2. Use those keys to join the built data back to the original data.
+> 
+> For example, with your plot:
+> 
+> ```r
+> p <- ggplot(df, aes(IDYEARS, frac, colour=VARIABLE)) +
+>   geom_line(linewidth=1)
+> ```
+> 
+> The natural key is `IDYEARS` + `VARIABLE` (assuming one row per combo):
+> 
+> ```r
+> build <- ggplot_build(p)
+> layer_built <- build$data[[1]]  # layer for geom_line
+> 
+> # Raw data (inherited from p$data)
+> raw <- p$data
+> 
+> # Choose key columns that uniquely identify rows
+> keys <- c("IDYEARS", "VARIABLE")
+> 
+> # Check for uniqueness as a sanity check
+> stopifnot(nrow(raw) == nrow(dplyr::distinct(raw, !!!rlang::syms(keys))))
+> stopifnot(nrow(layer_built) == nrow(dplyr::distinct(layer_built, !!!rlang::syms(keys))))
+> 
+> # Join built data back to raw data in a way that reorders built to match raw
+> merged <- dplyr::left_join(
+>   raw,
+>   layer_built,
+>   by = keys,
+>   suffix = c(".raw", ".built")
+> )
+> ```
+> 
+> Now `merged` is in the same row order as `raw`, but includes all the plotting variables (scaled `x`, `y`, etc.) from `layer_built`. The key columns act as your inferred mapping.
+> 
+> If you’re not using dplyr:
+> 
+> ```r
+> merged <- merge(raw, layer_built, by = c("IDYEARS", "VARIABLE"), sort = FALSE)
+> # this may still reorder; you can re-sort merged to match raw if needed:
+> idx <- match(
+>   interaction(raw$IDYEARS, raw$VARIABLE),
+>   interaction(merged$IDYEARS, merged$VARIABLE)
+> )
+> merged <- merged[idx, ]
+> ```
+> 
+> ### 2. General pattern for a function
+> 
+> You can turn that idea into a helper that takes a ggplot object and a set of key columns:
+> 
+> ```r
+> map_raw_to_built <- function(plot, layer = 1, keys) {
+>   build <- ggplot_build(plot)
+>   built <- build$data[[layer]]
+> 
+>   # Determine raw data for this layer: inherit from plot$data if waiver
+>   lyr <- plot$layers[[layer]]
+>   if (inherits(lyr$data, "waiver")) {
+>     raw <- plot$data
+>   } else {
+>     raw <- lyr$data
+>   }
+> 
+>   # Check that keys exist
+>   if (!all(keys %in% names(raw)) || !all(keys %in% names(built))) {
+>     stop("Some key columns not found in both raw and built data.")
+>   }
+> 
+>   # Optional: sanity checks for uniqueness
+>   # if (nrow(raw) != nrow(unique(raw[keys]))) stop("Keys not unique in raw.")
+>   # if (nrow(built) != nrow(unique(built[keys]))) stop("Keys not unique in built.")
+> 
+>   # Merge and restore raw’s row order
+>   merged <- merge(raw, built, by = keys, all.x = TRUE, sort = FALSE)
+>   idx <- match(
+>     do.call(interaction, raw[keys]),
+>     do.call(interaction, merged[keys])
+>   )
+>   merged[idx, ]
+> }
+> ```
+> 
+> Usage for your plot:
+> 
+> ```r
+> merged <- map_raw_to_built(plot, layer = 2, keys = c("IDYEARS", "VARIABLE"))
+> ```
+> 
+> Layer 1 (`geom_hline`) doesn’t really map to `df` rows at all, so you’d ignore it.
+> 
+> ### 3. When it is *not* really possible
+> 
+> There are cases where you cannot sensibly define a 1:1 mapping:
+> 
+> - **Aggregating stats**: `stat_smooth()`, `stat_summary()`, `geom_boxplot()`, etc. combine multiple raw rows into a single built row (or a few). Then the mapping is many-to-one or many-to-few, not a permutation.
+> - **Jitter/dodge with grouping**: sometimes the built data includes duplicated or expanded rows (e.g., count-based stats, binning).
+> - **Facets**: still usually OK if your key columns include the facet variables, but be careful.
+> 
+> In those cases, you can either:
+> 
+> - Accept that the mapping is *conceptual* (e.g., “this smoothed line comes from all rows in group X”), or
+> - Export two datasets:
+>   - “Raw data for the figure” (the original df you think of as your scientific data).
+>   - “Derived plotting data” (e.g., the smoothed line coordinates from `ggplot_build`).
+> 
+> For a journal, that’s often what they actually want.
+> 
+> ### 4. Recommendation for your situation
+> 
+> For your line plot:
+> 
+> - The cleanest mapping is on `IDYEARS` + `VARIABLE`.
+> - Use that to merge `df` with `ggplot_build(plot)$data[[2]]` (the line layer), and ignore the hline layer entirely.
+> 
+> If you’d like, paste the structure of `str(df)` and `head(ggplot_build(plot)$data[[2]])`, and I can give you a very compact, concrete snippet that does the join and preserves exactly the ordering you prefer.

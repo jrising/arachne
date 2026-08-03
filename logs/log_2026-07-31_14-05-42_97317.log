@@ -1,0 +1,2807 @@
+**user**:
+> I am developing a stock market prediction ecosystem, and my main problem right now is that I need to limit the number of tickers I track. Downloading the tickers each day (I just get opening, closing, and current prices) takes time and pushes me against some query limits in Julia's YFinance package. So my main question is, how can I identify high-quality stock to track? I want stocks that see good trading, but I don't want to be limited to, e.g., the S&P 500.
+**assistant**:
+> Do not define your tracking universe as “the most famous stocks.” Define it as a **liquid, investable, diverse, and stable security universe** that you can maintain cheaply.
+> 
+> The key distinction is:
+> 
+> - **Tradability / data quality:** Can you reliably obtain and act on a price signal?
+> - **Business quality:** Is the company financially durable/profitable?
+> - **Predictive value:** Does including this ticker improve your strategy after costs and realistic execution?
+> 
+> A stock can be excellent on one dimension and poor on the others.
+> 
+> ## Recommended approach: a tiered, rules-based universe
+> 
+> Rather than tracking every listed stock or only an index, maintain:
+> 
+> 1. **Core universe** — highly liquid stocks downloaded daily.
+> 2. **Discovery universe** — a rotating set of less-liquid but potentially useful stocks, refreshed less often.
+> 3. **Candidate master list** — broad listing universe, screened monthly or quarterly.
+> 
+> For example:
+> 
+> | Tier | Purpose | Typical size | Refresh frequency |
+> |---|---:|---:|---:|
+> | Core | Production predictions / realistic trading | 500–1,500 | Daily prices |
+> | Discovery | Find emerging opportunities and test coverage | 200–1,000 | Weekly or monthly prices |
+> | Candidate list | Broad screening universe | 3,000–8,000 US common stocks | Monthly/quarterly metadata and liquidity screen |
+> 
+> This lets you cover much more than the S&P 500 without paying to query everything every day.
+> 
+> ---
+> 
+> ## Start from a broad, non-index-constrained universe
+> 
+> For a US-focused system, begin with all eligible **NYSE, Nasdaq, and NYSE American common stocks**, then filter. Include or exclude ADRs deliberately.
+> 
+> Usually exclude:
+> 
+> - ETFs, mutual funds, closed-end funds, ETNs
+> - preferred shares
+> - warrants, rights, units
+> - leveraged/inverse products
+> - OTC stocks, unless you have a specific OTC strategy
+> - extremely recent IPOs, perhaps those with under 3–6 months of trading history
+> - stocks consistently priced below, say, \$3–5
+> 
+> You can generate the starting list from exchange symbol directories, a commercial reference-data source, or a free listing source. The point is that the **index is not the source of truth**; it is only one possible source of candidates.
+> 
+> A useful compromise is to seed the candidate list from the union of:
+> 
+> - broad US listings;
+> - constituents of broad-market ETFs/indexes (Russell 3000, CRSP, S&P 1500, etc., where licensing/data permits);
+> - holdings of liquid sector ETFs;
+> - optionally, major non-US ADRs.
+> 
+> Then apply your own eligibility rules.
+> 
+> ---
+> 
+> ## The most important filter: dollar liquidity
+> 
+> Raw share volume is misleading: 10 million shares of a \$1 stock is not equivalent to 10 million shares of a \$100 stock.
+> 
+> Use **median daily dollar volume**:
+> 
+> \[
+> \mathrm{ADDV}_{i} =
+> \operatorname{median}_{t \in \mathrm{last\ 60\ trading\ days}}
+> \left(P_{i,t} \times V_{i,t}\right)
+> \]
+> 
+> where \(P\) can be close or typical price.
+> 
+> I would generally use a 60-day median rather than a mean, since it is less distorted by one news-driven spike.
+> 
+> Illustrative thresholds:
+> 
+> | Universe type | 60-day median daily dollar volume |
+> |---|---:|
+> | Broad but reasonably tradable | > \$2–5 million/day |
+> | Strong production universe | > \$10–20 million/day |
+> | Institutional-scale or short-horizon strategies | > \$50–100 million/day |
+> 
+> The right threshold depends on your intended position sizes. A practical rule is that your intended daily trade should be a very small fraction of normal daily dollar volume—often well under 1%, and more conservatively under 0.1–0.25%.
+> 
+> If you only have daily OHLCV data, dollar volume is probably your best first-order liquidity measure. If you later obtain bid/ask data, add median quoted spread and market depth.
+> 
+> ---
+> 
+> ## A sensible eligibility screen
+> 
+> For each ticker, evaluate eligibility monthly or quarterly:
+> 
+> ```text
+> Eligible if all hold:
+> 
+> - Common equity on a supported primary exchange
+> - At least 180 trading days of price history
+> - Price >= $5
+> - Market capitalization >= $500 million or $1 billion
+> - Median 60-day dollar volume >= $10 million
+> - Traded on at least 95% of the past 60 sessions
+> - No obvious data-quality flags or prolonged halts
+> ```
+> 
+> The market-cap floor is not strictly necessary, but it removes many securities where prices are fragile, corporate events are frequent, and daily Yahoo-quality data are more likely to be awkward.
+> 
+> For a more inclusive discovery tier, relax this—for example, \$2 million median daily dollar volume and \$250 million market cap—while keeping it out of the production trading universe until it qualifies.
+> 
+> ---
+> 
+> ## Rank eligible stocks instead of applying only hard cutoffs
+> 
+> After eligibility filtering, rank stocks using a composite score. For example:
+> 
+> \[
+> S_i =
+> 0.45\,R(\log \mathrm{ADDV}_i)
+> + 0.20\,R(\log \mathrm{MarketCap}_i)
+> + 0.15\,R(\mathrm{TradingFrequency}_i)
+> + 0.10\,R(-\mathrm{Volatility}_i)
+> + 0.10\,R(\mathrm{DataCompleteness}_i)
+> \]
+> 
+> where \(R(\cdot)\) is a percentile rank among eligible stocks.
+> 
+> This produces a stable ranking while retaining flexibility. You could then select:
+> 
+> - the top 800–1,200 overall;
+> - subject to sector caps or minimum sector representation;
+> - plus a rotating discovery set.
+> 
+> I would use **sector quotas or caps**, because a pure liquidity ranking will heavily concentrate in technology, financials, mega-cap consumer, and a few heavily traded speculative names.
+> 
+> For example:
+> 
+> ```text
+> Select the top 1,000 names by composite score,
+> but no sector may exceed 25% of the universe,
+> and each sufficiently liquid sector receives at least 30 names.
+> ```
+> 
+> That is not necessarily the ideal trading portfolio; it is a better **research and prediction universe**. It ensures that your model sees different market regimes and business types.
+> 
+> ---
+> 
+> ## Add business-quality metrics only if they serve your strategy
+> 
+> If by “high-quality stock” you mean financially strong companies rather than merely liquid securities, add a separate **fundamental quality score**. Typical components include:
+> 
+> - profitability: ROIC, ROA, gross profitability, operating margin;
+> - cash generation: free-cash-flow margin or FCF yield;
+> - balance-sheet resilience: net debt/EBITDA, interest coverage;
+> - earnings stability: frequency and magnitude of negative earnings surprises;
+> - dilution: change in shares outstanding;
+> - accounting quality: accruals, cash conversion, abnormal working-capital behavior.
+> 
+> Keep this separate from liquidity:
+> 
+> \[
+> \mathrm{UniverseScore}_i =
+> w_L \mathrm{LiquidityScore}_i
+> + w_Q \mathrm{FundamentalQualityScore}_i
+> + w_D \mathrm{DataScore}_i
+> \]
+> 
+> However, I would not filter too aggressively on fundamental quality at the universe-construction stage unless your intended strategy specifically targets quality. Otherwise, you risk excluding the distressed, cyclical, or turnaround stocks where some predictive signals may matter most.
+> 
+> A useful compromise:
+> 
+> - **Core tradable universe:** based mainly on liquidity, price, age, and data completeness.
+> - **Quality label/features:** used by the prediction or portfolio model, not necessarily as a hard inclusion rule.
+> 
+> ---
+> 
+> ## Avoid daily reconstitution
+> 
+> Do not let a stock enter or leave the universe every day merely because it crossed a liquidity threshold.
+> 
+> Use:
+> 
+> - **monthly eligibility review**;
+> - **quarterly full reconstitution**;
+> - an entry threshold stricter than the retention threshold.
+> 
+> For example:
+> 
+> ```text
+> New entrant: median 60-day dollar volume >= $15m
+> Existing member remains: median 60-day dollar volume >= $8m
+> ```
+> 
+> This hysteresis prevents churn and makes both your data pipeline and backtests more stable.
+> 
+> You can still remove a ticker immediately for delisting, acquisition, a long trading halt, or persistent missing data.
+> 
+> ---
+> 
+> ## Design the data pipeline so the universe, not Yahoo, is the bottleneck
+> 
+> Your current constraint sounds partly architectural: you should not need to re-download a ticker’s entire history every day.
+> 
+> Maintain a local, analysis-ready price store—ideally partitioned Parquet or DuckDB—containing at least:
+> 
+> ```text
+> ticker
+> date
+> open
+> high
+> low
+> close
+> adjusted_close
+> volume
+> source_timestamp
+> ```
+> 
+> Then:
+> 
+> 1. Download full or long history only when a ticker first enters your tracked universe.
+> 2. On normal days, request only the missing dates since the last stored observation.
+> 3. Query intraday/current prices only for the relatively small set of names actually eligible for trading that day.
+> 4. Persist raw responses or normalized daily bars locally.
+> 5. Refresh the universe screen monthly, rather than repeatedly querying metadata daily.
+> 
+> For most daily or multi-day prediction systems, the prior official close plus today’s open is vastly more important and reproducible than a constantly refreshed “current price.” Treat the current price as an **execution-state input**, not as a core historical feature that must be collected for every candidate ticker.
+> 
+> ---
+> 
+> ## A practical initial specification
+> 
+> If I were building your first production version, I would start here:
+> 
+> ```text
+> Market:
+>   US-listed common equities, including eligible ADRs
+> 
+> Core universe:
+>   1,000 stocks
+> 
+> Entry criteria:
+>   - price >= $5
+>   - market cap >= $1bn
+>   - at least 180 trading days since IPO/listing
+>   - median 60-day dollar volume >= $15m
+>   - traded on >=
+**user**:
+> Okay, these seem like reasonable criteria. Before I ask you to help write a new system, let's talk about functions you want to get documentation for from the services I use. I currently rely on:
+>  - YFinancie in Julia. I use `get_prices(symbol::String; range::String="5d", interval::String="1d", startdt::Union{Date,DateTime,AbstractString}="", enddt::Union{Date,DateTime,AbstractString}="", prepost::Bool=false, autoadjust::Bool=true, timeout::Int=10, throw_error::Bool=false, exchange_local_time::Bool=false, divsplits::Bool=false, wait::Float64=0.0)` and `get_quoteSummary(symbol::String; item=nothing)`, but there is also `get_symbols(search_term::String)`, `get_all_symbols(market::T)::Vector{T} where {T<:String}`, and `search_news(str::String;lang="en-us")`.
+>  - Schwab's API in python. This has the functions:
+> Quotes
+> Get Quotes Web Service.
+> 
+> 
+> 
+> GET
+> /quotes
+> Get Quotes by list of symbols.
+> 
+> 
+> GET
+> /{symbol_id}/quotes
+> Get Quote by single symbol.
+> 
+> Option Chains
+> Get Option Chains Web Service.
+> 
+> 
+> 
+> GET
+> /chains
+> Get option chain for an optionable Symbol
+> 
+> Option Expiration Chain
+> Get Option Expiration Chain Web Service.
+> 
+> 
+> 
+> GET
+> /expirationchain
+> Get option expiration chain for an optionable symbol
+> 
+> PriceHistory
+> Get Price History Web Service.
+> 
+> 
+> 
+> GET
+> /pricehistory
+> Get PriceHistory for a single symbol and date ranges.
+> 
+> Movers
+> Get Movers Web Service.
+> 
+> 
+> 
+> GET
+> /movers/{symbol_id}
+> Get Movers for a specific index.
+> 
+> MarketHours
+> Get MarketHours Web Service.
+> 
+> 
+> 
+> GET
+> /markets
+> Get Market Hours for different markets.
+> 
+> 
+> GET
+> /markets/{market_id}
+> Get Market Hours for a single market.
+> 
+> Instruments
+> Get Instruments Web Service.
+> 
+> 
+> 
+> GET
+> /instruments
+> Get Instruments by symbols and projections.
+> 
+> 
+> GET
+> /instruments/{cusip_id}
+> Get Instrument by specific cusip
+**assistant**:
+> For designing the tracking/universe system, I would want documentation or example responses for a fairly small subset first. The central question is: **which service should be authoritative for which kind of data?**
+> 
+> My preliminary recommendation would be:
+> 
+> - **Schwab:** authoritative for current quotes, historical bars, optionability/options, market hours, and perhaps tradability-oriented metadata.
+> - **YFinance.jl:** useful as a broad discovery and supplementary fundamental/news source, but not the sole production source for price data if Schwab is available.
+> - **Your local database:** authoritative for all historical data once collected.
+> 
+> ## Highest-priority documentation
+> 
+> ### 1. Schwab `GET /quotes` — essential
+> 
+> This is likely the most important endpoint for a daily system, because batch quote retrieval may solve much of the ticker-query problem.
+> 
+> Please get documentation for:
+> 
+> - Maximum number of symbols per request
+> - How multiple symbols are passed (`symbols=AAPL,MSFT`, repeated query parameters, etc.)
+> - Supported `fields` or projection parameters
+> - Response fields and nested structure, especially:
+>   - symbol and asset type
+>   - bid / ask / bid size / ask size
+>   - last price
+>   - mark price
+>   - open, high, low, close
+>   - prior close
+>   - total volume
+>   - quote timestamp and trade timestamp
+>   - exchange / exchange name
+>   - 52-week high/low, if available
+>   - volatility or other risk fields, if available
+>   - market capitalization, shares outstanding, and P/E, if provided
+>   - whether a symbol is delayed or real-time
+> - Whether the endpoint returns partial successes if some symbols are invalid/unavailable
+> - Rate limits: per request, per minute, per day, and concurrent requests
+> - Entitlement requirements for real-time quotes
+> - Whether pricing fields are available outside regular hours, and how pre-/post-market prices are labeled.
+> 
+> A representative JSON response for a few equities—e.g. `AAPL, MSFT, BRK.B, SPY`—would be especially useful. It will reveal symbol normalization issues early.
+> 
+> ---
+> 
+> ### 2. Schwab `GET /pricehistory` — essential
+> 
+> This should be the primary endpoint for backfilling and incrementally updating daily prices, assuming its limits and retention are workable.
+> 
+> Please get:
+> 
+> - All request parameters:
+>   - `symbol`
+>   - `periodType`, `period`
+>   - `frequencyType`, `frequency`
+>   - `startDate`, `endDate`
+>   - `needExtendedHoursData`
+>   - `needPreviousClose`
+>   - any others
+> - Valid combinations of period and frequency.
+> - Historical retention limits, particularly for:
+>   - daily bars;
+>   - weekly/monthly bars;
+>   - 1-minute, 5-minute, 15-minute, etc. intraday bars.
+> - Whether dates/timestamps are UTC, US/Eastern, exchange-local, or epoch milliseconds.
+> - The meaning of bar fields:
+>   - `open`, `high`, `low`, `close`, `volume`, `datetime`;
+>   - adjusted versus unadjusted prices;
+>   - split adjustment;
+>   - dividend adjustment.
+> - Whether the returned `close` is official close, last regular-session trade, or something else.
+> - Whether a result includes current/incomplete daily candles while the market is open.
+> - Maximum request frequency / rate limits.
+> - Behavior for delisted tickers, renamed securities, mergers, and symbols with no price history.
+> - Example daily-bar response and example intraday-bar response.
+> 
+> This endpoint determines whether we can calculate rolling liquidity measures locally:
+> 
+> \[
+> \mathrm{median\ dollar\ volume}_{60d}
+> =
+> \operatorname{median}\left(
+> \mathrm{close}_t \times \mathrm{volume}_t
+> \right).
+> \]
+> 
+> If so, we may not need a separate external liquidity-data provider.
+> 
+> ---
+> 
+> ### 3. Schwab `GET /instruments` — essential for universe construction
+> 
+> This is the endpoint most likely to help identify the broad candidate universe and classify securities correctly.
+> 
+> Please obtain documentation for:
+> 
+> - Valid `projection` values and their intended use:
+>   - symbol search;
+>   - descriptive search;
+>   - fundamental data;
+>   - regex search;
+>   - CUSIP search;
+>   - any “all” or listing-related projection.
+> - Whether it supports a way to retrieve **all US-listed equities**, or only search-based discovery.
+> - Maximum result count and pagination behavior.
+> - Whether the response includes:
+>   - asset type;
+>   - security type/subtype;
+>   - exchange;
+>   - CUSIP;
+>   - ISIN, if available;
+>   - description;
+>   - whether the security is an ETF, mutual fund, ADR, preferred stock, warrant, right, or ordinary common stock;
+>   - IPO/listing date;
+>   - delisting status;
+>   - fundamental fields such as market capitalization, shares outstanding, P/E, dividend yield, etc.
+> - Exact semantics and update frequency of any fundamental data.
+> - An example response for:
+>   - an ordinary US common stock (`AAPL`);
+>   - an ETF (`SPY`);
+>   - an ADR (`TSM`);
+>   - a special ticker class if available, such as a preferred share or warrant.
+> 
+> The major design issue: if Schwab cannot provide a bulk US equity symbol directory, then it is probably not the right source for the initial candidate universe—even if it is the right source for prices and quotes.
+> 
+> ---
+> 
+> ### 4. YFinance.jl `get_all_symbols` and `get_symbols` — high priority
+> 
+> For these two, I want to know whether they can practically support broad discovery.
+> 
+> #### `get_all_symbols(market)`
+> 
+> Please find:
+> 
+> - Valid values of `market`.
+> - What each result actually contains:
+>   - ticker only?
+>   - company name?
+>   - exchange?
+>   - quote type/security class?
+>   - active versus inactive status?
+> - Whether it covers all US exchanges or only a Yahoo-defined market universe.
+> - Whether ETFs, funds, warrants, crypto, indices, and OTC symbols are mixed in.
+> - Whether pagination/limits exist.
+> - Whether the result is cached by the package or always downloaded.
+> - Any documented or observed query/rate limits.
+> - Whether the symbols are Yahoo symbols specifically—and therefore whether they require normalization before use at Schwab.
+> 
+> #### `get_symbols(search_term)`
+> 
+> Please obtain:
+> 
+> - Search-result fields: symbol, exchange, quote type, name, market state, etc.
+> - Maximum number of returned matches.
+> - Whether it is suitable only for human-style text search, or could be used systematically.
+> - How ambiguous ticker formats are represented, especially:
+>   - `BRK.B` versus `BRK-B`;
+>   - preferred shares;
+>   - foreign listings and ADRs;
+>   - class shares.
+> 
+> My expectation is that `get_symbols` is not useful for bulk universe construction; it is primarily a convenience for resolving unknown symbols. But documentation/examples will confirm that.
+> 
+> ---
+> 
+> ## Important, but secondary, documentation
+> 
+> ### 5. Schwab `GET /chains` and `/expirationchain`
+> 
+> These matter if options data will inform:
+> 
+> - optionability;
+> - implied volatility;
+> - put/call skew;
+> - open interest;
+> - unusual options activity;
+> - forward-looking market expectations.
+> 
+> For now, get documentation on:
+> 
+> - all request parameters;
+> - response schema;
+> - whether delayed versus real-time Greeks/quotes are distinguished;
+> - strike/expiration limits;
+> - rate limits;
+> - whether open interest and volume are provided;
+> - contract symbol formatting;
+> - whether `expirationchain` is redundant with expiration information returned by `chains`.
+> 
+> I would **not** query chains daily for every tracked stock initially. That becomes expensive quickly. A better later design is to retrieve options data only for:
+> 
+> - stocks already in the core universe;
+> - optionable stocks above a liquidity threshold;
+> - perhaps a subset selected by your equity model or event calendar.
+> 
+> ---
+> 
+> ### 6. Schwab `GET /movers`
+> 
+> Potentially useful as a compact discovery signal, but not as the basis of your universe.
+> 
+> Please get:
+> 
+> - Supported `symbol_id` values—e.g., `$SPX`, `$DJI`, `$COMPX`, sector indices, etc.
+> - Time horizons supported.
+> - Whether “movers” are ranked by percentage change, volume, dollar volume, unusual activity, or another criterion.
+> - Maximum results.
+> - Exchange/asset-class coverage.
+> - Whether it runs in pre-market/post-market.
+> 
+> This can populate a small rotating “attention” or discovery tier, but it will systematically emphasize event-driven stocks. That can be valuable for a short-horizon model, but it is not representative of the market.
+> 
+> ---
+> 
+> ### 7. Schwab `GET /markets` / `/markets/{market_id}`
+> 
+> This is operationally important, though not central to security selection.
+> 
+> We need:
+> 
+> - Market identifiers for equities, options, etc.
+> - Session timestamps and time zone.
+> - Holiday and early-close behavior.
+> - Whether the response distinguishes pre-market, regular trading, and post-market.
+> - How far ahead the calendar is available.
+> 
+> This should define your scheduler. For example, daily close ingestion should not run at a fixed clock time without checking that the relevant market session has completed.
+> 
+> ---
+> 
+> ## Lower priority for the initial universe system
+> 
+> ### YFinance.jl `get_quoteSummary`
+> 
+> This may be useful for fundamental quality features, but it is potentially expensive and uneven across tickers.
+> 
+> Please get the documentation for:
+> 
+> - All available `item` values.
+> - Whether multiple items can be requested together.
+> - Which items contain:
+>   - market cap;
+>   - shares outstanding;
+>   - financial statements;
+>   - valuation measures;
+>   - profitability;
+>   - debt;
+>   - analyst estimates;
+>   - sector/industry;
+>   - corporate actions.
+> - Rate limits and whether requesting `item=nothing` is substantially more costly.
+> - Missing-data behavior.
+> - Whether financial statement frequencies and reporting dates are clearly represented.
+> 
+> I would likely use it for **monthly or quarterly enrichment**, not daily collection. Financial fundamentals simply do not justify daily downloads for thousands of tickers.
+> 
+> ### YFinance.jl `search_news`
+> 
+> This is useful only if news/NLP is part of the intended model. It is not needed to establish a liquid stock universe.
+> 
+> If you expect to use it, obtain:
+> 
+> - result schema;
+> - result limits and pagination;
+> - timestamps/time-zone behavior;
+> - publisher/source fields;
+> - article URLs;
+> - rate limits;
+> - whether the service permits storage and downstream text extraction under its terms.
+> 
+> ---
+> 
+> ## A useful source-of-truth map
+> 
+> | Data type | Preferred source | Collection frequency |
+> |---|---|---|
+> | Candidate symbols and security classification | Exchange directory or dedicated reference source; Schwab/Yahoo as supplements | Monthly/quarterly |
+> | Daily OHLCV | Schwab `pricehistory`, then local storage | Daily incremental |
+> | Current tradable quote | Schwab batch `quotes` | During market hours, only for active trading universe |
+> | Market schedule | Schwab `markets` | Cache and refresh periodically |
+> | Corporate actions | A dedicated corporate-actions source, or validated price-history adjustment metadata | Daily/weekly |
+> | Fundamentals / sector / industry | YFinance `quoteSummary` or a dedicated fundamentals provider | Quarterly/monthly |
+> | Options data | Schwab chains | Selectively, not universal daily |
+> | News | Dedicated news feed or Yahoo search | Only if a modeled feature |
+> 
+> ---
+> 
+> ## One critical question: can Schwab provide bulk symbols?
+> 
+> The single most important documentation finding is whether Schwab can provide a sufficiently broad, current list of US equities.
+> 
+> If **yes**, we can make Schwab the main source for discovery, screening, price history, and current quotes.
+> 
+> If **no**, we should use a separate, low-cost listing directory as the candidate master list, then use Schwab only after filtering. A clean source
+**user**:
+> I don't think Schwab can get us that list. I'm not opposed to using additional services, if it makes sense, but I don't want to spend money on this step.
+> 
+> Can you now generate a system (in python or Julia) which does the following:
+>  - Collects a candidate stock list from a reliable source.
+>  - Also reads a "stocks.yml" file that lists the stocks we actually use. This file is formatted:
+> ```
+> stocks:
+>   - company_name: Nokia Corporation
+>     ticker_symbol: NOK
+>     sector: Information Technology
+>     description: Major player in networking and telecommunications.
+> 
+>   - company_name: Ally Financial Inc.
+>     ticker_symbol: ALLY
+>     sector: Financials
+>     description: Online bank with various financial services.
+> 
+> ...
+> ```
+>  - Evaluates a random N stocks from these sources (I'll be doing this iteratively, so I don't want to evaluate them all at once), using both hard cut-off criteria and continuous scoring.
+>  - Proposes M < N stocks for inclusion. This should be based on both a relative score (top x% of the N stocks) and an absolute score (scores < 1 always fail).
+>  - For any stocks that are in our current list, but not recommended for inclusion (so, which we propose to drop), check to see if we currently own any of these stocks. If we do, just mark that stock in `stocks.yml` with the flag "sell-only".
+>  - Update the `stocks.yml` file with the new list of stocks.
+**assistant**:
+> Below is a Python implementation designed around:
+> 
+> - **Nasdaq Trader symbol-directory files** as a free, reasonably reliable candidate source;
+> - **Schwab** for daily price history, quotes, and current positions;
+> - your existing `stocks.yml` as the controlled production universe;
+> - incremental, reproducible random evaluation of only `N` names at a time;
+> - local Parquet caching of price histories;
+> - a conservative update policy:
+>   - recommended new candidates are added;
+>   - assessed current stocks that fail are removed if flat;
+>   - assessed current stocks that fail but are still held become `status: sell-only`;
+>   - unassessed stocks remain unchanged.
+> 
+> Nasdaq Trader directories are not perfect security-classification data, so the system uses both their ETF/test flags and conservative name-based exclusions. In a later version, I would add a better security-master source or Schwab instrument validation step, but this is a good zero-cost first system.
+> 
+> ---
+> 
+> ## Dependencies
+> 
+> ```bash
+> pip install pandas numpy requests ruamel.yaml pyarrow pandas-market-calendars python-dotenv
+> ```
+> 
+> Create a `.env` file:
+> 
+> ```bash
+> SCHWAB_ACCESS_TOKEN=your_current_oauth_access_token
+> SCHWAB_ACCOUNT_HASH=your_schwab_account_hash
+> ```
+> 
+> In
+**user**:
+> Something happened with your text. Can you try again?
+**assistant**:
+> Yes — the previous response was truncated. Here is a complete, deliberately compact Python system.
+> 
+> It uses:
+> 
+> - the free Nasdaq Trader symbol directories as the candidate source;
+> - Schwab price history and quotes for screening;
+> - a local `positions.json` file for current holdings, because the Schwab endpoints you listed do not include an account-positions endpoint;
+> - `stocks.yml` as the maintained tracked-stock list;
+> - a local cache and review-state file, so each run can examine a random new batch rather than re-screening everything.
+> 
+> ## 1. Install dependencies
+> 
+> ```bash
+> pip install pandas numpy requests pyyaml pyarrow
+> ```
+> 
+> Set your Schwab token:
+> 
+> ```bash
+> export SCHWAB_ACCESS_TOKEN="your-token"
+> ```
+> 
+> Optionally set the base URL if needed:
+> 
+> ```bash
+> export SCHWAB_BASE_URL="https://api.schwabapi.com"
+> ```
+> 
+> Create `positions.json`:
+> 
+> ```json
+> {
+>   "owned_tickers": ["NOK", "ALLY"]
+> }
+> ```
+> 
+> This file can later be replaced by a Schwab account-positions API adapter.
+> 
+> ---
+> 
+> ## 2. Save as `stock_universe.py`
+> 
+> ```python
+> #!/usr/bin/env python3
+> """
+> Incremental stock-universe maintenance.
+> 
+> Candidate source:
+>   Free Nasdaq Trader symbol directories:
+>     https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt
+>     https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt
+> 
+> Required files:
+>   stocks.yml
+>   positions.json
+> 
+> Created files:
+>   cache/prices/{ticker}.parquet
+>   review_state.json
+>   review_report.csv
+>   stocks.yml.bak
+> """
+> 
+> import argparse
+> import json
+> import math
+> import os
+> import random
+> import re
+> import shutil
+> import sys
+> from datetime import datetime, timedelta, timezone
+> from io import StringIO
+> from pathlib import Path
+> 
+> import numpy as np
+> import pandas as pd
+> import requests
+> import yaml
+> 
+> 
+> # ---------------------------------------------------------------------
+> # Configuration
+> # ---------------------------------------------------------------------
+> 
+> CONFIG = {
+>     # Number of stocks evaluated in one run and maximum number proposed.
+>     "N": 100,
+>     "M": 20,
+> 
+>     # Prevent uncontrolled growth of stocks.yml.
+>     "MAX_UNIVERSE_SIZE": 1000,
+> 
+>     # Hard eligibility criteria.
+>     "MIN_PRICE": 5.00,
+>     "MIN_HISTORY_DAYS": 180,
+>     "MIN_TRADING_FREQUENCY": 0.95,
+>     "MIN_MEDIAN_DOLLAR_VOLUME": 10_000_000,
+>     "MIN_MARKET_CAP": 1_000_000_000,
+> 
+>     # Use recent daily observations for liquidity.
+>     "LIQUIDITY_LOOKBACK_DAYS": 60,
+> 
+>     # A score below 1 always fails, as requested.
+>     # Scores are on a 0-100 scale.
+>     "MIN_ABSOLUTE_SCORE": 1.0,
+> 
+>     # Must also be in the top X proportion of eligible evaluated stocks.
+>     "TOP_FRACTION": 0.20,
+> 
+>     # Candidate directory URLs.
+>     "NASDAQ_LISTED_URL":
+>         "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt",
+>     "OTHER_LISTED_URL":
+>         "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt",
+> 
+>     # Schwab endpoints. Adjust if your local Schwab client uses other paths.
+>     "SCHWAB_PRICE_HISTORY_PATH": "/marketdata/v1/pricehistory",
+>     "SCHWAB_QUOTES_PATH": "/marketdata/v1/quotes",
+> 
+>     # Local paths.
+>     "STOCKS_FILE": "stocks.yml",
+>     "POSITIONS_FILE": "positions.json",
+>     "STATE_FILE": "review_state.json",
+>     "CACHE_DIR": "cache/prices",
+>     "REPORT_FILE": "review_report.csv",
+> }
+> 
+> EXCLUDED_NAME_PATTERNS = [
+>     r"\bETF\b",
+>     r"\bETN\b",
+>     r"\bFUND\b",
+>     r"\bTRUST\b",
+>     r"\bWARRANT\b",
+>     r"\bRIGHT\b",
+>     r"\bPREFERRED\b",
+>     r"\bUNIT\b",
+>     r"\bDEPOSITARY\b",
+>     r"\bNOTE\b",
+>     r"\bBOND\b",
+> ]
+> 
+> 
+> # ---------------------------------------------------------------------
+> # Generic helpers
+> # ---------------------------------------------------------------------
+> 
+> def normalize_ticker(ticker):
+>     """Use a consistent ticker representation internally."""
+>     return str(ticker).strip().upper().replace("-", ".")
+> 
+> 
+> def yaml_load(path):
+>     if
+**user**:
+> A couple of adjustments to make here:
+>  - I liked your .env idea. Let's store schwab tokens there.
+>  - Let's allow ETFs. I'm okay with the system trading those.
+>  - Split the config into different things. The schwab endpoints, listed urls, and local paths all seem more like implementation than configuration.
+> 
+> Try again from the top.
+**assistant**:
+> Below is a fresh implementation with the requested structure:
+> 
+> - **Credentials/tokens:** `.env`
+> - **Actual universe policy:** `universe_config.yml`
+> - **Implementation details:** kept in Python constants, including URLs, API paths, cache paths
+> - **ETFs:** allowed
+> - **Candidate source:** free Nasdaq Trader listing files
+> - **Held positions:** fetched from Schwab account API, using the account hash in `.env`
+> - **Incremental review:** randomly samples only `N` tickers per run
+> - **Selection:** hard filters + continuous score + top fraction + absolute score
+> - **Dropped held stocks:** retained with `status: sell-only`
+> - **Dropped unheld stocks:** removed from `stocks.yml`
+> 
+> This assumes you already have an OAuth process that refreshes `SCHWAB_ACCESS_TOKEN` in `.env`. This script consumes the current access token; it does not itself run OAuth.
+> 
+> ---
+> 
+> ## 1. Install dependencies
+> 
+> ```bash
+> pip install pandas numpy requests pyyaml python-dotenv pyarrow
+> ```
+> 
+> ---
+> 
+> ## 2. Create `.env`
+> 
+> ```dotenv
+> SCHWAB_ACCESS_TOKEN=your-current-access-token
+> SCHWAB_ACCOUNT_HASH=your-schwab-account-hash
+> 
+> # Optional: normally leave this unchanged.
+> SCHWAB_BASE_URL=https://api.schwabapi.com
+> ```
+> 
+> Do not commit this file:
+> 
+> ```gitignore
+> .env
+> cache/
+> review_state.json
+> review_report.csv
+> stocks.yml.bak
+> ```
+> 
+> ---
+> 
+> ## 3. Create `universe_config.yml`
+> 
+> This contains strategy and universe-maintenance policy—not implementation details such as URLs or local cache paths.
+> 
+> ```yaml
+> review:
+>   # Evaluate this many stocks in each run.
+>   sample_size: 100
+> 
+>   # At most this many of the evaluated stocks can be recommended.
+>   max_recommendations: 20
+> 
+>   # A recommended stock must be among this proportion of the evaluated set.
+>   top_fraction: 0.20
+> 
+>   # Do not re-review ordinary candidates for this many days.
+>   candidate_review_after_days: 180
+> 
+>   # Current active holdings/tracked securities get reviewed more often.
+>   current_stock_review_after_days: 60
+> 
+> universe:
+>   # Prevent uncontrolled growth of stocks.yml.
+>   max_active_stocks: 1000
+> 
+> eligibility:
+>   min_price: 5.0
+>   min_history_days: 180
+>   min_trading_frequency: 0.95
+>   min_median_daily_dollar_volume: 10000000
+> 
+>   # Scores below this always fail, regardless of relative rank.
+>   min_absolute_score: 1.0
+> 
+>   liquidity_lookback_days: 60
+> 
+> scoring:
+>   # Scores are weighted percentile-style components.
+>   liquidity_weight: 0.60
+>   trading_frequency_weight: 0.20
+>   history_weight: 0.10
+>   price_weight: 0.10
+> ```
+> 
+> ETFs are intentionally allowed. The system excludes obvious non-stock/non-ETF instruments such as warrants, rights, units, preferred shares, and bonds.
+> 
+> ---
+> 
+> ## 4. Save as `stock_universe.py`
+> 
+> ```python
+> #!/usr/bin/env python3
+> """
+> Incremental stock / ETF universe maintenance.
+> 
+> Candidate source:
+>     Free Nasdaq Trader symbol directories.
+> 
+> Data source:
+>     Schwab Market Data API:
+>       - price history
+>       - batch quotes
+>     Schwab Trader API:
+>       - current account positions
+> 
+> Inputs:
+>     .env
+>     universe_config.yml
+>     stocks.yml
+> 
+> Outputs:
+>     stocks.yml                 Updated tracked universe
+>     stocks.yml.bak             Backup before modification
+>     review_report.csv          Results from the current
+**user**:
+> Keep writing, immediately following the last word ("current").
+**assistant**:
+> run.
+>     review_state.json          Persistent review history
+>     cache/prices/*.parquet     Local historical-price cache
+> 
+> The script intentionally does not implement Schwab OAuth refresh. It expects
+> SCHWAB_ACCESS_TOKEN to be present in .env and valid when invoked.
+> """
+> 
+> from __future__ import annotations
+> 
+> import argparse
+> import json
+> import math
+> import os
+> import random
+> import re
+> import shutil
+> import sys
+> from datetime import date, datetime, timedelta, timezone
+> from io import StringIO
+> from pathlib import Path
+> from typing import Any
+> 
+> import numpy as np
+> import pandas as pd
+> import requests
+> import yaml
+> from dotenv import load_dotenv
+> 
+> 
+> # =====================================================================
+> # Implementation constants
+> #
+> # These are deliberately not in universe_config.yml. They describe the
+> # current service implementation and local project layout, not strategy.
+> # =====================================================================
+> 
+> NASDAQ_LISTED_URL = (
+>     "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
+> )
+> OTHER_LISTED_URL = (
+>     "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
+> )
+> 
+> SCHWAB_PRICE_HISTORY_PATH = "/marketdata/v1/pricehistory"
+> SCHWAB_QUOTES_PATH = "/marketdata/v1/quotes"
+> 
+> # This is the standard Schwab Trader API account endpoint. Depending on
+> # your account/API version, you may need to adjust it.
+> SCHWAB_ACCOUNT_DETAILS_PATH = "/trader/v1/accounts/{account_hash}"
+> 
+> STOCKS_PATH = Path("stocks.yml")
+> CONFIG_PATH = Path("universe_config.yml")
+> STATE_PATH = Path("review_state.json")
+> REPORT_PATH = Path("review_report.csv")
+> CACHE_DIR = Path("cache/prices")
+> 
+> HTTP_TIMEOUT_SECONDS = 30
+> NASDAQ_USER_AGENT = "stock-universe-maintainer/1.0"
+> 
+> # ETFs are allowed. These exclusions target security types that normally
+> # should not enter a simple stock/ETF trading universe.
+> EXCLUDED_NAME_PATTERNS = [
+>     r"\bWARRANT\b",
+>     r"\bRIGHTS?\b",
+>     r"\bUNITS?\b",
+>     r"\bPREFERRED\b",
+>     r"\bDEPOSITARY\b",
+>     r"\bBOND\b",
+>     r"\bNOTE\b",
+>     r"\bDEBENTURE\b",
+> ]
+> 
+> 
+> # =====================================================================
+> # Generic utilities
+> # =====================================================================
+> 
+> def normalize_ticker(ticker: str) -> str:
+>     """
+>     Normalize ticker formatting used within this system.
+> 
+>     Nasdaq commonly uses '.' for share classes, while some brokers use '-'
+>     in requests. We retain '.' internally and convert only if Schwab requires
+>     a different representation for a particular ticker.
+>     """
+>     return str(ticker).strip().upper().replace("-", ".")
+> 
+> 
+> def utc_now_iso() -> str:
+>     return datetime.now(timezone.utc).isoformat()
+> 
+> 
+> def today_iso() -> str:
+>     return date.today().isoformat()
+> 
+> 
+> def read_yaml(path: Path) -> dict[str, Any]:
+>     if not path.exists():
+>         raise FileNotFoundError(f"Required file not found: {path}")
+> 
+>     with path.open("r", encoding="utf-8") as f:
+>         content = yaml.safe_load(f)
+> 
+>     return content or {}
+> 
+> 
+> def write_yaml(path: Path, data: dict[str, Any]) -> None:
+>     with path.open("w", encoding="utf-8") as f:
+>         yaml.safe_dump(
+>             data,
+>             f,
+>             allow_unicode=True,
+>             sort_keys=False,
+>             default_flow_style=False,
+>         )
+> 
+> 
+> def read_json(path: Path, default: Any) -> Any:
+>     if not path.exists():
+>         return default
+> 
+>     with path.open("r", encoding="utf-8") as f:
+>         return json.load(f)
+> 
+> 
+> def write_json(path: Path, data: Any) -> None:
+>     with path.open("w", encoding="utf-8") as f:
+>         json.dump(data, f, indent=2, sort_keys=True)
+> 
+> 
+> def validate_weights(scoring: dict[str, Any]) -> None:
+>     weights = [
+>         float(scoring["liquidity_weight"]),
+>         float(scoring["trading_frequency_weight"]),
+>         float(scoring["history_weight"]),
+>         float(scoring["price_weight"]),
+>     ]
+> 
+>     if any(w < 0 for w in weights):
+>         raise ValueError("Scoring weights must be non-negative.")
+> 
+>     if sum(weights) <= 0:
+>         raise ValueError("At least one scoring weight must be positive.")
+> 
+> 
+> def required_config(config: dict[str, Any]) -> None:
+>     required_sections = ["review", "universe", "eligibility", "scoring"]
+> 
+>     for section in required_sections:
+>         if section not in config:
+>             raise ValueError(
+>                 f"Configuration is missing required section: {section}"
+>             )
+> 
+>     for key in [
+>         "sample_size",
+>         "max_recommendations",
+>         "top_fraction",
+>         "candidate_review_after_days",
+>         "current_stock_review_after_days",
+>     ]:
+>         if key not in config["review"]:
+>             raise ValueError(f"Configuration is missing review.{key}")
+> 
+>     for key in ["max_active_stocks"]:
+>         if key not in config["universe"]:
+>             raise ValueError(f"Configuration is missing universe.{key}")
+> 
+>     for key in [
+>         "min_price",
+>         "min_history_days",
+>         "min_trading_frequency",
+>         "min_median_daily_dollar_volume",
+>         "min_absolute_score",
+>         "liquidity_lookback_days",
+>     ]:
+>         if key not in config["eligibility"]:
+>             raise ValueError(f"Configuration is missing eligibility.{key}")
+> 
+>     for key in [
+>         "liquidity_weight",
+>         "trading_frequency_weight",
+>         "history_weight",
+>         "price_weight",
+>     ]:
+>         if key not in config["scoring"]:
+>             raise ValueError(f"Configuration is missing scoring.{key}")
+> 
+>     validate_weights(config["scoring"])
+> 
+> 
+> # =====================================================================
+> # stocks.yml
+> # =====================================================================
+> 
+> def load_stocks() -> dict[str, Any]:
+>     """
+>     Read stocks.yml and normalize its top-level structure.
+> 
+>     Expected structure:
+> 
+>     stocks:
+>       - company_name: Nokia Corporation
+>         ticker_symbol: NOK
+>         sector: Information Technology
+>         description: ...
+>         status: active
+>     """
+>     if not STOCKS_PATH.exists():
+>         return {"stocks": []}
+> 
+>     data = read_yaml(STOCKS_PATH)
+> 
+>     if "stocks" not in data:
+>         data["stocks"] = []
+> 
+>     if not isinstance(data["stocks"], list):
+>         raise ValueError("stocks.yml must contain a top-level list: stocks:")
+> 
+>     for stock in data["stocks"]:
+>         if "ticker_symbol" not in stock:
+>             raise ValueError(
+>                 "Every stock entry in stocks.yml needs ticker_symbol."
+>             )
+> 
+>         stock["ticker_symbol"] = normalize_ticker(stock["ticker_symbol"])
+>         stock.setdefault("status", "active")
+> 
+>     return data
+> 
+> 
+> def stock_map(stocks_data: dict[str, Any]) -> dict[str, dict[str, Any]]:
+>     return {
+>         normalize_ticker(stock["ticker_symbol"]): stock
+>         for stock in stocks_data["stocks"]
+>     }
+> 
+> 
+> # =====================================================================
+> # Candidate universe: free Nasdaq Trader files
+> # =====================================================================
+> 
+> def download_nasdaq_directory(url: str) -> pd.DataFrame:
+>     response = requests.get(
+>         url,
+>         timeout=HTTP_TIMEOUT_SECONDS,
+>         headers={"User-Agent": NASDAQ_USER_AGENT},
+>     )
+>     response.raise_for_status()
+> 
+>     # Files have a final "File Creation Time" metadata row.
+>     df = pd.read_csv(
+>         StringIO(response.text),
+>         sep="|",
+>         dtype=str,
+>         keep_default_na=False,
+>     )
+> 
+>     first_column = df.columns[0]
+>     df = df[~df[first_column].str.contains("File Creation Time", na=False)]
+> 
+>     return df
+> 
+> 
+> def is_excluded_security_name(name: str) -> bool:
+>     name = str(name).upper()
+> 
+>     return any(
+>         re.search(pattern, name, flags=re.IGNORECASE) is not None
+>         for pattern in EXCLUDED_NAME_PATTERNS
+>     )
+> 
+> 
+> def get_candidate_universe() -> pd.DataFrame:
+>     """
+>     Retrieve listed Nasdaq and other US exchange symbols.
+> 
+>     ETFs are retained deliberately. The output is only a candidate list;
+>     liquidity/history screening determines actual suitability.
+>     """
+>     nasdaq = download_nasdaq_directory(NASDAQ_LISTED_URL)
+>     other = download_nasdaq_directory(OTHER_LISTED_URL)
+> 
+>     # Nasdaq-listed directory columns normally include:
+>     # Symbol, Security Name, Test Issue, Financial Status, ETF, ...
+>     nasdaq_candidates = pd.DataFrame({
+>         "ticker": nasdaq["Symbol"],
+>         "company_name": nasdaq["Security Name"],
+>         "exchange": "NASDAQ",
+>         "is_etf": nasdaq.get("ETF", "N") == "Y",
+>         "test_issue": nasdaq.get("Test Issue", "N"),
+>     })
+> 
+>     # Other-listed directory normally includes:
+>     # ACT Symbol, Security Name, Exchange, ETF, Test Issue, ...
+>     other_candidates = pd.DataFrame({
+>         "ticker": other["ACT Symbol"],
+>         "company_name": other["Security Name"],
+>         "exchange": other.get("Exchange", ""),
+>         "is_etf": other.get("ETF", "N") == "Y",
+>         "test_issue": other.get("Test Issue", "N"),
+>     })
+> 
+>     candidates = pd.concat(
+>         [nasdaq_candidates, other_candidates],
+>         ignore_index=True,
+>     )
+> 
+>     candidates["ticker"] = candidates["ticker"].map(normalize_ticker)
+>     candidates["company_name"] = candidates["company_name"].astype(str).str.strip()
+>     candidates["exchange"] = candidates["exchange"].astype(str).str.strip()
+>     candidates["test_issue"] = candidates["test_issue"].astype(str).str.strip()
+> 
+>     candidates = candidates[
+>         candidates["ticker"].str.len() > 0
+>     ].copy()
+> 
+>     # Exclude Nasdaq test issues and obvious unsuitable non-equity products.
+>     candidates = candidates[
+>         candidates["test_issue"].str.upper().ne("Y")
+>     ].copy()
+> 
+>     candidates = candidates[
+>         ~candidates["company_name"].map(is_excluded_security_name)
+>     ].copy()
+> 
+>     # Keep ordinary ticker formats. This avoids index-like and malformed values.
+>     candidates = candidates[
+>         candidates["ticker"].str.match(r"^[A-Z][A-Z0-9.]{0,9}$", na=False)
+>     ].copy()
+> 
+>     candidates = (
+>         candidates
+>         .sort_values(["ticker", "company_name"])
+>         .drop_duplicates(subset=["ticker"], keep="first")
+>         .reset_index(drop=True)
+>     )
+> 
+>     return candidates
+> 
+> 
+> # =====================================================================
+> # Schwab API
+> # =====================================================================
+> 
+> class SchwabClient:
+>     def __init__(self) -> None:
+>         load_dotenv()
+> 
+>         self.token = os.getenv("SCHWAB_ACCESS_TOKEN")
+>         self.account_hash = os.getenv("SCHWAB_ACCOUNT_HASH")
+>         self.base_url = os.getenv(
+>             "SCHWAB_BASE_URL",
+>             "https://api.schwabapi.com",
+>         ).rstrip("/")
+> 
+>         if not self.token:
+>             raise RuntimeError(
+>                 "SCHWAB_ACCESS_TOKEN is not set in .env or the environment."
+>             )
+> 
+>         self.session = requests.Session()
+>         self.session.headers.update({
+>             "Authorization": f"Bearer {self.token}",
+>             "Accept": "application/json",
+>             "User-Agent": "stock-universe-maintainer/1.0",
+>         })
+> 
+>     def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+**user**:
+> Great. Please continue as before.
+**assistant**:
+> ```python
+>         url = f"{self.base_url}{path}"
+>         response = self.session.get(
+>             url,
+>             params=params,
+>             timeout=HTTP_TIMEOUT_SECONDS,
+>         )
+> 
+>         if response.status_code == 401:
+>             raise RuntimeError(
+>                 "Schwab returned HTTP 401 Unauthorized. "
+>                 "Refresh SCHWAB_ACCESS_TOKEN in .env and run again."
+>             )
+> 
+>         response.raise_for_status()
+>         return response.json()
+> 
+>     def get_price_history(
+>         self,
+>         ticker: str,
+>         start_date: date,
+>         end_date: date,
+>     ) -> pd.DataFrame:
+>         """
+>         Retrieve daily price history from Schwab.
+> 
+>         Schwab documents date values as epoch milliseconds. We request daily
+>         candles over an explicit date range, without extended-hours data.
+> 
+>         The API may return an in-progress current-day candle. We later discard
+>         non-final current-day observations when appropriate.
+>         """
+>         start_dt = datetime.combine(start_date, datetime.min.time()).replace(
+>             tzinfo=timezone.utc
+>         )
+>         end_dt = datetime.combine(
+>             end_date + timedelta(days=1),
+>             datetime.min.time(),
+>         ).replace(tzinfo=timezone.utc)
+> 
+>         params = {
+>             "symbol": schwab_symbol(ticker),
+>             "periodType": "year",
+>             "frequencyType": "daily",
+>             "frequency": 1,
+>             "startDate": int(start_dt.timestamp() * 1000),
+>             "endDate": int(end_dt.timestamp() * 1000),
+>             "needExtendedHoursData": "false",
+>             "needPreviousClose": "true",
+>         }
+> 
+>         payload = self.get(SCHWAB_PRICE_HISTORY_PATH, params=params)
+>         candles = payload.get("candles", [])
+> 
+>         if not candles:
+>             return empty_price_frame()
+> 
+>         df = pd.DataFrame(candles)
+> 
+>         expected = {"datetime", "open", "high", "low", "close", "volume"}
+>         missing = expected - set(df.columns)
+>         if missing:
+>             raise ValueError(
+>                 f"Unexpected Schwab price history response for {ticker}; "
+>                 f"missing candle fields: {sorted(missing)}"
+>             )
+> 
+>         df = df.rename(columns={"datetime": "timestamp_ms"})
+> 
+>         df["date"] = (
+>             pd.to_datetime(df["timestamp_ms"], unit="ms", utc=True)
+>             .dt.tz_convert("America/New_York")
+>             .dt.date
+>         )
+> 
+>         for col in ["open", "high", "low", "close", "volume"]:
+>             df[col] = pd.to_numeric(df[col], errors="coerce")
+> 
+>         df = (
+>             df[["date", "open", "high", "low", "close", "volume"]]
+>             .dropna(subset=["date", "close", "volume"])
+>             .drop_duplicates(subset=["date"], keep="last")
+>             .sort_values("date")
+>             .reset_index(drop=True)
+>         )
+> 
+>         return df
+> 
+>     def get_quotes(self, tickers: list[str]) -> dict[str, dict[str, Any]]:
+>         """
+>         Request a batch of quotes.
+> 
+>         Schwab accepts comma-separated symbols for the `symbols` parameter.
+>         We use quotes only as a current-price supplement. Historical closing
+>         prices and volume remain the basis for screening.
+>         """
+>         if not tickers:
+>             return {}
+> 
+>         params = {
+>             "symbols": ",".join(schwab_symbol(t) for t in tickers),
+>             "fields": "quote,fundamental,reference",
+>         }
+> 
+>         payload = self.get(SCHWAB_QUOTES_PATH, params=params)
+> 
+>         # Schwab generally returns { "AAPL": {...}, "MSFT": {...} }.
+>         if not isinstance(payload, dict):
+>             raise ValueError("Unexpected Schwab quotes response.")
+> 
+>         normalized: dict[str, dict[str, Any]] = {}
+> 
+>         for returned_symbol, quote_data in payload.items():
+>             normalized[normalize_ticker(returned_symbol)] = quote_data
+> 
+>         return normalized
+> 
+>     def get_owned_tickers(self) -> set[str]:
+>         """
+>         Retrieve positions from the configured Schwab brokerage account.
+> 
+>         `fields=positions` is important: account responses may otherwise omit
+>         position data. If you use multiple accounts, call this for each account
+>         hash and union the resulting ticker sets.
+>         """
+>         if not self.account_hash:
+>             raise RuntimeError(
+>                 "SCHWAB_ACCOUNT_HASH is required in .env to check holdings."
+>             )
+> 
+>         path = SCHWAB_ACCOUNT_DETAILS_PATH.format(
+>             account_hash=self.account_hash
+>         )
+> 
+>         payload = self.get(path, params={"fields": "positions"})
+> 
+>         # Account responses generally wrap account data as `securitiesAccount`.
+>         account = payload.get("securitiesAccount", payload)
+>         positions = account.get("positions", [])
+> 
+>         owned: set[str] = set()
+> 
+>         for position in positions:
+>             long_qty = float(position.get("longQuantity", 0) or 0)
+>             short_qty = float(position.get("shortQuantity", 0) or 0)
+> 
+>             # A short position still means the symbol must remain known to the
+>             # system; do not silently delete it from stocks.yml.
+>             if long_qty == 0 and short_qty == 0:
+>                 continue
+> 
+>             instrument = position.get("instrument", {})
+>             symbol = instrument.get("symbol")
+> 
+>             if symbol:
+>                 owned.add(normalize_ticker(symbol))
+> 
+>         return owned
+> 
+> 
+> def schwab_symbol(ticker: str) -> str:
+>     """
+>     Convert internal ticker notation into the notation expected by Schwab.
+> 
+>     For most US tickers, this is identical. If you encounter a share-class
+>     symbol that Schwab expects as BRK-B rather than BRK.B, add a small explicit
+>     mapping here rather than changing all internal data.
+>     """
+>     return normalize_ticker(ticker)
+> 
+> 
+> # =====================================================================
+> # Local price cache
+> # =====================================================================
+> 
+> def empty_price_frame() -> pd.DataFrame:
+>     return pd.DataFrame(
+>         columns=["date", "open", "high", "low", "close", "volume"]
+>     )
+> 
+> 
+> def price_cache_path(ticker: str) -> Path:
+>     safe = normalize_ticker(ticker).replace("/", "_")
+>     return CACHE_DIR / f"{safe}.parquet"
+> 
+> 
+> def load_cached_prices(ticker: str) -> pd.DataFrame:
+>     path = price_cache_path(ticker)
+> 
+>     if not path.exists():
+>         return empty_price_frame()
+> 
+>     df = pd.read_parquet(path)
+> 
+>     if df.empty:
+>         return empty_price_frame()
+> 
+>     df["date"] = pd.to_datetime(df["date"]).dt.date
+> 
+>     for col in ["open", "high", "low", "close", "volume"]:
+>         df[col] = pd.to_numeric(df[col], errors="coerce")
+> 
+>     return (
+>         df[["date", "open", "high", "low", "close", "volume"]]
+>         .dropna(subset=["date", "close", "volume"])
+>         .drop_duplicates(subset=["date"], keep="last")
+>         .sort_values("date")
+>         .reset_index(drop=True)
+>     )
+> 
+> 
+> def save_cached_prices(ticker: str, prices: pd.DataFrame) -> None:
+>     CACHE_DIR.mkdir(parents=True, exist_ok=True)
+> 
+>     out = prices.copy()
+>     out["date"] = pd.to_datetime(out["date"])
+> 
+>     out.to_parquet(
+>         price_cache_path(ticker),
+>         index=False,
+>     )
+> 
+> 
+> def get_prices_with_cache(
+>     client: SchwabClient,
+>     ticker: str,
+>     required_history_days: int,
+> ) -> pd.DataFrame:
+>     """
+>     Return enough historical daily bars for eligibility and scoring.
+> 
+>     A calendar-day multiplier converts the desired number of trading days into
+>     a conservative request horizon. We request extra history because holidays,
+>     IPOs, suspensions, and missing observations exist.
+>     """
+>     cached = load_cached_prices(ticker)
+> 
+>     today = date.today()
+>     desired_start = today - timedelta(days=int(required_history_days * 2.2))
+> 
+>     if cached.empty:
+>         fetch_start = desired_start
+>     else:
+>         # If the existing cache already contains sufficient history, only fetch
+>         # from a few days before the latest observation. The overlap protects
+>         # against revisions and avoids a gap due to weekends/holidays.
+>         latest_cached_date = max(cached["date"])
+> 
+>         if len(cached) >= required_history_days:
+>             fetch_start = latest_cached_date - timedelta(days=5)
+>         else:
+>             fetch_start = min(desired_start, latest_cached_date - timedelta(days=5))
+> 
+>     try:
+>         fresh = client.get_price_history(
+>             ticker=ticker,
+>             start_date=fetch_start,
+>             end_date=today,
+>         )
+>     except requests.HTTPError as exc:
+>         # A bad/delisted/unrecognized candidate should fail the screen rather
+>         # than terminating an entire batch.
+>         print(f"  price-history failure for {ticker}: {exc}", file=sys.stderr)
+>         return cached
+> 
+>     prices = pd.concat([cached, fresh], ignore_index=True)
+> 
+>     if prices.empty:
+>         return empty_price_frame()
+> 
+>     prices = (
+>         prices
+>         .drop_duplicates(subset=["date"], keep="last")
+>         .sort_values("date")
+>         .reset_index(drop=True)
+>     )
+> 
+>     save_cached_prices(ticker, prices)
+>     return prices
+> 
+> 
+> # =====================================================================
+> # Review state and sampling
+> # =====================================================================
+> 
+> def load_state() -> dict[str, Any]:
+>     return read_json(
+>         STATE_PATH,
+>         default={
+>             "version": 1,
+>             "last_reviewed": {},
+>             "last_result": {},
+>         },
+>     )
+> 
+> 
+> def review_age_days(
+>     state: dict[str, Any],
+>     ticker: str,
+> ) -> float:
+>     last = state.get("last_reviewed", {}).get(ticker)
+> 
+>     if not last:
+>         return math.inf
+> 
+>     try:
+>         last_date = datetime.fromisoformat(last).date()
+>     except ValueError:
+>         return math.inf
+> 
+>     return (date.today() - last_date).days
+> 
+> 
+> def choose_review_sample(
+>     candidates: pd.DataFrame,
+>     current_stock_tickers: set[str],
+>     state: dict[str, Any],
+>     config: dict[str, Any],
+>     sample_size: int | None = None,
+>     seed: int | None = None,
+> ) -> pd.DataFrame:
+>     """
+>     Select a random review batch.
+> 
+>     Priority:
+>       1. Current active / sell-only names overdue for review.
+>       2. Previously unseen or overdue candidates.
+>       3. Any remaining candidates, if needed.
+> 
+>     This ensures we eventually revisit current tracked names, while still
+>     steadily exploring the broader candidate universe.
+>     """
+>     review = config["review"]
+>     n = int(sample_size or review["sample_size"])
+> 
+>     if n <= 0:
+>         raise ValueError("sample_size must be positive.")
+> 
+>     candidates = candidates.copy()
+>     candidates["ticker"] = candidates["ticker"].map(normalize_ticker)
+> 
+>     candidate_tickers = set(candidates["ticker"])
+>     current_in_candidate_list = current_stock_tickers & candidate_tickers
+> 
+>     rng = random.Random(seed)
+> 
+>     current_overdue: list[str] = []
+>     ordinary_overdue: list[str] = []
+>     remaining: list[str] = []
+> 
+>     current_after = int(review["current_stock_review_after_days"])
+>     candidate_after = int(review["candidate_review_after_days"])
+> 
+>     for ticker in candidates["ticker"]:
+>         age = review_age_days(state, ticker)
+> 
+>         if ticker in current_in_candidate_list:
+>             if age >= current_after:
+>                 current_overdue.append(ticker)
+>             else:
+>                 remaining.append(ticker)
+>         else:
+>             if age >= candidate_after:
+>                 ordinary_overdue.append(ticker)
+>             else:
+>                 remaining.append(ticker)
+> 
+>     rng.shuffle(current_overdue)
+>     rng.shuffle(ordinary_overdue)
+>     rng.shuffle(remaining)
+> 
+>     selected: list[str] = []
+> 
+>     def take_from(pool: list[str]) -> None:
+>         nonlocal selected
+>         needed = n - len(selected)
+>         if needed > 0:
+>             selected.extend(pool[:needed])
+**user**:
+> Great. Please continue as before.
+**assistant**:
+> ```python
+>     take_from(current_overdue)
+>     take_from(ordinary_overdue)
+>     take_from(remaining)
+> 
+>     selected_set = set(selected)
+> 
+>     # If a current stock is absent from Nasdaq directories—for example due to a
+>     # temporary symbol issue, a foreign-security treatment, or delisting—do not
+>     # silently forget it. It is not evaluable via this candidate source, but it
+>     # remains in stocks.yml until explicitly handled.
+>     selected_df = candidates[
+>         candidates["ticker"].isin(selected_set)
+>     ].copy()
+> 
+>     selected_df["_sample_order"] = selected_df["ticker"].map(
+>         {ticker: i for i, ticker in enumerate(selected)}
+>     )
+> 
+>     selected_df = (
+>         selected_df
+>         .sort_values("_sample_order")
+>         .drop(columns="_sample_order")
+>         .reset_index(drop=True)
+>     )
+> 
+>     return selected_df
+> 
+> 
+> # =====================================================================
+> # Metrics, hard eligibility, and continuous score
+> # =====================================================================
+> 
+> def safe_float(value: Any) -> float | None:
+>     try:
+>         out = float(value)
+>     except (TypeError, ValueError):
+>         return None
+> 
+>     return out if math.isfinite(out) else None
+> 
+> 
+> def get_quote_mark_or_last(quote_data: dict[str, Any]) -> float | None:
+>     """
+>     Extract a usable current price from a Schwab quote response.
+> 
+>     The exact nesting can vary by API version and asset type. We preferentially
+>     use markPrice, then lastPrice, then closePrice.
+>     """
+>     quote = quote_data.get("quote", quote_data)
+> 
+>     for key in ["markPrice", "lastPrice", "closePrice"]:
+>         value = safe_float(quote.get(key))
+>         if value is not None and value > 0:
+>             return value
+> 
+>     return None
+> 
+> 
+> def compute_metrics(
+>     prices: pd.DataFrame,
+>     quote_data: dict[str, Any] | None,
+>     config: dict[str, Any],
+> ) -> dict[str, Any]:
+>     """
+>     Produce screening metrics from locally cached daily OHLCV history.
+> 
+>     Trading frequency is measured within the observed calendar span:
+>       observed trading days / expected weekday trading days.
+> 
+>     This is an approximation rather than an exchange-calendar-perfect measure.
+>     It is adequate for excluding clearly sparse or problematic securities.
+>     A later refinement could replace it with a NYSE/Nasdaq market calendar.
+>     """
+>     if prices.empty:
+>         return {
+>             "history_days": 0,
+>             "trading_frequency": 0.0,
+>             "median_daily_dollar_volume": 0.0,
+>             "last_close": None,
+>             "current_price": None,
+>             "price_for_screen": None,
+>         }
+> 
+>     prices = prices.copy().sort_values("date").reset_index(drop=True)
+> 
+>     # Avoid malformed zero/negative observations contaminating the metrics.
+>     valid = prices[
+>         (prices["close"] > 0)
+>         & (prices["volume"] >= 0)
+>     ].copy()
+> 
+>     if valid.empty:
+>         return {
+>             "history_days": 0,
+>             "trading_frequency": 0.0,
+>             "median_daily_dollar_volume": 0.0,
+>             "last_close": None,
+>             "current_price": None,
+>             "price_for_screen": None,
+>         }
+> 
+>     history_days = len(valid)
+> 
+>     first_date = min(valid["date"])
+>     last_date = max(valid["date"])
+> 
+>     expected_weekdays = len(
+>         pd.bdate_range(
+>             start=pd.Timestamp(first_date),
+>             end=pd.Timestamp(last_date),
+>         )
+>     )
+> 
+>     trading_frequency = (
+>         history_days / expected_weekdays
+>         if expected_weekdays > 0
+>         else 0.0
+>     )
+> 
+>     lookback = int(config["eligibility"]["liquidity_lookback_days"])
+>     recent = valid.tail(lookback).copy()
+>     recent["dollar_volume"] = recent["close"] * recent["volume"]
+> 
+>     median_daily_dollar_volume = float(
+>         recent["dollar_volume"].median()
+>     ) if not recent.empty else 0.0
+> 
+>     last_close = safe_float(valid.iloc[-1]["close"])
+>     current_price = (
+>         get_quote_mark_or_last(quote_data)
+>         if quote_data is not None
+>         else None
+>     )
+> 
+>     # For reproducibility and to avoid intraday universe churn, use the most
+>     # recent completed daily close as the primary price-screen value. The quote
+>     # is retained in the report for operational awareness.
+>     price_for_screen = last_close
+> 
+>     return {
+>         "history_days": int(history_days),
+>         "trading_frequency": float(trading_frequency),
+>         "median_daily_dollar_volume": median_daily_dollar_volume,
+>         "last_close": last_close,
+>         "current_price": current_price,
+>         "price_for_screen": price_for_screen,
+>     }
+> 
+> 
+> def hard_eligibility(
+>     metrics: dict[str, Any],
+>     config: dict[str, Any],
+> ) -> tuple[bool, list[str]]:
+>     criteria = config["eligibility"]
+>     failures: list[str] = []
+> 
+>     price = metrics["price_for_screen"]
+> 
+>     if price is None or price < float(criteria["min_price"]):
+>         failures.append("price")
+> 
+>     if metrics["history_days"] < int(criteria["min_history_days"]):
+>         failures.append("history")
+> 
+>     if metrics["trading_frequency"] < float(
+>         criteria["min_trading_frequency"]
+>     ):
+>         failures.append("trading_frequency")
+> 
+>     if metrics["median_daily_dollar_volume"] < float(
+>         criteria["min_median_daily_dollar_volume"]
+>     ):
+>         failures.append("dollar_volume")
+> 
+>     return len(failures) == 0, failures
+> 
+> 
+> def percentile_score(
+>     values: pd.Series,
+>     higher_is_better: bool = True,
+> ) -> pd.Series:
+>     """
+>     Percentile rank scaled to 0–100.
+> 
+>     Missing values receive 0. Equal values receive the average appropriate
+>     percentile from pandas' rank implementation.
+>     """
+>     numeric = pd.to_numeric(values, errors="coerce")
+> 
+>     if not higher_is_better:
+>         numeric = -numeric
+> 
+>     out = numeric.rank(pct=True, method="average") * 100.0
+>     return out.fillna(0.0)
+> 
+> 
+> def add_continuous_scores(
+>     review_df: pd.DataFrame,
+>     config: dict[str, Any],
+> ) -> pd.DataFrame:
+>     """
+>     Score only stocks that pass hard eligibility.
+> 
+>     Component transformations:
+>       - liquidity: log(median daily dollar volume)
+>       - trading frequency: direct
+>       - history: log(number of observed daily bars)
+>       - price: log(last close)
+> 
+>     The score is normalized to a 0–100 weighted percentile scale. A security
+>     failing hard eligibility receives score 0 even if it looks relatively good
+>     among other failing securities.
+>     """
+>     result = review_df.copy()
+> 
+>     result["liquidity_component"] = 0.0
+>     result["trading_frequency_component"] = 0.0
+>     result["history_component"] = 0.0
+>     result["price_component"] = 0.0
+>     result["score"] = 0.0
+> 
+>     eligible_mask = result["hard_eligible"].astype(bool)
+> 
+>     if not eligible_mask.any():
+>         return result
+> 
+>     eligible = result.loc[eligible_mask].copy()
+> 
+>     eligible["liquidity_component"] = percentile_score(
+>         np.log1p(eligible["median_daily_dollar_volume"])
+>     )
+>     eligible["trading_frequency_component"] = percentile_score(
+>         eligible["trading_frequency"]
+>     )
+>     eligible["history_component"] = percentile_score(
+>         np.log1p(eligible["history_days"])
+>     )
+>     eligible["price_component"] = percentile_score(
+>         np.log1p(eligible["price_for_screen"])
+>     )
+> 
+>     scoring = config["scoring"]
+>     weights = {
+>         "liquidity_component": float(scoring["liquidity_weight"]),
+>         "trading_frequency_component": float(
+>             scoring["trading_frequency_weight"]
+>         ),
+>         "history_component": float(scoring["history_weight"]),
+>         "price_component": float(scoring["price_weight"]),
+>     }
+> 
+>     total_weight = sum(weights.values())
+> 
+>     eligible["score"] = sum(
+>         eligible[column] * weight
+>         for column, weight in weights.items()
+>     ) / total_weight
+> 
+>     for column in [
+>         "liquidity_component",
+>         "trading_frequency_component",
+>         "history_component",
+>         "price_component",
+>         "score",
+>     ]:
+>         result.loc[eligible.index, column] = eligible[column]
+> 
+>     return result
+> 
+> 
+> def recommend_stocks(
+>     scored_df: pd.DataFrame,
+>     config: dict[str, Any],
+> ) -> pd.DataFrame:
+>     """
+>     Recommend stocks meeting all of:
+> 
+>       1. Hard eligibility;
+>       2. Absolute score >= min_absolute_score;
+>       3. Score at or above the top_fraction cutoff among evaluated,
+>          hard-eligible names;
+>       4. Within max_recommendations.
+> 
+>     Note that a percentile-based score technically exceeds 1 for nearly every
+>     eligible candidate. The absolute threshold remains in place because it is
+>     part of the requested selection policy and becomes more meaningful if you
+>     later add penalty terms or replace percentile scores with calibrated scores.
+>     """
+>     review = config["review"]
+>     eligibility = config["eligibility"]
+> 
+>     eligible = scored_df[
+>         scored_df["hard_eligible"]
+>         & (scored_df["score"] >= float(eligibility["min_absolute_score"]))
+>     ].copy()
+> 
+>     if eligible.empty:
+>         return eligible.assign(recommended=False)
+> 
+>     top_fraction = float(review["top_fraction"])
+> 
+>     if not 0 < top_fraction <= 1:
+>         raise ValueError("review.top_fraction must be in (0, 1].")
+> 
+>     # For N eligible tickers, retain ceil(N * top_fraction), at least one.
+>     n_keep_relative = max(1, math.ceil(len(eligible) * top_fraction))
+> 
+>     eligible = eligible.sort_values(
+>         ["score", "median_daily_dollar_volume", "ticker"],
+>         ascending=[False, False, True],
+>     ).reset_index(drop=True)
+> 
+>     recommended = eligible.head(
+>         min(n_keep_relative, int(review["max_recommendations"]))
+>     ).copy()
+> 
+>     recommended["recommended"] = True
+> 
+>     return recommended
+> 
+> 
+> # =====================================================================
+> # stocks.yml modification policy
+> # =====================================================================
+> 
+> def make_new_stock_record(row: pd.Series) -> dict[str, Any]:
+>     """
+>     Construct a minimally useful stocks.yml record for a new recommendation.
+> 
+>     Nasdaq directories do not provide reliable GICS sector or detailed business
+>     descriptions. Those fields are therefore marked explicitly as pending
+>     enrichment rather than fabricated.
+>     """
+>     instrument_kind = "ETF" if bool(row["is_etf"]) else "Equity"
+> 
+>     return {
+>         "company_name": str(row["company_name"]),
+>         "ticker_symbol": normalize_ticker(row["ticker"]),
+>         "sector": "Unclassified",
+>         "description": (
+>             f"{instrument_kind} added through liquidity-based universe "
+>             f"screening; sector and description pending enrichment."
+>         ),
+>         "status": "active",
+>         "source": "nasdaq_trader_directory",
+>         "added_on": today_iso(),
+>         "last_reviewed_on": today_iso(),
+>         "screening_score": round(float(row["score"]), 4),
+>     }
+> 
+> 
+> def update_stock_universe(
+>     stocks_data: dict[str, Any],
+>     reviewed: pd.DataFrame,
+>     recommendations: pd.DataFrame,
+>     owned_tickers: set[str],
+>     config: dict[str, Any],
+> ) -> tuple[dict[str, Any], list[dict[str, str]]]:
+>     """
+>     Apply the update policy.
+> 
+>     Current stocks are modified only if included in this review batch:
+> 
+>     - Recommended current stock:
+>         status becomes active, unless it is already explicitly sell-only and
+>         remains owned. This avoids accidentally reopening a position-management
+**user**:
+> Thanks. Keep going.
+**assistant**:
+> ```python
+>         decision without an explicit policy change.
+> 
+>     - Reviewed current stock that is not recommended:
+>         * held: retain it and set status: sell-only;
+>         * not held: remove it from stocks.yml.
+> 
+>     - Recommended new stock:
+>         add it as active, subject to universe.max_active_stocks.
+> 
+>     Unreviewed stocks are unchanged.
+>     """
+>     current = stock_map(stocks_data)
+>     recommended_tickers = {
+>         normalize_ticker(ticker)
+>         for ticker in recommendations["ticker"].tolist()
+>     }
+>     reviewed_tickers = {
+>         normalize_ticker(ticker)
+>         for ticker in reviewed["ticker"].tolist()
+>     }
+> 
+>     actions: list[dict[str, str]] = []
+>     revised_stocks: list[dict[str, Any]] = []
+> 
+>     active_count = sum(
+>         stock.get("status", "active") == "active"
+>         for stock in stocks_data["stocks"]
+>     )
+>     max_active = int(config["universe"]["max_active_stocks"])
+> 
+>     # First update / retain / remove existing entries.
+>     for stock in stocks_data["stocks"]:
+>         ticker = normalize_ticker(stock["ticker_symbol"])
+>         status = stock.get("status", "active")
+> 
+>         if ticker not in reviewed_tickers:
+>             revised_stocks.append(stock)
+>             continue
+> 
+>         if ticker in recommended_tickers:
+>             # A sell-only label is deliberately sticky while a position remains
+>             # held. A later system could provide an explicit "restore active"
+>             # command, but screening success alone should not reverse a
+>             # position-management constraint.
+>             if status == "sell-only" and ticker in owned_tickers:
+>                 stock["last_reviewed_on"] = today_iso()
+>                 actions.append({
+>                     "ticker": ticker,
+>                     "action": "retained_sell_only",
+>                     "reason": (
+>                         "recommended_by_screen_but_sell_only_status_retained_"
+>                         "while_position_is_held"
+>                     ),
+>                 })
+>             else:
+>                 if status != "active":
+>                     stock["status"] = "active"
+> 
+>                 stock["last_reviewed_on"] = today_iso()
+> 
+>                 score = recommendations.loc[
+>                     recommendations["ticker"] == ticker,
+>                     "score",
+>                 ].iloc[0]
+>                 stock["screening_score"] = round(float(score), 4)
+> 
+>                 actions.append({
+>                     "ticker": ticker,
+>                     "action": "retained_active",
+>                     "reason": "recommended_by_screen",
+>                 })
+> 
+>             revised_stocks.append(stock)
+>             continue
+> 
+>         # Current ticker was reviewed but failed recommendation.
+>         if ticker in owned_tickers:
+>             stock["status"] = "sell-only"
+>             stock["last_reviewed_on"] = today_iso()
+> 
+>             actions.append({
+>                 "ticker": ticker,
+>                 "action": "marked_sell_only",
+>                 "reason": "not_recommended_but_currently_held",
+>             })
+> 
+>             revised_stocks.append(stock)
+>         else:
+>             if status == "active":
+>                 active_count -= 1
+> 
+>             actions.append({
+>                 "ticker": ticker,
+>                 "action": "removed",
+>                 "reason": "reviewed_not_recommended_and_not_held",
+>             })
+> 
+>     existing_tickers = {
+>         normalize_ticker(stock["ticker_symbol"])
+>         for stock in revised_stocks
+>     }
+> 
+>     # Then add successful new candidates, in descending recommendation order.
+>     ordered_recommendations = recommendations.sort_values(
+>         ["score", "median_daily_dollar_volume", "ticker"],
+>         ascending=[False, False, True],
+>     )
+> 
+>     for _, row in ordered_recommendations.iterrows():
+>         ticker = normalize_ticker(row["ticker"])
+> 
+>         if ticker in existing_tickers:
+>             continue
+> 
+>         if active_count >= max_active:
+>             actions.append({
+>                 "ticker": ticker,
+>                 "action": "not_added",
+>                 "reason": "max_active_stocks_reached",
+>             })
+>             continue
+> 
+>         new_stock = make_new_stock_record(row)
+>         revised_stocks.append(new_stock)
+>         existing_tickers.add(ticker)
+>         active_count += 1
+> 
+>         actions.append({
+>             "ticker": ticker,
+>             "action": "added_active",
+>             "reason": "recommended_by_screen",
+>         })
+> 
+>     # Keep the managed file stable and easy to inspect.
+>     revised_stocks.sort(
+>         key=lambda stock: (
+>             stock.get("status", "active") != "active",
+>             normalize_ticker(stock["ticker_symbol"]),
+>         )
+>     )
+> 
+>     return {"stocks": revised_stocks}, actions
+> 
+> 
+> # =====================================================================
+> # Batch evaluation
+> # =====================================================================
+> 
+> def evaluate_batch(
+>     client: SchwabClient,
+>     sample: pd.DataFrame,
+>     config: dict[str, Any],
+> ) -> pd.DataFrame:
+>     """
+>     Download/update price data and calculate screening results for a batch.
+> 
+>     Quotes are requested once, in batch, before price-history requests. Quote
+>     failure does not invalidate historical screening: last completed close is
+>     the formal price criterion.
+>     """
+>     if sample.empty:
+>         return pd.DataFrame()
+> 
+>     tickers = sample["ticker"].tolist()
+> 
+>     try:
+>         quotes = client.get_quotes(tickers)
+>     except requests.HTTPError as exc:
+>         print(
+>             f"Warning: batch quote retrieval failed; proceeding without "
+>             f"current quotes: {exc}",
+>             file=sys.stderr,
+>         )
+>         quotes = {}
+> 
+>     required_history = max(
+>         int(config["eligibility"]["min_history_days"]),
+>         int(config["eligibility"]["liquidity_lookback_days"]),
+>     )
+> 
+>     results: list[dict[str, Any]] = []
+> 
+>     for index, row in sample.iterrows():
+>         ticker = normalize_ticker(row["ticker"])
+> 
+>         print(
+>             f"[{index + 1}/{len(sample)}] Evaluating {ticker}",
+>             file=sys.stderr,
+>         )
+> 
+>         prices = get_prices_with_cache(
+>             client=client,
+>             ticker=ticker,
+>             required_history_days=required_history,
+>         )
+> 
+>         quote_data = quotes.get(ticker)
+>         metrics = compute_metrics(
+>             prices=prices,
+>             quote_data=quote_data,
+>             config=config,
+>         )
+> 
+>         hard_eligible, failures = hard_eligibility(metrics, config)
+> 
+>         results.append({
+>             "ticker": ticker,
+>             "company_name": row["company_name"],
+>             "exchange": row["exchange"],
+>             "is_etf": bool(row["is_etf"]),
+>             **metrics,
+>             "hard_eligible": hard_eligible,
+>             "hard_failures": ",".join(failures),
+>         })
+> 
+>     evaluated = pd.DataFrame(results)
+> 
+>     if evaluated.empty:
+>         return evaluated
+> 
+>     evaluated = add_continuous_scores(evaluated, config)
+>     return evaluated
+> 
+> 
+> def update_review_state(
+>     state: dict[str, Any],
+>     reviewed: pd.DataFrame,
+>     recommendations: pd.DataFrame,
+> ) -> dict[str, Any]:
+>     recommended_tickers = set(recommendations["ticker"])
+> 
+>     state.setdefault("version", 1)
+>     state.setdefault("last_reviewed", {})
+>     state.setdefault("last_result", {})
+> 
+>     now = utc_now_iso()
+> 
+>     for _, row in reviewed.iterrows():
+>         ticker = normalize_ticker(row["ticker"])
+> 
+>         state["last_reviewed"][ticker] = now
+>         state["last_result"][ticker] = {
+>             "reviewed_at": now,
+>             "hard_eligible": bool(row["hard_eligible"]),
+>             "recommended": ticker in recommended_tickers,
+>             "score": round(float(row["score"]), 4),
+>             "hard_failures": str(row["hard_failures"]),
+>         }
+> 
+>     return state
+> 
+> 
+> def write_review_report(
+>     reviewed: pd.DataFrame,
+>     recommendations: pd.DataFrame,
+>     actions: list[dict[str, str]],
+> ) -> None:
+>     """
+>     Produce one row per evaluated candidate, augmented with the resulting
+>     stocks.yml action where applicable.
+>     """
+>     if reviewed.empty:
+>         pd.DataFrame().to_csv(REPORT_PATH, index=False)
+>         return
+> 
+>     report = reviewed.copy()
+> 
+>     report["recommended"] = report["ticker"].isin(
+>         set(recommendations["ticker"])
+>     )
+> 
+>     action_lookup = {
+>         action["ticker"]: action
+>         for action in actions
+>     }
+> 
+>     report["universe_action"] = report["ticker"].map(
+>         lambda ticker: action_lookup.get(ticker, {}).get("action", "")
+>     )
+>     report["action_reason"] = report["ticker"].map(
+>         lambda ticker: action_lookup.get(ticker, {}).get("reason", "")
+>     )
+> 
+>     report = report.sort_values(
+>         ["recommended", "hard_eligible", "score", "ticker"],
+>         ascending=[False, False, False, True],
+>     )
+> 
+>     report.to_csv(REPORT_PATH, index=False)
+> 
+> 
+> # =====================================================================
+> # Command-line interface
+> # =====================================================================
+> 
+> def parse_args() -> argparse.Namespace:
+>     parser = argparse.ArgumentParser(
+>         description=(
+>             "Incrementally screen a random set of US-listed stocks and ETFs "
+>             "and update stocks.yml."
+>         )
+>     )
+> 
+>     parser.add_argument(
+>         "--n",
+>         type=int,
+>         default=None,
+>         help=(
+>             "Number of candidates to evaluate this run. Overrides "
+>             "review.sample_size."
+>         ),
+>     )
+> 
+>     parser.add_argument(
+>         "--seed",
+>         type=int,
+>         default=None,
+>         help="Optional random seed for reproducible candidate selection.",
+>     )
+> 
+>     parser.add_argument(
+>         "--dry-run",
+>         action="store_true",
+>         help=(
+>             "Evaluate and write review_report.csv, but do not change "
+>             "stocks.yml or review_state.json."
+>         ),
+>     )
+> 
+>     parser.add_argument(
+>         "--list-candidates",
+>         action="store_true",
+>         help=(
+>             "Download and print candidate-universe summary, then exit "
+>             "without contacting Schwab."
+>         ),
+>     )
+> 
+>     return parser.parse_args()
+> 
+> 
+> def main() -> int:
+>     args = parse_args()
+> 
+>     config = read_yaml(CONFIG_PATH)
+>     required_config(config)
+> 
+>     candidates = get_candidate_universe()
+> 
+>     if args.list_candidates:
+>         print(f"Candidate securities: {len(candidates):,}")
+>         print(
+>             f"ETFs retained:        {int(candidates['is_etf'].sum()):,}"
+>         )
+>         print("\nFirst 20 candidates:")
+>         print(
+>             candidates[
+>                 ["ticker", "company_name", "exchange", "is_etf"]
+>             ].head(20).to_string(index=False)
+>         )
+>         return 0
+> 
+>     stocks_data = load_stocks()
+>     current_stocks = stock_map(stocks_data)
+>     current_tickers = set(current_stocks)
+> 
+>     state = load_state()
+> 
+>     sample = choose_review_sample(
+>         candidates=candidates,
+>         current_stock_tickers=current_tickers,
+>         state=state,
+>         config=config,
+>         sample_size=args.n,
+>         seed=args.seed,
+>     )
+> 
+>     if sample.empty:
+>         print(
+>             "No candidates selected for review. "
+>             "Check Nasdaq directory availability and review timing settings."
+>         )
+>         return 0
+> 
+>     print(
+>         f"Selected {len(sample)} candidates for evaluation "
+>         f"from {len(candidates):,} candidates."
+>     )
+> 
+>     client = SchwabClient()
+> 
+>     # Holdings are checked before any destructive stocks.yml changes.
+>     owned_tickers = client.get_owned_tickers()
+>     print(f"Detected {len(owned_tickers)} currently held ticker(s).")
+> 
+>     reviewed = evaluate_batch(
+>         client=client,
+>         sample=sample,
+>         config=config,
+>     )
+> 
+>     recommendations = recommend_stocks(
+>         scored_df=reviewed,
+>         config=config,
+>     )
+> 
+>     updated_stocks, actions = update_stock_universe(
+>         stocks_data=stocks_data,
+>         reviewed=reviewed,
+>         recommendations=recommendations,
+>         owned_tickers=owned_tickers,
+>         config=config,
+>     )
+> 
+>     write_review_report(
+>         reviewed=reviewed,
+>         recommendations=recommendations,
+>         actions=actions,
+>     )
+> 
+>     print("\nReview summary")
+>     print("--------------")
+>     print(f"Evaluated:       {len(reviewed)}")
+>     print(f"Hard eligible:   {int(reviewed['hard_eligible
+**user**:
+> I think you're about done. Please keep going.
+**assistant**:
+> ```python
+>         .sum())}")
+>     print(f"Recommended:     {len(recommendations)}")
+>     print(f"Currently owned: {len(owned_tickers)}")
+>     print(f"Report written:  {REPORT_PATH}")
+> 
+>     if not recommendations.empty:
+>         print("\nRecommended tickers:")
+>         print(
+>             recommendations[
+>                 [
+>                     "ticker",
+>                     "company_name",
+>                     "is_etf",
+>                     "score",
+>                     "median_daily_dollar_volume",
+>                 ]
+>             ].to_string(index=False)
+>         )
+> 
+>     if actions:
+>         print("\nUniverse actions:")
+>         for action in actions:
+>             print(
+>                 f"  {action['ticker']:10s} "
+>                 f"{action['action']:24s} "
+>                 f"{action['reason']}"
+>             )
+> 
+>     if args.dry_run:
+>         print(
+>             "\nDry run: stocks.yml and review_state.json were not modified."
+>         )
+>         return 0
+> 
+>     # Back up before the managed universe file changes.
+>     if STOCKS_PATH.exists():
+>         backup_path = STOCKS_PATH.with_suffix(".yml.bak")
+>         shutil.copy2(STOCKS_PATH, backup_path)
+>         print(f"\nBackup written: {backup_path}")
+> 
+>     write_yaml(STOCKS_PATH, updated_stocks)
+> 
+>     updated_state = update_review_state(
+>         state=state,
+>         reviewed=reviewed,
+>         recommendations=recommendations,
+>     )
+>     write_json(STATE_PATH, updated_state)
+> 
+>     print(f"Updated universe: {STOCKS_PATH}")
+>     print(f"Updated state:    {STATE_PATH}")
+> 
+>     return 0
+> 
+> 
+> if __name__ == "__main__":
+>     raise SystemExit(main())
+> ```
+> 
+> ---
+> 
+> ## 5. Run it
+> 
+> First, verify that the free candidate-list download works:
+> 
+> ```bash
+> python stock_universe.py --list-candidates
+> ```
+> 
+> Then do a reproducible dry run over 100 candidates:
+> 
+> ```bash
+> python stock_universe.py --n 100 --seed 42 --dry-run
+> ```
+> 
+> Inspect `review_report.csv`. If it looks sensible, run without `--dry-run`:
+> 
+> ```bash
+> python stock_universe.py --n 100 --seed 42
+> ```
+> 
+> On ordinary iterative runs, use:
+> 
+> ```bash
+> python stock_universe.py
+> ```
+> 
+> The script will preferentially evaluate overdue current tickers, then randomly select unreviewed/overdue candidates.
+> 
+> ---
+> 
+> ## Important caveats
+> 
+> 1. **Schwab account positions endpoint:** the endpoint path is likely correct for the standard Trader API, but verify your account-response structure. If necessary, adjust only:
+> 
+> ```python
+> SCHWAB_ACCOUNT_DETAILS_PATH = "/trader/v1/accounts/{account_hash}"
+> ```
+> 
+> and the parsing in `get_owned_tickers()`.
+> 
+> 2. **Ticker formatting:** Schwab may require `BRK-B` while Nasdaq supplies `BRK.B`. If you encounter errors, add explicit exceptions in `schwab_symbol()`.
+> 
+> 3. **Price-history query load:** every newly reviewed ticker will require a historical price-history query. The local Parquet cache makes later reviews incremental, but a batch of 100 previously unseen tickers still means roughly 100 initial calls. You may want to begin with `--n 20` or `--n 50` until you understand Schwab’s effective rate limits.
+> 
+> 4. **“Scores < 1 always fail”:** the code implements this exactly. But because the current score is a weighted percentile ranking among hard-eligible names, almost all hard-eligible stocks will naturally score well above 1. The hard cutoffs are doing most of the absolute-quality work. If you want a substantively meaningful absolute score later, I would change the score into an absolute liquidity-quality score rather than a purely relative percentile score.
+> 
+> 5. **No automatic sell order:** `sell-only` means *do not add or increase the position*. It does not place a trade, and it does not remove a currently held security from `stocks.yml`.
+**user**:
+> After some fixes, this was pretty successful. But I think it's too harsh on the existing set of stocks. It seems to evaluate all of them, and then finds that it wants to reject most. I understand wanting to evaluate them, since they are all "overdue" for consideration. But Maybe we can at most evaluate 5% of them?
+> 
+> Do not rewrite the whole code. Just tell me where I need to make edits.
+**assistant**:
+> Make the change in `choose_review_sample()`—specifically in the logic that builds and consumes `current_overdue`.
+> 
+> Right now, the relevant behavior is:
+> 
+> ```python
+> take_from(current_overdue)
+> take_from(ordinary_overdue)
+> take_from(remaining)
+> ```
+> 
+> Because `current_overdue` is consumed first without a cap, it can fill the whole `N`-stock review batch.
+> 
+> ## 1. Add a policy setting
+> 
+> In `universe_config.yml`, under `review:`, add:
+> 
+> ```yaml
+>   # At most this share of the current tracked universe may be reviewed in one run.
+>   max_current_review_fraction: 0.05
+> ```
+> 
+> I interpret “existing set” as the current `stocks.yml` universe, rather than 5% of *overdue* stocks. Thus, if you have 400 currently tracked symbols, at most 20 current symbols are reviewed in a run.
+> 
+> ---
+> 
+> ## 2. Validate the setting
+> 
+> In `required_config()`, add this key to the `review` keys list:
+> 
+> ```python
+> "max_current_review_fraction",
+> ```
+> 
+> So that section becomes:
+> 
+> ```python
+> for key in [
+>     "sample_size",
+>     "max_recommendations",
+>     "top_fraction",
+>     "candidate_review_after_days",
+>     "current_stock_review_after_days",
+>     "max_current_review_fraction",
+> ]:
+> ```
+> 
+> Optionally, just after that loop, validate it:
+> 
+> ```python
+> current_fraction = float(
+>     config["review"]["max_current_review_fraction"]
+> )
+> 
+> if not 0 <= current_fraction <= 1:
+>     raise ValueError(
+>         "review.max_current_review_fraction must be between 0 and 1."
+>     )
+> ```
+> 
+> ---
+> 
+> ## 3. Cap `current_overdue` in `choose_review_sample()`
+> 
+> Find this section:
+> 
+> ```python
+> rng.shuffle(current_overdue)
+> rng.shuffle(ordinary_overdue)
+> rng.shuffle(remaining)
+> 
+> selected: list[str] = []
+> 
+> def take_from(pool: list[str]) -> None:
+>     nonlocal selected
+>     needed = n - len(selected)
+>     if needed > 0:
+>         selected.extend(pool[:needed])
+> 
+> take_from(current_overdue)
+> take_from(ordinary_overdue)
+> take_from(remaining)
+> ```
+> 
+> Replace it with:
+> 
+> ```python
+> rng.shuffle(current_overdue)
+> rng.shuffle(ordinary_overdue)
+> rng.shuffle(remaining)
+> 
+> # Strict cap: evaluate no more than 5% (or configured fraction) of the
+> # current tracked universe in one run.
+> max_current_reviews = math.floor(
+>     len(current_in_candidate_list)
+>     * float(review["max_current_review_fraction"])
+> )
+> 
+> # Randomly choose only the allowed number of overdue current tickers.
+> current_overdue = current_overdue[:max_current_reviews]
+> 
+> selected: list[str] = []
+> 
+> def take_from(pool: list[str]) -> None:
+>     nonlocal selected
+>     needed = n - len(selected)
+>     if needed > 0:
+>         selected.extend(pool[:needed])
+> 
+> take_from(current_overdue)
+> take_from(ordinary_overdue)
+> take_from(remaining)
+> ```
+> 
+> That is the minimal change.
+> 
+> ---
+> 
+> ## One subtle issue: `remaining` can still include current stocks
+> 
+> In the existing classification loop, non-overdue current stocks are added to `remaining`:
+> 
+> ```python
+> if ticker in current_in_candidate_list:
+>     if age >= current_after:
+>         current_overdue.append(ticker)
+>     else:
+>         remaining.append(ticker)
+> ```
+> 
+> So if there are not enough ordinary overdue candidates, the final:
+> 
+> ```python
+> take_from(remaining)
+> ```
+> 
+> can still select additional current tickers and violate the 5% intention.
+> 
+> To enforce the cap across **all current tickers**, alter that block to *not* put current stocks in `remaining`:
+> 
+> ```python
+> if ticker in current_in_candidate_list:
+>     if age >= current_after:
+>         current_overdue.append(ticker)
+>     # Otherwise do nothing: current tickers not overdue should not be
+>     # sampled as ordinary fallback candidates.
+> else:
+>     if age >= candidate_after:
+>         ordinary_overdue.append(ticker)
+>     else:
+>         remaining.append(ticker)
+> ```
+> 
+> With those edits:
+> 
+> - at most 5% of your present tracked universe is evaluated per run;
+> - those slots go to overdue current tickers;
+> - remaining review capacity is filled by new/non-current candidates;
+> - current stocks cannot slip back into the batch through the fallback pool.
+> 
+> ### Small-universe choice
+> 
+> Using `math.floor()` is strictly faithful to “at most 5%,” but means a universe with fewer than 20 currently tracked securities evaluates zero current tickers per run.
+> 
+> If you instead want at least one current ticker reviewed whenever any are overdue, use:
+> 
+> ```python
+> max_current_reviews = max(
+>     1,
+>     math.floor(
+>         len(current_in_candidate_list)
+>         * float(review["max_current_review_fraction"])
+>     ),
+> )
+> ```
+> 
+> That is generally more practical, but technically exceeds 5% for small universes.

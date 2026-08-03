@@ -1,0 +1,818 @@
+**user**:
+> I am writing up a methods appendix for a report. The first part of this section discusses risk modeling:
+> ```
+> \subsection{Risk modeling}
+> 
+> We quantify mortality-related health impacts from climate change using two complementary modelling approaches that both focus on temperature-related deaths, and then monetise these impacts using standard UK values of a prevented fatality (VPF). The first approach uses the PESETA IV estimates of deaths from heatwaves and cold spells \citepalias{feyen2020climate}, based on the empirical relationships assembled in \citet{naumann2020global}. The second uses country-level mortality projections from \citet{bressler2021estimates}, who extend one of the most comprehensive epidemiological studies of temperature–mortality relationships to project future deaths under alternative warming scenarios. We treat these as structurally distinct models of temperature-related mortality for the UK, and combine them via meta-analysis. Non-fatal health outcomes are not explicitly included.
+> 
+> For the PESETA IV component, \citetalias{feyen2020climate} estimate changes in mortality from heat and cold events using observed relationships between temperature extremes and attributed deaths in each country. Their approach distinguishes heat-related and cold-related excess mortality, estimates exposure–response curves based on historical data, and applies these to climate projections to obtain future changes in deaths from heatwaves and cold spells. We extract the projected changes in annual temperature-related death rates for the UK \& Ireland region and interpret these as representative for the UK. These projections are expressed as changes in deaths per 100{,}000 population as a function of global mean temperature (and time), conditional on a given socio-economic scenario. We then convert these changes in death rates into annual counts of premature deaths at the national level using projections of UK population, and ultimately into monetary losses using the UK Department for Transport’s VPF.
+> 
+> The Bressler et al.\ model \citep{bressler2021estimates} starts from a large multi-country epidemiological evidence base on daily temperature–mortality relationships. It fits nonlinear exposure–response functions that capture both heat and cold risks and then combines these with gridded climate projections and demographic projections to project changes in mortality attributable to climate change at the country level. From the supplementary materials, we take the projected UK temperature-attributable deaths (interpreting them as the net balance of additional heat-related deaths and avoided cold-related deaths). To integrate these into our standard damage-function framework, we modify our usual fitting procedure: instead of fitting separate functions to heat and cold deaths, we treat total temperature-related mortality as the sum of two latent components (heat and cold). We fit a reduced-form damage function directly to the net mortality projections, while conceptually maintaining the decomposition into heat-related and cold-related components as latent variables. Uncertainty is represented by the bounds reported by \citet{bressler2021estimates}, which we interpret as defining a distribution around the latent net-mortality trajectory.
+> 
+> We do not implement the income-adaptation adjustments reported by \citet{bressler2021estimates}. Those adjustments reflect joint changes in income and climate and are not reported relative to a counterfactual with income growth but without climate change. Since our objective is to isolate the marginal effect of climate conditional on socio-economic trajectories used elsewhere in the assessment, we use only the climate-driven component of their mortality projections.
+> 
+> For both modelling approaches, we convert projected changes in deaths into monetary welfare losses using a value of a prevented fatality consistent with UK policy appraisal. Our baseline valuation uses a VPF of \pounds1.83\,million in 2016 prices (equivalent to approximately \pounds1.65\,million in 2010 prices) from the UK Transport Analysis Guidance data book \citep{dft2016transport}, following the UK Green Book. We note that alternative literature-based estimates suggest higher central values (on the order of \pounds9–12\,million per fatality) \citep{thomas2017value}, but we do not adopt these higher values in our main calculations. Future work could explore the sensitivity of aggregate health damages to alternative VPF assumptions.
+> 
+> The output of each model is thus a temperature-dependent damage function mapping global mean temperature (and time) to annual monetary losses from premature mortality in the UK. We then combine these two health models using the same meta-analytic framework applied in other sectors: each model is treated as a noisy observation of an underlying, unknown damage function, with model-specific uncertainty carried through from the original studies. The resulting combined health damage function yields central estimates and uncertainty ranges for mortality-related welfare losses as a percentage of UK GDP. The general meta-analysis protocol, including assumptions on error structures and model weighting, is documented in detail in \citet{rising2026comprehensive} and is not repeated here.
+> ```
+> 
+> Now, I need two more sections, where I discuss modeling adaptation and adding in stochastic annual variability and extreme events.
+> 
+> Here is the code that produces the adaptation modeling:
+> ```
+> setwd("~/Dropbox/HMT/channels/health")
+> 
+> library(dplyr)
+> library(mvtnorm)
+> library(ncdf4)
+> library(ggplot2)
+> 
+> source("../../lib/costs.R")
+> 
+> do.cost.version <- 2
+> 
+> ## benefits of shutters, typical summertime mortality
+> ## Taylor et al. 2018
+> ## Medium emissions scenario UKCP09
+> capex.shutters.gbp.perbuilding <- 1572 * factor.capex # For domestic buildings (Internal Shutters from https://assets.publishing.service.gov.uk/media/614c1c75e90e077a34ed9fb7/cooling-in-uk.pdf)
+> shutter.benefits <- c(.6, 37.8 / 100, 34.6 / 100, 29.3 / 100)
+> shutter.year <- c(1970, 2030, 2050, 2080)
+> shutter.temp <- c(24.341603786096705, 26.17015447330397, 26.767944520839585, 27.574304939934805) # Summer temperatures, personal exposure, extracted from Fig 2A of Taylor et al. 2018
+> 
+> ## benefits of A/C, from Canada
+> ## https://journals.lww.com/epidem/abstract/2020/11000/air_conditioning_and_heat_related_mortality__a.5.aspx
+> capex.ac.gbp.perbuilding.low <- 275 * factor.capex # portable cooling unit from https://assets.publishing.service.gov.uk/media/614c1c75e90e077a34ed9fb7/cooling-in-uk.pdf
+> capex.ac.gbp.perbuilding.high <- 1234 * factor.capex # fixed colling from https://assets.publishing.service.gov.uk/media/614c1c75e90e077a34ed9fb7/cooling-in-uk.pdf
+> 
+> ## Base the electricity costs off Spain's 20 TWh increase in 2050 from https://www.nature.com/articles/s41598-023-31469-z/figures/3
+> ac.ppyr <- (24.5 / 100) * 20e9 / 48.35e6 # Ofgem energy price cap of 24.5p
+> opex.gbp.perperson <- ac.ppyr * factor.annual
+> 
+> ac.level <- c(0.3, 0.55, 0.8, 1)
+> ac.afperc <- c(0.93, 0.82, 0.70, 0.61)
+> ac.afperc.ci025 <- c(0.75, 0.63, 0.51, 0.40) # treated as 5th percentile
+> ac.afperc.ci975 <- c(1.10, 1.00, 0.89, 0.80) # treated as 95th percentile
+> 
+> ## Hajat et al. (2014): Medium emissions under 9 climate modelsr
+> hajat.year <- c(2005, 2025, 2055, 2085)
+> hajat.deaths <- c(1974, 3281, 7040, 12538) # climate + pop (bec. includes demo)
+> hajat.sd <- c(900, 1000, 2200, 3000) # approx from graph (assume 95%)
+> 
+> ## Jenkins et al (2022): SSP5
+> jenkins.temp <- c(1, 1.5, 2, 3, 4)
+> jenkins.deaths <- c(1393, 2549, 3747, 8200, 18542)
+> garcialeon.deaths <- c(1258, 2383, 3378, 7931, 11755)
+> 
+> ## HSA HECC (2023): UKCP18 RCP8.5
+> hsa.year <- c(floor((2018 + 2007) / 2), 2035, 2055, 2075)
+> hsa.deaths <- c(1602, 4266, 10889, 21545)
+> hsa.sd <- c(800, 1300, 2500, 5000) # approx from graph (assume 95%)
+> 
+> cil.deaths <- read.csv("~/Dropbox/For OECD/alphafit-change_in_deathrate-local-ir-total.csv") %>%
+>     filter(substring(region, 1, 3) == 'GBR')
+> 
+> TT <- 3
+> 
+> results <- data.frame()
+> for (region in unique(cil.deaths$region)) {
+>     subdf <- cil.deaths[cil.deaths$region == region,]
+>     draws <- c()
+>     for (ii in 1:nrow(subdf)) {
+>         drawsii <- rmvnorm(1000, c(subdf$alpha[ii], subdf$beta[ii]), matrix(c(subdf$sigma11[ii], subdf$sigma12[ii], subdf$sigma12[ii], subdf$sigma22[ii]), 2, 2)) %*% c(TT, TT^2) + rnorm(1000, 0, subdf$zeta[ii]) * TT + rnorm(1000, 0, subdf$eta[ii])
+>         draws <- c(draws, drawsii)
+>     }
+>     results <- rbind(results, data.frame(region, mu=mean(draws), sd=sd(draws), ci05=quantile(draws, .05), ci95=quantile(draws, .95),
+>                                          ci005=quantile(draws, .005), ci995=quantile(draws, .995)))
+> }
+> 
+> cil.deaths.tot <- read.csv("~/Dropbox/For OECD/regional_polynomials.csv") %>%
+>     filter(region == 'GBR')
+> draws <- c()
+> for (ii in 1:nrow(cil.deaths.tot)) {
+>     drawsii <- rmvnorm(1000, c(cil.deaths.tot$alpha[ii], cil.deaths.tot$beta[ii]), matrix(c(cil.deaths.tot$sigma11[ii], cil.deaths.tot$sigma12[ii], cil.deaths.tot$sigma12[ii], cil.deaths.tot$sigma22[ii]), 2, 2)) %*% c(TT, TT^2) + rnorm(1000, 0, cil.deaths.tot$zeta[ii]) * TT + rnorm(1000, 0, cil.deaths.tot$eta[ii])
+>     draws <- rbind(draws, drawsii)
+> }
+> results <- rbind(results, data.frame(region="Total", mu=mean(draws), sd=sd(draws), ci05=quantile(draws, .05), ci95=quantile(draws, .95),
+>                                      ci005=quantile(draws, .005), ci995=quantile(draws, .995)))
+> 
+> cil.deaths.dir <- read.csv("~/Dropbox/For OECD/alphafit-change_in_deathrate-gmst-adm0-undp.csv") %>%
+>     filter(region == 'GBR')
+> draws <- c()
+> for (ii in 1:nrow(cil.deaths.dir)) {
+>     drawsii <- rmvnorm(1000, c(cil.deaths.dir$alpha[ii], cil.deaths.dir$beta[ii]), matrix(c(cil.deaths.dir$sigma11[ii], cil.deaths.dir$sigma12[ii], cil.deaths.dir$sigma12[ii], cil.deaths.dir$sigma22[ii]), 2, 2)) %*% c(TT, TT^2) + rnorm(1000, 0, cil.deaths.dir$zeta) * TT + rnorm(1000, 0, cil.deaths.dir$eta)
+>     draws <- c(draws, drawsii)
+> }
+> results <- rbind(results, data.frame(region="Direct", mu=mean(draws), sd=sd(draws), ci05=quantile(draws, .05), ci95=quantile(draws, .95),
+>                                      ci005=quantile(draws, .005), ci995=quantile(draws, .995)))
+> 
+> 
+> ## Read in climate
+> get.gmst.vs.1961.1990 <- function(decade) {
+>     if (decade == 1970)
+>         return(0)
+> 
+>     if (decade %in% seq(2020, 2080, by=10)) {
+>         nc <- nc_open(paste0("../../climate/ukcp09/A1B-03236a-global-ann-", decade - 10, "-", decade + 19, ".nc"))
+>         temps <- ncvar_get(nc, "temp_dmean_tmean_abs")
+>         return(mean(temps))
+>     } else if (decade %in% seq(2025, 2085, by=10)) {
+>         nc <- nc_open(paste0("../../climate/ukcp09/A1B-03236a-global-ann-", decade - 15, "-", decade + 14, ".nc"))
+>         temps <- ncvar_get(nc, "temp_dmean_tmean_abs")
+>         return(mean(temps))
+>     } else {
+>         if (decade < 2020)
+>             decades <- c(1970, 2020)
+>         else
+>             decades <- c(floor(decade / 10)*10, ceiling(decade / 10)*10)
+>         gmsts <- sapply(decades, get.gmst.vs.1961.1990)
+>         return(approx(decades, gmsts, decade)$y)
+>     }
+> }
+> 
+> get.gmst.ukcp18.vs.1961.1990 <- function(year) {
+>     nc <- nc_open("../../climate/ukcp18/tasAnom_rcp85_land-prob_global_glb_sample_b8100_1y_ann_18591201-20991130.nc")
+>     tasAnom <- ncvar_get(nc, 'tasAnom')
+>     years <- ncvar_get(nc, 'year')
+> 
+>     ## Get the baseline
+>     baseline <- mean(tasAnom[, years > 1960 & years <= 1990])
+> 
+>     mean(tasAnom[, years == year]) - baseline
+> }
+> 
+> houses.uk <- 28.4e6 # 2023
+> pop.uk <- 68.35e6 # 2023
+> 
+> pdf1 <- rbind(data.frame(source="Taylor et al. 2018", solution="Shutters", dgmst=sapply(shutter.year, get.gmst.vs.1961.1990), costs=capex.shutters.gbp.perbuilding * houses.uk, year=shutter.year, benefits.mu=shutter.benefits, benefits.ci05=NA, benefits.ci95=NA),
+>               data.frame(source="Francesco et al. 2020", solution="A/C", dgmst=get.gmst.vs.1961.1990(2050), costs=(ac.level[-1] - ac.level[1]) * (houses.uk * (capex.ac.gbp.perbuilding.low + capex.ac.gbp.perbuilding.high) / 2 + pop.uk * opex.gbp.perperson), year=(2009 + 1972) / 2, benefits.mu=(ac.level[-1] - ac.level[1]) * ac.afperc[-1] / ac.afperc[1], benefits.ci05=(ac.level[-1] - ac.level[1]) * ac.afperc.ci025[-1] / ac.afperc.ci025[1], benefits.ci95=(ac.level[-1] - ac.level[1]) * ac.afperc.ci975[-1] / ac.afperc.ci975[1]),
+>               data.frame(source="Carleton et al. 2022", solution="Autonomous", dgmst=3, costs=2e6 * pop.uk * (results$mu[results$region == 'Total'] - results$mu[results$region == 'Direct']) / 1e5, year=2100, benefits.mu=(results$mu[results$region == 'Direct'] - results$ci005[results$region == 'Direct']) / (results$mu[results$region == 'Total'] - results$ci005[results$region == 'Direct']), benefits.ci05=(results$ci05[results$region == 'Direct'] - results$ci005[results$region == 'Direct']) / (results$ci05[results$region == 'Total'] - results$ci005[results$region == 'Direct']), benefits.ci95=min(1, (results$ci95[results$region == 'Direct'] - results$ci005[results$region == 'Direct']) / (results$ci95[results$region == 'Total'] - results$ci005[results$region == 'Direct']))),
+>               data.frame(source="Carleton et al. 2022", solution="Income", dgmst=3, costs=0, year=2100, benefits.mu=mean((8e4 / 4e4)^cil.deaths.dir$gamma),
+>                          benefits.ci05=quantile((8e4 / 4e4)^cil.deaths.dir$gamma, .05), benefits.ci95=quantile((8e4 / 4e4)^cil.deaths.dir$gamma, .95)))
+> 
+> pdf1$roi.mu <- pdf1$benefits.mu / pdf1$costs
+> pdf1$roi.ci05 <- pdf1$benefits.ci05 / pdf1$costs
+> pdf1$roi.ci95 <- pdf1$benefits.ci95 / pdf1$costs
+> 
+> ggplot(pdf1, aes(dgmst, roi.mu, colour=solution)) +
+>     geom_point() + geom_linerange(aes(ymin=roi.ci05, ymax=roi.ci95)) +
+>     ylab("Change in national vulnerability per dollar") +
+>     xlab("GMST Warming vs. 1961-1990 average") +
+>     scale_colour_discrete("Intervention:") +
+>     theme_bw()
+> 
+> ggplot(subset(pdf1, solution == 'Shutters'), aes(dgmst, roi.mu * 1e9 * 1.34, colour=solution)) +
+>     geom_line() +
+>     scale_y_continuous("Reduction in national vulnerability per £billion", labels=scales::percent) +
+>     xlab("GMST Warming vs. 1961-1990 average") +
+>     scale_colour_discrete(name="Intervention:") +
+>     theme_bw()
+> 
+> ggplot(subset(pdf1, solution == 'A/C'), aes(costs / (1e9 * 1.34), roi.mu * 1e9 * 1.34)) +
+>     geom_line(aes(colour=solution)) + geom_ribbon(aes(ymin=roi.ci05 * 1e9 * 1.34, ymax=roi.ci95 * 1e9 * 1.34), alpha=.5) +
+>     scale_y_continuous("Reduction in national vulnerability per £billion", labels=scales::percent) +
+>     xlab("Total investments (£billion)") +
+>     scale_colour_discrete(name="Intervention:") +
+>     theme_bw()
+> 
+> 
+> pdf2 <- rbind(data.frame(source="Hajat et al. 2014", year=hajat.year, dgmst=sapply(hajat.year, get.gmst.vs.1961.1990), deaths=hajat.deaths, sd=hajat.sd),
+>               data.frame(source="Jenkins et al. 2022", year=NA, dgmst=jenkins.temp, deaths=jenkins.deaths, sd=NA),
+>               data.frame(source="García-León et al. 2024", year=NA, dgmst=jenkins.temp, deaths=garcialeon.deaths, sd=NA),
+>               data.frame(source="HSA HECC 2023", year=hsa.year, dgmst=sapply(hsa.year, get.gmst.ukcp18.vs.1961.1990), deaths=hsa.deaths, sd=hsa.sd),
+>               data.frame(source="Carleton et al. 2022", year=2100, dgmst=3, deaths=pop.uk * results$mu[results$region == 'Direct'] / 1e5,
+>                          sd=pop.uk * results$sd[results$region == 'Direct'] / 1e5))
+> pdf2x <- subset(pdf2, source != "Carleton et al. 2022")
+> 
+> covar <- pdf2x$sd / pdf2x$deaths
+> coeffs <- data.frame()
+> for (mc in 1:1000) {
+>     sds <- pdf2x$sd
+>     sds[is.na(sds)] <- sample(covar[!is.na(covar)], sum(is.na(sds)), replace=T) * pdf2x$deaths[is.na(sds)]
+>     calib <- data.frame(draws=rnorm(nrow(pdf2x), pdf2x$deaths, sds),
+>                         TT=pdf2x$dgmst, TT2=pdf2x$dgmst^2)
+>     for (source in unique(pdf2x$source)) {
+>         vals <- coef(lm(draws ~ 0 + TT + TT2, data=calib[pdf2x$source == source,]))
+>         names(vals) <- c('alpha', 'beta')
+>         coeffs <- rbind(coeffs, cbind(mc=mc, source=source, as.data.frame(t(vals))))
+>     }
+> }
+> 
+> pdf2m <- coeffs %>% group_by(mc, source) %>% reframe(dgmst=seq(0, 4, by=.1), deaths=alpha * dgmst + beta * dgmst^2) %>%
+>     group_by(dgmst) %>% summarize(ci25=quantile(deaths, .25), ci75=quantile(deaths, .75), deaths=mean(deaths))
+> 
+> ggplot(pdf2x, aes(dgmst, deaths, colour=source)) +
+>     geom_point() + geom_linerange(aes(ymin=deaths - 1.96*sd, ymax=deaths + 1.96*sd)) +
+>     geom_line(data=pdf2m, aes(colour="Combined")) + geom_ribbon(data=pdf2m, aes(ymin=ci25, ymax=ci75), alpha=.5, colour=NA) +
+>     theme_bw() + xlab("GMST Warming vs. 1961-1990 average") +
+>     ylab("Excess UK heat-related mortality") +
+>     scale_colour_discrete("Source:")
+> 
+> ## Get vulnerability from CIL
+> allTT <- seq(0, 4, by=.1)
+> cilpdf <- data.frame()
+> for (region in unique(cil.deaths$region)) {
+>     subdf <- cil.deaths[cil.deaths$region == region,]
+>     draws <- matrix(NA, 0, length(allTT))
+>     for (ii in 1:nrow(subdf)) {
+>         drawsii <- rmvnorm(1000, c(subdf$alpha[ii], subdf$beta[ii]), matrix(c(subdf$sigma11[ii], subdf$sigma12[ii], subdf$sigma12[ii], subdf$sigma22[ii]), 2, 2)) %*% rbind(allTT, allTT^2) + rnorm(1000, 0, subdf$zeta[ii]) %*% t(allTT) + matrix(rnorm(1000 * length(allTT), 0, subdf$eta[ii]), 1000, length(allTT))
+>         draws <- rbind(draws, drawsii)
+>     }
+>     cilpdf <- rbind(cilpdf, data.frame(region, TT=allTT, mu=colMeans(draws), sd=apply(draws, 2, sd),
+>                                        ci05=apply(draws, 2, function(xx) quantile(xx, .05)),
+>                                        ci95=apply(draws, 2, function(xx) quantile(xx, .95)),
+>                                        ci005=apply(draws, 2, function(xx) quantile(xx, .005)),
+>                                        ci995=apply(draws, 2, function(xx) quantile(xx, .995))))
+> }
+> 
+> gp <- ggplot(cilpdf, aes(TT, mu)) +
+>     facet_wrap(~ substring(region, 1, 10)) +
+>     geom_line() + xlab("GMST warming vs. pre-industrial") + xlab("Excess deaths per 100,000")
+> ggsave("CIL-damages.pdf", width=10, height=9)
+> 
+> ggplot(subset(cilpdf, region == cilpdf$region[1]), aes(TT, mu)) +
+>     facet_wrap(~ region, scales='free_y')
+> 
+> ## Find adujustment with temperature
+> pdf1$dgmst2 <- pdf1$dgmst^2
+> mod.temp <- lm(roi.mu ~ dgmst + dgmst2, data=subset(pdf1, source == 'Taylor et al. 2018'))
+> 
+> ggplot(subset(pdf1, source == "Taylor et al. 2018"), aes(dgmst, 1 - benefits.mu)) +
+>     coord_cartesian(ylim=c(0, 1)) +
+>     geom_point() + geom_smooth(method='lm', formula=y ~ poly(x, 2)) +
+>     theme_bw() +
+>     xlab("GMST Warming vs. 1961-1990 average") + scale_y_continuous("Remaining damages", labels=scales::percent, expand=c(0, 0))
+> 
+> ## Find elasticity with temperature
+> ## log(benefits) ~ dgmst
+> mod.temp <- lm(log(benefits.mu) ~ dgmst, data=subset(pdf1, source == 'Taylor et al. 2018'))
+> alltemps <- seq(0, 4, by=.1)
+> pred <- predict(mod.temp, data.frame(dgmst=alltemps), interval="prediction")
+> ggplot(subset(pdf1, source == "Taylor et al. 2018"), aes(dgmst)) +
+>     coord_cartesian(ylim=c(0, 1)) +
+>     geom_point(aes(y=1 - benefits.mu)) +
+>     geom_line(data=cbind(dgmst=alltemps, pred), aes(y=1 - exp(fit)), color="blue") +
+>     geom_ribbon(data=cbind(dgmst=alltemps, pred), aes(ymin=1 - exp(lwr), ymax=1 - exp(upr)), alpha=0.2, fill="blue") +
+>     theme_bw() +
+>     xlab("GMST Warming vs. 1961-1990 average") + scale_y_continuous("Remaining damages", labels=scales::percent, expand=c(0, 0))
+> 
+> ## Find elasticity with costs
+> if (do.cost.version == 1) {
+>     ## benefits = (baseline - baseline * exp(-beta cost)) / baseline = (1 - exp(-beta cost)) => log(1 - benefits) = -beta cost
+>     pdf1$one.m.benefits.mu <- 1 - pdf1$benefits.mu
+>     mod.cost <- lm(log(one.m.benefits.mu) ~ costs, data=subset(pdf1, source == "Francesco et al. 2020"))
+>     allcosts <- seq(0, 1e12, length.out=100)
+>     pred <- predict(mod.cost, data.frame(costs=allcosts), interval="prediction")
+> 
+>     ggplot(subset(pdf1, source == "Francesco et al. 2020"), aes(costs / 1e9)) +
+>         coord_cartesian(ylim=c(0, 1)) +
+>         geom_point(aes(y=1 - benefits.mu)) +
+>         geom_line(data=cbind(costs=allcosts, pred), aes(y=exp(fit)), color="blue") +
+>         geom_ribbon(data=cbind(costs=allcosts, pred), aes(ymin=exp(lwr), ymax=exp(upr)), alpha=0.2, fill="blue") +
+>         theme_bw() +
+>         xlab("Capital and electricity costs (£billion)") + scale_y_continuous("Remaining damages", labels=scales::percent, expand=c(0, 0))
+> } else {
+>     ## Version 2: Assume benefits fall so that start at 1 with infinite slope down
+>     ## dbenefit / dcost = -A cost^-B => A/(-B+1) cost^(-B+1) + C
+>     ## C is 1 or whole is undefined, and B < 1
+>     ## A/(-B+1) cost^(-B+1) + 1 = 1 - benefit => A/(B-1) cost^(-B+1) = benefit => log(A/(B-1)) + (1-B) log(cost) = log(benefit)
+>     mod.cost <- lm(log(benefits.mu) ~ log(costs), data=subset(pdf1, source == "Francesco et al. 2020"))
+>     allcosts <- seq(0, 3e11, length.out=100)
+>     pred <- predict(mod.cost, data.frame(costs=allcosts), interval="prediction")
+> 
+>     ggplot(subset(pdf1, source == "Francesco et al. 2020"), aes(costs / 1e9)) +
+>         coord_cartesian(ylim=c(0, 1)) +
+>         geom_point(aes(y=1 - benefits.mu)) +
+>         geom_line(data=cbind(costs=allcosts, pred), aes(y=1 - exp(fit)), color="blue") +
+>         geom_ribbon(data=cbind(costs=allcosts, pred), aes(ymin=1 - exp(lwr), ymax=1 - exp(upr)), alpha=0.2, fill="blue") +
+>         theme_bw() +
+>         xlab("Capital and electricity costs (£billion)") + scale_y_continuous("Remaining damages", labels=scales::percent, expand=c(0, 0))
+> }
+> 
+> ## Now let's model it!
+> library(MASS)
+> library(reshape2)
+> random_draws_from_lm <- function(mod, new_data, N, include.intercept=T, random_params=NULL) {
+>     ## Coefficients and covariance matrix
+>     coefs <- coef(mod)
+>     if (is.null(random_params)) {
+>         vcov_matrix <- vcov(mod)
+> 
+>         ## Draw N samples from a multivariate normal distribution
+>         random_params <- mvrnorm(n=N, mu=coefs, Sigma=vcov_matrix)
+>     }
+> 
+>     ## Add an intercept term to new_data if needed
+>     if (include.intercept) {
+>         if ("(Intercept)" %in% names(coefs) && !("(Intercept)" %in% colnames(new_data)))
+>             new_data <- cbind(Intercept=1, new_data)
+>     } else {
+>         if ("(Intercept)" %in% names(coefs))
+>             random_params <- random_params[, -1]
+>     }
+> 
+>     ## Make predictions using the random parameters
+>     predictions <- as.matrix(new_data) %*% t(random_params)  # Transpose to align dimensions
+>     return(predictions)
+> }
+> 
+> random_params_from_lm <- function(mod, N) {
+>     coefs <- coef(mod)
+>     vcov_matrix <- vcov(mod)
+> 
+>     ## Draw N samples from a multivariate normal distribution
+>     mvrnorm(n=N, mu=coefs, Sigma=vcov_matrix)
+> }
+> 
+> save(mod.cost, mod.temp, random_draws_from_lm, random_params_from_lm, coeffs, do.cost.version, file="adaptcalib.RData")
+> 
+> pdf.policy <- data.frame()
+> for (do.shutters in c(F, T)) {
+>     if (do.shutters) {
+>         calib.benefits <- 0.3780000
+>         calib.costs <- 115634116968
+>         include.temp.effect <- T
+>     } else {
+>         calib.benefits <- 0.2204301
+>         calib.costs <- 50241148879
+>         include.temp.effect <- F
+>     }
+> 
+>     ## Cost model calibrated to A/C: log(1 - benefits) = beta1 calib.costs
+>     ## But I know that log(1 - calib.benefits) = beta2 calib.costs
+>     ## Want factor * beta1 calib.costs = log(1 - calib.benefits)
+>     factor.one.m.benefits <- log(1 - calib.benefits) / predict(mod.cost, data.frame(costs=calib.costs))
+> 
+>     for (costs in c(0, 1260e6, 100e9, 300e9)) { # 1260 M GBP / yr is from NAP
+>         if (do.cost.version == 1) {
+>             draws.cost <- random_draws_from_lm(mod.cost, data.frame(costs), 4000) * factor.one.m.benefits
+>         } else {
+>             if (costs == 0)
+>                 draws.cost <- 0
+>             else {
+>                 vals <- random_draws_from_lm(mod.cost, data.frame(log(costs)), 4000)
+>                 draws.cost <- log(1 - exp(vals))
+>             }
+>         }
+>         draws.temp <- random_draws_from_lm(mod.temp, data.frame(dgmst=seq(0, 4, by=.1)), 4000, include.intercept=F)
+>         draws.temp.df <- melt(draws.temp, c('ti', 'mc'))
+>         draws.temp.df$dgmst <- seq(0, 4, by=.1)[draws.temp.df$ti]
+>         coeffs2 <- coeffs
+>         coeffs2$draw.cost <- c(draws.cost)
+>         if (include.temp.effect) {
+>             pdf2m.new <- coeffs2 %>% left_join(draws.temp.df, by='mc', relationship="many-to-many") %>%
+>                 mutate(deaths=(alpha * dgmst + beta * dgmst^2)*(1 - (1 - exp(value))*(1 - exp(draw.cost)))) %>%
+>                 group_by(dgmst) %>% summarize(ci25=quantile(deaths, .25), ci75=quantile(deaths, .75), deaths=mean(deaths))
+>         } else {
+>             pdf2m.new <- coeffs2 %>% left_join(draws.temp.df, by='mc', relationship="many-to-many") %>%
+>                 mutate(deaths=(alpha * dgmst + beta * dgmst^2)*exp(draw.cost)) %>%
+>                 group_by(dgmst) %>% summarize(ci25=quantile(deaths, .25), ci75=quantile(deaths, .75), deaths=mean(deaths))
+>         }
+>         pdf.policy <- rbind(pdf.policy, cbind(solution=ifelse(do.shutters, "Shutters", "A/C"), costs=costs, pdf2m.new))
+>     }
+> }
+> 
+> ggplot(subset(pdf.policy, costs != 1260e6), aes(dgmst, deaths)) +
+>     facet_wrap(~ solution) +
+>     geom_line(aes(colour=factor(costs / 1e9))) +
+>     geom_ribbon(data=subset(pdf.policy, costs %in% c(0, 300e9)), aes(ymin=ci25, ymax=ci75, group=costs), alpha=.2) +
+>     theme_bw() + xlab("GMST Warming vs. 1961-1990 average") +
+>     ylab("Excess UK heat-related mortality") +
+>     scale_colour_manual("Investment:", breaks=c(0, 100, 300), labels=c("None", "£100 billion", "£300 billion"),
+>                         values=c('#d95f02', '#7570b3', '#1b9e77'))
+> 
+> ## Determine vulnerability: CIL results can be used to decompose deaths
+> ## Assume that total death rate is sum of a.hot T + b.hot T^2 + c.cold exp(- d.cold T)
+> ## Let's just grab the portion of uncertainty above 0
+> 
+> cilvuln.2 <- data.frame()
+> cilvuln.4 <- data.frame()
+> for (region in unique(cil.deaths$region)) {
+>     subdf <- cil.deaths[cil.deaths$region == region,]
+>     draws.2 <- c()
+>     draws.4 <- c()
+>     for (ii in 1:nrow(subdf)) {
+>         alphabeta <- rmvnorm(1e5, c(subdf$alpha[ii], subdf$beta[ii]), matrix(c(subdf$sigma11[ii], subdf$sigma12[ii], subdf$sigma12[ii], subdf$sigma22[ii]), 2, 2))
+>         ## Minimum is alpha + 2 beta T = 0
+>         T.minimums.4 <- pmin(4, pmax(0, -alphabeta[, 1] / (2 * alphabeta[,2])))
+>         y.minimums.4 <- pmin(0, alphabeta[, 1] * T.minimums.4 + alphabeta[, 2] * T.minimums.4^2)
+> 
+>         changeat.2 <- alphabeta[, 1] * 2 + alphabeta[, 2] * 2^2 + rnorm(1e5, 0, subdf$zeta[ii]) * 2 + rnorm(1e5, 0, subdf$eta)
+>         if (any(changeat.2 >= 0))
+>             draws.2 <- c(draws.2, changeat.2[changeat.2 >= 0]) # drop negatives
+>         else
+>             draws.2 <- c(draws.2, 0)
+> 
+>         changeat.4 <- alphabeta[, 1] * 4 + alphabeta[, 2] * 4^2 + rnorm(1e5, 0, subdf$zeta[ii]) * 4 + rnorm(1e5, 0, subdf$eta)
+>         adjusted <- changeat.4 - y.minimums.4
+>         if (any(adjusted >= 0))
+>             draws.4 <- c(draws.4, adjusted[adjusted >= 0]) # drop negatives
+>         else
+>             draws.4 <- c(draws.4, 0)
+>     }
+> 
+>     cilvuln.2 <- rbind(cilvuln.2, data.frame(region, mu=mean(draws.2), sd=sd(draws.2),
+>                                              ci05=quantile(draws.2, .05),
+>                                              ci95=quantile(draws.2, .95),
+>                                              ci005=quantile(draws.2, .005),
+>                                              ci995=quantile(draws.2, .995)))
+>     cilvuln.4 <- rbind(cilvuln.4, data.frame(region, mu=mean(draws.4), sd=sd(draws.4),
+>                                              ci05=quantile(draws.4, .05),
+>                                              ci95=quantile(draws.4, .95),
+>                                              ci005=quantile(draws.4, .005),
+>                                              ci995=quantile(draws.4, .995), T.minimum=mean(T.minimums.4)))
+> }
+> 
+> source("~/projects/research-common/R/myPBSmapping.R")
+> 
+> shp <- importShapefile("~/Dropbox/For DJ/world-combo-201710/agglomerated-world-new-simp100.shp")
+> polydata <- attr(shp, 'PolyData')
+> 
+> gbr.pids <- polydata$PID[polydata$ISO == 'GBR']
+> centroids <- calcCentroid(subset(shp, PID %in% gbr.pids), rollup=1)
+> 
+> curves <- cil.deaths %>% group_by(region) %>% summarize(alpha=mean(alpha), beta=mean(beta)) %>%
+>     group_by(region) %>%
+>     reframe(TT=seq(2, 4, by=0.1), yy=alpha*TT + beta*TT^2 - alpha*2 - beta*2^2)
+> curves2 <- curves %>% left_join(polydata, by=c('region'='hierid')) %>% left_join(centroids, by='PID')
+> 
+> cilvuln.42 <- cilvuln.4 %>% left_join(polydata, by=c('region'='hierid'))
+> shp2 <- subset(shp, PID %in% gbr.pids) %>% left_join(cilvuln.42[, c('PID', 'mu')], by='PID')
+> 
+> ggplot(shp2, aes(X, Y)) +
+>     geom_polygon(aes(group=paste(PID, SID), fill=mu)) +
+>     geom_line(data=curves2, aes(x=X + (TT - 2) * .2, y=Y + yy * .005, group=PID)) +
+>     geom_segment(data=centroids, aes(x=X, y=Y + 0.1, xend=X, yend=Y - 0.1))
+> 
+> cilvuln.22 <- cilvuln.2 %>% left_join(polydata, by=c('region'='hierid'))
+> shp2 <- subset(shp, PID %in% gbr.pids) %>% left_join(cilvuln.22[, c('PID', 'mu')], by='PID')
+> 
+> ggplot(shp2, aes(X, Y)) +
+>     geom_polygon(aes(group=paste(PID, SID), fill=mu)) +
+>     geom_line(data=curves2, aes(x=X + (TT - 2) * .2, y=Y + yy * .005, group=PID)) +
+>     geom_segment(data=centroids, aes(x=X, y=Y + 0.1, xend=X, yend=Y - 0.1))
+> 
+> cilvuln.24 <- cilvuln.22 %>% left_join(cilvuln.42, by='region', suffix=c('', '.4')) %>%
+>     mutate(mu=(mu + mu.4)/2)
+> shp2 <- subset(shp, PID %in% gbr.pids) %>% left_join(cilvuln.24[, c('PID', 'mu')], by='PID')
+> 
+> ggplot(shp2, aes(X, Y)) +
+>     coord_map() +
+>     geom_polygon(aes(group=paste(PID, SID), fill=mu)) +
+>     geom_line(data=curves2, aes(x=X + (TT - 2) * .2, y=Y + yy * .005, group=PID)) +
+>     geom_segment(data=centroids, aes(x=X, y=Y + 0.1, xend=X, yend=Y - 0.1)) + theme_bw() +
+>     xlim(c(-8.5, 2)) + scale_fill_gradient("Vulnerability", low="yellow", high="red") +
+>     xlab(NULL) + ylab(NULL)
+> ggsave("cilvuln.pdf", width=5, height=6)
+> ```
+> 
+> Can you please write up a clear, succinct methodology for the
+> adaptation section?
+> 
+> Follow conventions of (1) using LaTeX and surround math with $...$, \[
+> ... \], and the like; (2) avoid an overly step-by-step description and
+> do not use subsections; (3) if you need to use indices, counties are
+> i, Monte Carlos are m, and years are t; (4) do not refer to function
+> or column names explicitly; and (5) use natbib references, and where
+> new ones are required follow the references with note in parentheses
+> of what it should refer to.
+**assistant**:
+> Here is a draft adaptation-methods subsection that matches the style of your risk‑modelling text and the conventions you specified.
+> 
+> ---
+> 
+> \subsection{Modeling adaptation in heat-related mortality}
+> 
+> We incorporate adaptation into the heat-mortality damage function in two stages. First, we compile empirical estimates of the mortality benefits and costs of specific adaptation measures and use these to infer generic relationships between adaptation spending, climate conditions, and reductions in temperature-related vulnerability. Second, we embed these relationships into the temperature–mortality damage function, so that projected deaths respond endogenously to both global mean temperature and assumed adaptation investments.
+> 
+> The empirical calibration draws on four distinct adaptation channels. For building-level measures, we use estimates of the effectiveness of external shutters in reducing summertime temperature-related mortality in the UK under the UKCP09 medium-emissions scenario \citep{taylor2018projecting} (projecting impact of shutters on UK heat mortality). We combine these with estimates of capital costs per dwelling for internal shutters and current UK housing stock to obtain national-scale expenditures. For active cooling, we use evidence on the association between air-conditioning prevalence and heat-related mortality from Canada \citep{francesco2020aircon} (air-conditioning and heat mortality), together with UK-specific capital costs for portable and fixed units and projected electricity expenditures, to construct cost–benefit points at different penetration levels. For autonomous behavioural and technological adaptation, we use a global, empirically based model of temperature–mortality vulnerability that distinguishes total climate-related mortality from the component directly attributable to temperature, allowing the residual to be interpreted as adaptation-related mortality changes \citep{carleton2022mortality} (global temperature–mortality meta-analysis with income and adaptation). Finally, we use the estimated income elasticity of climate-related mortality from the same study to represent income-driven adaptation or improved health-system capacity.
+> 
+> For each adaptation measure $k$ (e.g.\ shutters, air conditioning, autonomous adaptation, income-related adaptation), we express the empirical evidence in terms of (i) an estimated proportional reduction in national vulnerability to heat-related mortality, defined as the ratio of projected excess deaths with and without the measure at a given level of global mean surface temperature change $\Delta T$, and (ii) an associated national annualised expenditure. Vulnerability reductions are constructed either directly from reported mortality changes (for shutters and air conditioning) or by decomposing total and temperature-attributable mortality estimates into an adaptation-related residual (for autonomous and income-related adaptation). For measures with reported uncertainty (e.g.\ air-conditioning effectiveness), we treat reported confidence bounds as defining a lognormal sampling distribution for the fractional change in vulnerability.
+> 
+> We convert these point estimates into a continuous vulnerability-response relationship. First, we relate proportional vulnerability reductions to global mean temperature by fitting a log-linear model of benefits as a function of $\Delta T$ using the shutter evidence; this provides a temperature-dependent scaling that captures the fact that a fixed measure yields larger absolute mortality benefits at higher temperatures. Second, we calibrate an aggregate cost–benefit relationship for adaptation by fitting a log–log model of the proportional reduction in vulnerability against total national adaptation expenditure, using the air-conditioning evidence as the primary calibration point. This yields a functional form in which the fractional reduction in vulnerability from adaptation spending $C$ satisfies
+> \[
+> \log B(C) = \gamma_0 + \gamma_1 \log C,
+> \]
+> with the implied benefits $B(C)$ approaching unity as $C$ grows large and diminishing marginal returns for increasing $C$. We propagate parameter uncertainty by drawing Monte Carlo samples $m$ from the estimated coefficient covariance matrices, generating an ensemble of benefit curves $B_m(C,\Delta T)$ that jointly reflect uncertainty in both temperature- and cost-responsiveness.
+> 
+> To link these calibration relationships to the baseline temperature–mortality damage function, we treat the no-adaptation excess heat deaths as a quadratic function of global mean temperature change,
+> \[
+> D^{\mathrm{base}}(\Delta T) = \alpha \Delta T + \beta \Delta T^2,
+> \]
+> where $\alpha$ and $\beta$ are themselves estimated by meta-analysing several UK-focused projections of future heat-related mortality under alternative scenarios \citep{hajat2014health,jenkins2022heat,garcialeon2024heat,hsa2023heat,carleton2022mortality} (UK projections of future heat mortality under climate change). For each source, we interpret reported central projections and uncertainty ranges for excess deaths at different temperatures or time points as noisy observations of this quadratic form, and fit source-specific coefficients using repeated sampling from the implied normal distributions. Combining these across sources in a Monte Carlo ensemble yields a distribution of baseline mortality trajectories $D_m^{\mathrm{base}}(\Delta T)$ and associated uncertainty bands.
+> 
+> Adaptation is then represented as a multiplicative attenuation of these baseline damages. For a given temperature change $\Delta T$ and total adaptation expenditure $C$, the adapted excess deaths in Monte Carlo draw $m$ are given by
+> \[
+> D_m^{\mathrm{adapt}}(\Delta T, C) = D_m^{\mathrm{base}}(\Delta T)\,\bigl[1 - B_m(C,\Delta T)\bigr],
+> \]
+> where $B_m(C,\Delta T)$ is the fraction of baseline vulnerability removed by adaptation. For measures that primarily shift vulnerability independent of temperature (such as widespread deployment of active cooling), we treat $B_m$ as a function of $C$ alone and apply a temperature-independent scaling. For measures whose effectiveness is estimated at particular temperature levels (such as shutters), we apply both the cost–benefit scaling and the temperature elasticity so that the same level of investment produces greater absolute mortality reductions at higher $\Delta T$. For income-driven adaptation, we approximate future income effects by applying the estimated income elasticity of climate-related mortality to the projected change in per-capita income between a reference and future period, thereby obtaining an effective $B_m$ corresponding to income-driven vulnerability reductions without additional explicit adaptation spending.
+> 
+> We evaluate several stylised national adaptation policy scenarios, each defined by a total expenditure trajectory and a mix of measures. For each scenario, we apply the corresponding attenuation factor to the baseline meta-analytic mortality curve to obtain a set of temperature-dependent adapted mortality trajectories $\{D_m^{\mathrm{adapt}}(\Delta T, C)\}_m$. These are then transformed into monetary damages using the same value of a prevented fatality as in the baseline risk modelling, and expressed as annual losses relative to a UK GDP trajectory. The Monte Carlo ensemble provides central estimates and uncertainty ranges for adaptation-adjusted mortality damages under alternative levels of investment, which are then used in the broader meta-analytic synthesis across sectors described in \citet{rising2026comprehensive}.
+**user**:
+> This seems a bit long. Can you shorten it?
+> 
+> Also, I just saved two of the figures produced in the code:
+> ```
+> ggplot(subset(pdf1, solution == 'Shutters'), aes(dgmst, roi.mu * 1e9 * 1.34, colour=solution)) +
+>     geom_line() +
+>     scale_y_continuous("Reduction in national vulnerability per £billion", labels=scales::percent) +
+>     xlab("GMST Warming vs. 1961-1990 average") +
+>     scale_colour_discrete(name="Intervention:") +
+>     theme_bw()
+> ggsave("shutters-vs-temp.pdf", width=4, height=3)
+> 
+> ggplot(subset(pdf1, solution == 'A/C'), aes(costs / (1e9 * 1.34), roi.mu * 1e9 * 1.34)) +
+>     geom_line(aes(colour=solution)) + geom_ribbon(aes(ymin=roi.ci05 * 1e9 * 1.34, ymax=roi.ci95 * 1e9 * 1.34), alpha=.5) +
+>     scale_y_continuous("Reduction in national vulnerability per £billion", labels=scales::percent) +
+>     xlab("Total investments (£billion)") +
+>     scale_colour_discrete(name="Intervention:") +
+>     theme_bw()
+> ggsave("ac-vs-total.pdf", width=4, height=3)
+> ```
+> 
+> Can you add in LaTeX for these two figures (i.e., the latex around the PDFs). Use labels that have the prefix "health-" and the files will be in `figures/adapt/health`.
+**assistant**:
+> Here is a shorter adaptation-methods paragraph, followed by LaTeX for the two figures.
+> 
+> ---
+> 
+> \subsection{Modeling adaptation in heat-related mortality}
+> 
+> We represent adaptation as a reduction in temperature-related vulnerability that depends on both global mean temperature change and adaptation investment. We first compile empirical estimates of mortality benefits and costs for several adaptation channels: building-level shading (external shutters) in the UK under UKCP09 \citep{taylor2018projecting} (projecting impact of shutters on UK heat mortality), air conditioning and its association with heat-related deaths from Canadian evidence combined with UK-specific costs \citep{francesco2020aircon} (air-conditioning and heat mortality), and autonomous and income-driven adaptation inferred from the decomposition of total and temperature-attributable mortality and income elasticities in a global temperature–mortality study \citep{carleton2022mortality} (global temperature–mortality meta-analysis with income and adaptation). For each measure, we derive a proportional reduction in national vulnerability (the ratio of excess deaths with and without the measure) and an associated annualised national expenditure.
+> 
+> We use these points to estimate two generic relationships: a temperature dependence of vulnerability reduction, fitted as a log-linear function of global mean temperature change using the shutter evidence, and a diminishing-returns cost–benefit curve relating the proportional vulnerability reduction to total adaptation spending, fitted in log–log form using the air-conditioning evidence. Parameter uncertainty from these regressions is propagated by Monte Carlo sampling of coefficient vectors, generating an ensemble of benefit curves indexed by $m$. These are combined with the baseline, no-adaptation quadratic temperature–mortality damage function (estimated via meta-analysis of UK heat-mortality projections \citep{hajat2014health,jenkins2022heat,garcialeon2024heat,hsa2023heat,carleton2022mortality} (UK projections of future heat mortality under climate change)) to obtain adapted mortality as a multiplicative attenuation of baseline damages. For a given global mean temperature change $\Delta T$ and total adaptation expenditure $C$, excess heat deaths in draw $m$ are
+> \[
+> D_m^{\mathrm{adapt}}(\Delta T, C) = D_m^{\mathrm{base}}(\Delta T)\,\bigl[1 - B_m(C,\Delta T)\bigr],
+> \]
+> where $B_m(C,\Delta T)$ is the fraction of baseline vulnerability removed by adaptation. Income-driven adaptation is represented by applying the estimated income elasticity of climate-related mortality to projected changes in per-capita income, yielding an effective vulnerability reduction without explicit spending. For each stylised investment scenario, we obtain a distribution of adapted temperature–mortality trajectories, convert these into monetary damages using the same value of a prevented fatality as in the baseline risk modelling, and express them as annual losses relative to UK GDP.
+> 
+> ---
+> 
+> And here is the LaTeX for the two figures (assuming they live in \texttt{figures/adapt/health}):
+> 
+> ```latex
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=0.6\textwidth]{figures/adapt/health/shutters-vs-temp.pdf}
+>   \caption{Estimated reduction in national heat-related mortality vulnerability per \pounds{}billion of investment in external shutters, as a function of global mean surface temperature (GMST) increase relative to the 1961--1990 average. Shaded areas denote uncertainty bands from the empirical calibration.}
+>   \label{fig:health-shutters-vs-temp}
+> \end{figure}
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=0.6\textwidth]{figures/adapt/health/ac-vs-total.pdf}
+>   \caption{Estimated reduction in national heat-related mortality vulnerability per \pounds{}billion as a function of total national investment in air conditioning (capital and electricity costs), based on empirical evidence on air-conditioning prevalence and heat-related mortality. The shaded region shows the uncertainty range around the central estimate.}
+>   \label{fig:health-ac-vs-total}
+> \end{figure}
+> ```
+**user**:
+> Oops, I forgot to include the code for how this is then applied to damages. Here is that code:
+> ```
+> load.health.adapt <- function() {
+>     temps.gsat <- read.csv("Dataset v2/temps-gsat.csv")
+>     load("channels/health/adaptcalib.RData") # mod.cost, mod.temp, random_draws_from_lm, random_params_from_lm, coeffs, do.cost.version
+>     params.cost <- random_params_from_lm(mod.cost, 4000)
+>     params.temp <- random_params_from_lm(mod.temp, 4000)
+>     return(list(temps.gsat, mod.cost, mod.temp, random_draws_from_lm, params.cost, params.temp, coeffs, do.cost.version))
+> }
+> 
+> health.adapt.prop <- function(spend.MGBPyr, loaded, do.adapt=NA) {
+>     temps.gsat <- loaded[[1]]
+>     mod.cost <- loaded[[2]]
+>     mod.temp <- loaded[[3]]
+>     random_draws_from_lm <- loaded[[4]]
+>     params.cost <- loaded[[5]]
+>     params.temp <- loaded[[6]]
+>     coeffs <- loaded[[7]]
+>     do.cost.version <- loaded[[8]]
+> 
+>     if (is.na(do.adapt)) {
+>         do.shutters.set <- c(F, T)
+>     } else if (do.adapt == 'shutters') {
+>         do.shutters.set <- T
+>     } else if (do.adapt == 'aircon') {
+>         do.shutters.set <- F
+>     }
+> 
+>     pdf.policy <- data.frame()
+>     for (do.shutters in do.shutters.set) {
+>         if (do.shutters) {
+>             calib.benefits <- 0.3780000
+>             calib.costs <- 115634116968
+>             include.temp.effect <- T
+>         } else {
+>             calib.benefits <- 0.2204301
+>             calib.costs <- 50241148879
+>             include.temp.effect <- F
+>         }
+> 
+>         ## Cost model calibrated to A/C: log(1 - benefits) = beta1 calib.costs
+>         ## But I know that log(1 - calib.benefits) = beta2 calib.costs
+>         ## Want factor * beta1 calib.costs = log(1 - calib.benefits)
+>         factor.one.m.benefits <- log(1 - calib.benefits) / predict(mod.cost, data.frame(costs=calib.costs))
+> 
+>         for (costs in c(0, spend.MGBPyr * 1e6)) {
+>             ## Construct cummulative with 5% depreciation (ranges from 5 (window) to 27.5 years (resid. central air)
+>             allcosts <- costs * (1 - .95^(temps.gsat$year - 2024)) / (1 - .95)
+> 
+>             if (do.cost.version == 1) {
+>                 draws.cost <- random_draws_from_lm(mod.cost, data.frame(allcosts), 4000, random_params=params.cost) * factor.one.m.benefits
+>             } else {
+>                 vals <- random_draws_from_lm(mod.cost, data.frame(log(allcosts)), 4000, random_params=params.cost)
+>                 draws.cost <- log(1 - exp(vals))
+>             }
+>             draws.cost.df <- melt(draws.cost, c('ti', 'mc'))
+>             for (quant in c('mu', 'ci05', 'ci95')) {
+>                 draws.temp <- random_draws_from_lm(mod.temp, data.frame(dgmst=temps.gsat[, quant]), 4000, include.intercept=F, random_params=params.temp)
+>                 draws.temp.df <- melt(draws.temp, c('ti', 'mc'))
+>                 draws.temp.df$dgmst <- temps.gsat[draws.temp.df$ti, quant]
+>                 draws.temp.df$draw.cost <- draws.cost.df$value[draws.temp.df$mc]
+>                 coeffs2 <- coeffs
+>                 if (include.temp.effect) {
+>                     pdf2m.new <- coeffs2 %>% left_join(draws.temp.df, by='mc', relationship="many-to-many") %>%
+>                         mutate(effect=(1 - (1 - exp(value))*(1 - exp(draw.cost))), deaths=(alpha * dgmst + beta * dgmst^2)*(1 - (1 - exp(value))*(1 - exp(draw.cost)))) %>%
+>                         group_by(ti, dgmst) %>% dplyr::summarize(ci25=quantile(deaths, .25), ci75=quantile(deaths, .75), deaths=mean(deaths), effect=mean(effect))
+>                 } else {
+>                     pdf2m.new <- coeffs2 %>% left_join(draws.temp.df, by='mc', relationship="many-to-many") %>%
+>                         mutate(effect=exp(draw.cost), deaths=(alpha * dgmst + beta * dgmst^2)*exp(draw.cost)) %>%
+>                         group_by(ti, dgmst) %>% dplyr::summarize(ci25=quantile(deaths, .25), ci75=quantile(deaths, .75), deaths=mean(deaths), effect=mean(effect))
+>                 }
+>                 pdf.policy <- rbind(pdf.policy, cbind(scenario=temps.gsat$scenario, year=temps.gsat$year, measure=temps.gsat$measure, solution=ifelse(do.shutters, "Shutters", "A/C"), costs=costs, quant=quant, pdf2m.new))
+>             }
+>         }
+>     }
+> 
+>     pdf.policy2 <- pdf.policy %>% group_by(scenario, year, measure, costs, quant, ti) %>%
+>         dplyr::summarize(deaths=min(deaths), ci25=min(ci25), ci75=min(ci75)) %>%
+>         group_by(scenario, year, measure, quant, ti) %>%
+>         dplyr::summarize(value=deaths[which.max(costs)] / deaths[which.min(costs)],
+>                          value.ci25=ci25[which.max(costs)] / deaths[which.min(costs)],
+>                          value.ci75=ci75[which.max(costs)] / deaths[which.min(costs)]) %>%
+>         group_by(scenario, year, measure) %>%
+>         dplyr::summarize(mu=value[quant == 'mu'],
+>                          ci25=(min(value) + pmax(0, pmin(value.ci25[quant == 'mu'], value.ci75[quant == 'mu']))) / 2,
+>                          ci75=(max(value) + pmin(1, pmax(value.ci25[quant == 'mu'], value.ci75[quant == 'mu']))) / 2)
+> 
+>     return(pdf.policy2)
+> }
+> 
+> health.adapt.shutters <- function(spend.MGBPyr, loaded) {
+>     health.adapt.prop(spend.MGBPyr, loaded, do.adapt='shutters')
+> }
+> 
+> health.adapt.aircon <- function(spend.MGBPyr, loaded) {
+>     health.adapt.prop(spend.MGBPyr, loaded, do.adapt='aircon')
+> }
+> ```
+> Can you please include this too, into one combined discussion following these conventions?
+**assistant**:
+> Here is a shorter, combined adaptation subsection that now explicitly covers both the calibration and the way it is applied to the damage functions, consistent with your conventions.
+> 
+> ```latex
+> \subsection{Modeling adaptation in heat-related mortality}
+> 
+> We represent adaptation as a temperature- and investment-dependent reduction in vulnerability to heat-related mortality. Empirical calibration draws on four channels: building-level shading via external shutters in the UK under UKCP09 \citep{taylor2018projecting} (projecting impact of shutters on UK heat mortality); air conditioning, using evidence on the association between air-conditioning prevalence and heat-related mortality from Canada combined with UK cost estimates \citep{francesco2020aircon} (air-conditioning and heat mortality); and autonomous and income-driven adaptation, inferred from the decomposition of total and temperature-attributable mortality and income elasticities in a global temperature–mortality study \citep{carleton2022mortality} (global temperature–mortality meta-analysis with income and adaptation). For each measure, we derive (i) a proportional change in national vulnerability, defined as the ratio of excess deaths with and without the measure at a given global mean surface temperature change $\Delta T$, and (ii) an associated annualised national expenditure.
+> 
+> We use these points to estimate two generic relationships. First, a temperature dependence of vulnerability reduction is fitted using the shutter evidence, relating proportional benefits to $\Delta T$ and capturing the increasing absolute impact of a fixed measure at higher temperatures. Second, we estimate a diminishing-returns cost–benefit curve linking proportional vulnerability reduction to total adaptation spending $C$, in log–log form using the air-conditioning evidence. Together, these yield a function $B(C,\Delta T)$ giving the fraction of baseline vulnerability removed by adaptation investment $C$ at temperature change $\Delta T$. Parameter uncertainty from both regressions is propagated by Monte Carlo sampling of the coefficient vectors, producing an ensemble of benefit curves $B_m(C,\Delta T)$ indexed by $m$. For income-driven adaptation, we apply the estimated income elasticity of climate-related mortality to projected changes in per-capita income between a reference and future period, which yields an implicit $B_m$ without explicit adaptation spending.
+> 
+> These calibrated responses are applied to the meta-analytic, no-adaptation temperature–mortality damage function. Baseline excess heat deaths are represented as a quadratic in global mean temperature change,
+> \[
+> D_m^{\mathrm{base}}(\Delta T) = \alpha_m \Delta T + \beta_m \Delta T^2,
+> \]
+> with coefficients $\alpha_m$ and $\beta_m$ obtained from Monte Carlo meta-analysis of UK-focused projections of future heat-related mortality \citep{hajat2014health,jenkins2022heat,garcialeon2024heat,hsa2023heat,carleton2022mortality} (UK projections of future heat mortality under climate change). For each scenario and year $t$, we take projected global mean temperature change $\Delta T_t$ and construct an effective cumulative adaptation stock from a constant annual investment $C^{\mathrm{ann}}$ with a fixed depreciation rate. This provides an investment path $\{C_t\}_t$ that grows over time as the adaptation stock accumulates.
+> 
+> For each draw $m$, temperature level $\Delta T_t$, and investment $C_t$, we then compute the adapted excess deaths
+> \[
+> D_m^{\mathrm{adapt}}(\Delta T_t, C_t) =
+> \begin{cases}
+> D_m^{\mathrm{base}}(\Delta T_t)\,\bigl[1 - B_m(C_t,\Delta T_t)\bigr], & \text{if adaptation effectiveness is temperature dependent},\\[0.5em]
+> D_m^{\mathrm{base}}(\Delta T_t)\,\exp\bigl(\kappa_m(C_t)\bigr), & \text{if adaptation is represented as a temperature-independent scaling},
+> \end{cases}
+> \]
+> where the first case is used for measures such as shutters (combining temperature and cost responsiveness) and the second for measures such as air conditioning, with $\kappa_m(C_t)$ summarising the cost-based attenuation factor for draw $m$. For each scenario and year, we evaluate the ratio of adapted to baseline deaths, $D_m^{\mathrm{adapt}} / D_m^{\mathrm{base}}$, and summarise this across draws to obtain central estimates and uncertainty bounds for the proportional reduction in mortality under a given annual adaptation budget. These proportional reductions are finally applied to the monetary mortality damages from the baseline risk model (valued using the UK value of a prevented fatality and expressed relative to GDP), yielding temperature- and investment-dependent adaptation-adjusted health damage functions for each scenario.
+> ```
+**user**:
+> Thank you. Next, I would like you to provide a methods section for
+> "Variability and extreme events". Here is the relevant code:
+> ```
+> setwd("~/Dropbox/HMT/channels/health/")
+> 
+> library(dplyr)
+> 
+> load("~/Dropbox/UK Economic Risks/channels/health/combo-adm3.RData")
+> 
+> combo1 <- combo %>% group_by(scenario, county, period) %>% reframe(run_id=run_id, origrid=run_id[order(deathrate)], deathrate=sort(deathrate))
+> combo2 <- combo1 %>%
+>     group_by(scenario, county, run_id) %>% reframe(origrid=sample(origrid, 1), Year=2025:2075, deathrate=approx(c(2020, 2050, 2090), deathrate, Year)$y)
+> combo2$scenrid <- paste(combo2$scenario, combo2$origrid)
+> 
+> load("~/Dropbox/HMT/climate/likely.RData")
+> 
+> results <- data.frame()
+> for (climscen in c('Most Likely', 'High Risk')) {
+>     ## Annual projections
+>     for (year in 2025:2075) {
+>         if (climscen == 'Most Likely') {
+>             subfin <- subset(combo2, Year == year & scenrid %in% gsat.likely$scenrid)
+>         } else {
+>             subfin <- subset(combo2, Year == year & scenario == 'ssp370')
+>         }
+>         subfin2 <- subfin %>% group_by(county) %>% summarize(mu=mean(deathrate), ci05=quantile(deathrate, .05),
+>                                                              ci95=quantile(deathrate, .95))
+> 
+>         results <- rbind(results, cbind(scenario=climscen, year=year, measure="EAD", subfin2))
+>     }
+> }
+> 
+> load("residmod.RData")
+> 
+> source("~/projects/research-common/R/myPBSmapping.R")
+> shp <- importShapefile("../../regions/gadm36_GBR_shp/gadm36_GBR_3-withattr.shp")
+> polydata <- attr(shp, 'PolyData')
+> 
+> climscen <- 'High Risk'
+> ## 1-in-200 year projections
+> for (year in c(2030, 2040, 2050)) {
+>     ## 1-in-10 year outcome
+>     subfin <- subset(combo2, scenario == 'ssp370' & Year >= year & Year < year + 10)
+>     ## Use mod to calculate a 97.5th percentile
+>     subfin2 <- subfin %>% left_join(polydata[, -1], by=c('county'='NAME_3')) %>% group_by(Year, county) %>%
+>         summarize(deaths.q05.pc=quantile(deathrate / 1e5, 0.05), deaths.q95.pc=quantile(deathrate / 1e5, 0.95),
+>                   deaths.mu.pc=mean(deathrate / 1e5), popsum=mean(popsum))
+>     resids <- sample(resid(mod), nrow(subfin2), replace=T)
+>     subfin2$mu.pc <- predict(mod, data.frame(deaths.q975.pc=subfin2$deaths.mu.pc)) + resids
+>     subfin2$ci05.pc <- predict(mod, data.frame(deaths.q975.pc=subfin2$deaths.q05.pc)) + resids
+>     subfin2$ci95.pc <- predict(mod, data.frame(deaths.q975.pc=subfin2$deaths.q95.pc)) + resids # Only reliable for 97.5th quantile
+> 
+>     subfin2$mu <- subfin2$mu.pc * subfin2$popsum
+>     subfin2$ci05 <- subfin2$ci05.pc * subfin2$popsum
+>     subfin2$ci95 <- subfin2$ci95.pc * subfin2$popsum
+> 
+>     ## Choose the worst year
+>     worstyear <- subfin2 %>% group_by(Year) %>% summarize(ci95=sum(ci95)) %>% ungroup() %>% summarize(Year=Year[which.max(ci95)])
+>     subfin3 <- subset(subfin2, Year == worstyear$Year)
+> 
+>     results <- rbind(results, cbind(scenario=climscen, year=year, measure="Extreme", subfin3[, c('county', 'mu', 'ci05', 'ci95')]))
+> }
+> 
+> write.csv(results, "dataset.csv", row.names=F)
+> 
+> library(ggplot2)
+> 
+> results2 <- results %>% group_by(scenario, year, measure) %>% summarize(mu=sum(mu), ci05=sum(ci05), ci95=sum(ci95))
+> 
+> ggplot(subset(results2, measure == 'EAD'), aes(year, mu)) +
+>     geom_line(data=subset(results2, measure == 'EAD'), aes(colour=scenario)) +
+>     geom_ribbon(aes(ymin=ci05, ymax=ci95, group=scenario), alpha=.5) +
+>     geom_errorbar(data=subset(results2, measure == 'Extreme'),
+>                   aes(x=year + 5, ymin=ci05, ymax=ci95), colour=scales::muted("red")) +
+>     theme_bw() + scale_x_continuous(NULL, expand=c(0, 0)) + ylab("UK-wide excess deaths (people)") +
+>     scale_colour_discrete("Scenario:") + theme(legend.justification=c(0, 1), legend.position=c(0.01, .99))
+> ggsave("dataset-uk.pdf", width=6.5, height=4)
+> 
+> ggplot(subset(results, measure == 'EAD'), aes(year, mu, group=county)) +
+>     facet_wrap(~ scenario, ncol=1) +
+>     geom_line(aes(colour=scenario), alpha=.5) +
+>     geom_jitter(data=subset(results, measure == 'Extreme'),
+>                 aes(x=year + 5, y=ci95), colour=scales::muted("red"), width=4, height=0) +
+>     theme_bw() + scale_x_continuous(NULL, expand=c(0, 0)) + ylab("Local excess deaths (people)") +
+>     scale_colour_discrete("Scenario:") + theme(legend.justification=c(1, 0), legend.position=c(.99, 0.01))
+> ggsave("dataset-adm3.pdf", width=6.5, height=4)
+> ```
+> 
+> Please note that you will not have to explain the definitions of
+> "Expected annual damages (EAD)" or the "1-in-200" events, since the
+> principles behind these will be described in another
+> non-channel-specific section.
+> 
+> Please include LaTeX figure descriptions for `dataset-adm3.pdf` and
+> `dataset-uk.pdf` which will be in the same figures folder?
+**assistant**:
+> ```latex
+> \subsection{Variability and extreme events}
+> 
+> To capture both interannual variability in heat-related mortality and the implications of rare extreme events, we construct an ensemble of annual county-level projections and then derive two types of outcomes: expected annual damages (EAD) and 1-in-200-year extreme events. All quantities are expressed as excess heat-related deaths relative to a historical baseline.
+> 
+> We begin from an ensemble of projected heat-related death rates by county $i$, scenario, and projection period, derived from a climate–health modelling framework (as described in the main health-damages section). Each ensemble member represents one possible realisation of the climate–health pathway. Within each combination of scenario, county, and period, we rank ensemble members by their projected death rate and use this ranking to define a severity index for each realisation. For each scenario–county–realisation triple, we then randomly sample a severity pathway from this ranked set and construct an annual time series of death rates for $t=2025,\dots,2075$ by linear interpolation between anchor years corresponding to approximately 2020, 2050, and 2090. This procedure preserves cross-sectional heterogeneity and the distribution of severity across ensemble members while providing annually resolved trajectories.
+> 
+> For EAD, we distinguish two climate scenario groupings: a ``Most Likely'' ensemble and a ``High Risk'' ensemble. The ``Most Likely'' category is defined by selecting those climate realisations whose global mean temperature trajectories lie within an externally defined likely range for the relevant emissions pathways, while the ``High Risk'' category corresponds to a high-emissions socio-economic pathway. For each scenario grouping, county $i$, and year $t$ (2025–2075), we compute the mean and empirical 5th and 95th percentiles across ensemble members $m$ of the annual death rate. These statistics are interpreted as the EAD and associated uncertainty range at the county scale. We then aggregate across counties to obtain national totals in each year and scenario.
+> 
+> Extreme events are analysed only for the ``High Risk'' climate pathway. For each target year $t_0\in\{2030, 2040, 2050\}$, we consider the 10-year window from $t_0$ to $t_0+9$. Within this window, we convert county-level death rates to per-capita terms using county populations and compute, for each year $t$ and county $i$, the ensemble mean and 5th and 95th percentiles of per-capita deaths. To estimate the tail behaviour of county-level outcomes, we apply a pre-calibrated statistical model that maps mean per-capita mortality to an adjusted high-quantile estimate. This model is fitted externally using residual-based methods and, when applied here, is evaluated with stochastic residual draws to propagate model uncertainty and unobserved variability. The resulting adjusted per-capita means and quantiles are then scaled back to counts using county populations.
+> 
+> To identify the extreme event within each 10-year window, we sum the adjusted 95th-percentile deaths across counties for each year $t$ in the window and select the year with the maximum national total. The corresponding county-level mean and 5th and 95th percentile deaths in that ``worst'' year are recorded as the extreme-event outcome for window $t_0$. For reporting and plotting, the extreme event is associated with the window’s start year $t_0$, indicating that the identified event occurs within the decade beginning in $t_0$.
+> 
+> The combined dataset thus contains, for each county $i$, year $t$, and scenario category, both EAD (annual mean and uncertainty range) and, for selected decades under the high-risk pathway, the spatial pattern and uncertainty range of extreme heat-related mortality. National-level summaries are obtained by summing county statistics, preserving consistency between local and national results. These outcomes are then used to characterise both typical annual impacts and low-probability, high-impact events within the broader assessment.
+> 
+> \begin{figure}[htbp]
+>   \centering
+>   \includegraphics[width=\textwidth]{figures/dataset-uk.pdf}
+>   \caption{UK-wide excess heat-related deaths under different climate scenarios and event types. Continuous lines show the mean expected annual damages (EAD) from 2025 to 2075 for the ``Most Likely'' and ``High Risk'' climate scenarios, with shaded bands indicating the 5th–95th percentile range across the ensemble. Superimposed red error bars show the 5th–95th percentile range of national deaths for 1-in-200-year extreme events, identified as the worst year within each corresponding 10-year window under the high-risk scenario.}
+>   \label{fig:dataset-uk}
+> \end{figure}
+> 
+> \begin{figure}[htbp]
+>   \centering
+>   \includegraphics[width=\textwidth]{figures/dataset-adm3.pdf}
+>   \caption{County-level excess heat-related deaths under different climate scenarios, including extreme events. Grey lines show the mean expected annual damages (EAD) trajectories for individual counties over time, with separate panels for the ``Most Likely'' and ``High Risk'' climate scenarios. Red jittered points mark the 95th-percentile outcomes for 1-in-200-year extreme events at the county level, corresponding to the worst year identified within each 10-year window under the high-risk scenario. Horizontal jitter is added to distinguish overlapping county values at the same projection year.}
+>   \label{fig:dataset-adm3}
+> \end{figure}
+> ```

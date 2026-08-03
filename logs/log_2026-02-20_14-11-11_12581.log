@@ -1,0 +1,96 @@
+**user**:
+> I have a CSV data file that looks like this:
+> ```
+> ticker,timestamp,open,high,low,close,adjclose,vol
+> SPY,1993-01-29T14:30:00.0,43.96875,43.96875,43.75,43.9375,24.241403579711914,1.0032e6
+> SPY,1993-02-01T14:30:00.0,43.96875,44.25,43.96875,44.25,24.413822174072266,480500.0
+> SPY,1993-02-02T14:30:00.0,44.21875,44.375,44.125,44.34375,24.465539932250977,201300.0
+> SPY,1993-02-03T14:30:00.0,44.40625,44.84375,44.375,44.8125,24.72416114807129,529400.0
+> SPY,1993-02-04T14:30:00.0,44.96875,45.09375,44.46875,45.0,24.82759666442871,531500.0
+> SPY,1993-02-05T14:30:00.0,44.96875,45.0625,44.71875,44.96875,24.810375213623047,492100.0
+> SPY,1993-02-08T14:30:00.0,44.96875,45.125,44.90625,44.96875,24.810375213623047,596100.0
+> SPY,1993-02-09T14:30:00.0,44.8125,44.8125,44.5625,44.65625,24.63794708251953,122100.0
+> SPY,1993-02-10T14:30:00.0,44.65625,44.75,44.53125,44.71875,24.67242431640625,379600.0
+> SPY,1993-02-11T14:30:00.0,44.78125,45.125,44.78125,44.9375,24.793123245239258,19500.0
+> SPY,1993-02-12T14:30:00.0,44.875,44.875,44.59375,44.59375,24.603473663330078,42500.0
+> SPY,1993-02-16T14:30:00.0,44.46875,44.46875,43.40625,43.46875,23.982778549194336,374800.0
+> ...
+> ```
+> And I want to use it in code that is used to reading a parquet file in pandas, and results in an object that's printed like this:
+> ```
+> >>> px
+> Date
+> 1789-05-01       0.51
+> 1789-06-01       0.51
+> 1789-07-01       0.50
+> 1789-08-01       0.51
+> 1789-09-01       0.51
+>                ...   
+> 2026-02-02    6976.44
+> 2026-02-03    6917.81
+> 2026-02-04    6882.72
+> 2026-02-05    6798.40
+> 2026-02-06    6917.68
+> Name: Close, Length: 39630, dtype: float64
+> ```
+> 
+> How can I read my CSV but produce something like that?
+**assistant**:
+> To achieve this, you'll want to read your CSV file into a Pandas DataFrame, then convert it into a Pandas Series with the date as the index and the 'close' price as the data. Here's how you can do it:
+> 
+> 1. First, read the CSV file using `pandas.read_csv`, ensuring the 'timestamp' column is parsed as datetime objects.
+> 
+> 2. Set the 'timestamp' column as the index of the DataFrame.
+> 
+> 3. Extract the 'close' column as a Pandas Series.
+> 
+> Here's how you can implement these steps in code:
+> 
+> ```python
+> import pandas as pd
+> 
+> # Read the CSV file
+> df = pd.read_csv('path/to/your/file.csv', parse_dates=['timestamp'])
+> 
+> # Set the 'timestamp' column as the index
+> df.set_index('timestamp', inplace=True)
+> 
+> # Extract the 'close' column as a Pandas Series
+> px = df['close']
+> 
+> # Rename the index to 'Date' for consistency
+> px.index.name = 'Date'
+> 
+> # Print the resulting Series
+> print(px)
+> ```
+> 
+> Ensure that `'path/to/your/file.csv'` is replaced with the actual path to your CSV file. After running this code, `px` will be a Pandas Series that looks similar to what you have for parquet files, with the date as the index and the 'close' price as the Series values.
+**user**:
+> The Date column there has a full DateTime. What if I just want it to show the Date?
+**assistant**:
+> If you want to keep only the date portion (without the time part) of the 'timestamp', you can use the `.dt.date` accessor to convert it to just the date. Here’s how you can modify the previous code to achieve that:
+> 
+> ```python
+> import pandas as pd
+> 
+> # Read the CSV file
+> df = pd.read_csv('path/to/your/file.csv', parse_dates=['timestamp'])
+> 
+> # Set the 'timestamp' column as the index
+> df.set_index('timestamp', inplace=True)
+> 
+> # Extract the 'close' column as a Pandas Series
+> px = df['close']
+> 
+> # Rename the index to 'Date' for consistency and convert to just the date
+> px.index = px.index.date
+> px.index.name = 'Date'
+> 
+> # Print the resulting Series
+> print(px)
+> ```
+> 
+> In this updated code:
+> - `px.index = px.index.date` converts the DateTime index to a date-only format.
+> This way, your output will show only the date in the format you're looking for, while the values remain the closing prices.

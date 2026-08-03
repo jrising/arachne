@@ -22,14 +22,16 @@ def get_log_filename(subdir=None):
 
 def create_chat(input_text, past_messages, history_text="", custom_system=None):
     if custom_system:
-        messages = [{"role": "system", "content": custom_system}]
+        system_message = custom_system
     else:
-        messages = [{"role": "system", "content": get_default_system_message()}]
+        system_message = get_default_system_message()
 
     print(history_text)
 
     if history_text:
-        messages.append({"role": "assistant", "content": history_text})
+        system_message += "\n\n" + history_text
+    
+    messages = [{"role": "system", "content": system_message}]
 
     if past_messages:
         for message in past_messages:
@@ -56,7 +58,8 @@ def chat_tokens(messages):
     return num_tokens
 
 training_end = {'gpt-4o': '2023-10', 'gpt-4o-mini': '2023-10', 'gpt-4-turbo-preview': '2023-04', 'gpt-4': '2021-09',
-                'gpt-3.5-turbo-0125': '2021-09', 'gpt-3.5-turbo': '2021-09'}
+                'gpt-3.5-turbo-0125': '2021-09', 'gpt-3.5-turbo': '2021-09', 'gpt-5.6-terra': "2026-02",
+                'gpt-5.6-luna': '2026-02', 'gpt-5-nano': '2025-08'}
 
 def fillin_training_end(messages, model):
     messages[0]['content'] = messages[0]['content'].replace("TRAINING_END", training_end.get(model, '2021-09'))

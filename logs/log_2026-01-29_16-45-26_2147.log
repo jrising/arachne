@@ -1,0 +1,489 @@
+**user**:
+> I am writing a README for a large project to assess climate damages in the UK. Currently the Usage section is very general:
+> ===
+> ## Usage
+> 
+> The following steps provide a comprehensive guide on how to run the code for assessing climate damages in the UK. Each step corresponds to different stages of preparation, processing, and analysis.
+> 
+> ### Step 1: Prepare Inputs
+> 
+> 1. **Climate Data Preparation (`/climate/`)**:  
+>    Begin by processing climate data from various sources and models. This includes analyzing and projecting temperature changes using historical and scenario-based models. Scripts in this directory are responsible for creating climate datasets needed for the damage assessment processes.
+> 
+> 2. **Regional Mapping (`/regions/`)**:  
+>    Transform and convert regional data to align different geographical databases. Ensure consistency across administrative units. This step allows for accurate analysis of how climate impacts manifest across various regions.
+> 
+> ### Step 2: Underlying Climate and Socioeconomic Visualizations
+> 
+> 3. **Climate Hazard Visualization (`/hazards/`)**:  
+>    Generate visualizations and summaries of potential climate hazards, combining geographical mapping with scenario analysis. This will provide insight into the spatial and economic impacts of climate-related hazards that underpin the damage assessments.
+> 
+> 4. **Socioeconomic Data Analysis (`/socioeconomics/`)**:  
+>    Handle regional economic data, such as income and GDP statistics, to provide context for how climate impacts interact with economic variables.
+> 
+> ### Step 3: Sector-Specific Analysis
+> 
+> 5. **Channel-Specific Projections (`/channels/`)**:  
+>    Each subdirectory within `channels/` targets a different sector, such as agriculture, health, energy, and more. Run these scripts independently to assess climate impacts specific to each sector. Each channel leverages sector-specific modeling approaches to quantify potential damages.
+> 
+> ### Step 4: High-Level Impact Assessments
+> 
+> 6. **Top-Down Damage Projections (`/topdown/`)**:  
+>    Utilize top-down modeling scripts to assess broad climate damage impacts both nationally and globally. This will create visualizations and scenarios that synthesize multiple projections into comprehensive outlines of potential welfare damages.
+> 
+> ### Step 5: Synthesis and Combined Results
+> 
+> 7. **Comprehensive Synthesis (`/synthesis/`)**:  
+>    Execute the synthesis scripts that combine outputs from the `channels/` and `topdown/` analyses. This step merges detailed sector-specific damages into an integrated assessment of climate impacts, providing a holistic view of potential economic and welfare harm under various scenarios.
+> 
+> After completing these steps, your project will have generated comprehensive analyses of climate impacts on various sectors and regions within the UK. Be sure to refer to individual script documentation or inline comments for specific execution instructions and parameter settings.
+> ===
+> 
+> However, I have a description of every file. These were generated independently, and I would like to now incorporate these into a step-by-step process. Here is the list:
+> ===
+>  - src1/topdown/graphs.R: Visualizing Climate Damages Across Scenarios
+> 
+> This R script processes and visualizes economic impact data related to climate change. It begins by setting the working directory and loading data from three sources: Dell, Jones, Olken (2012), Burke et al. (2015), and Kahn et al. (2019). It combines these datasets and labels them according to scenarios (SSP1-2.6 and SSP3-7.0) and periods. Using the 'dplyr' library, the script groups data to calculate welfare-equivalent damages (% GDP) for the UK and rest of the world (ROW). Confidence intervals are also computed. The script uses 'ggplot2' to generate several plots that depict these damages over different scenarios and time periods, highlighting UK-only and ROW impacts. Additional data handling includes the formulation of combined datasets and the use of faceted and flipped axis plots to effectively display the results.
+> 
+>  - src1/topdown/combine.R: Combining and Analyzing National Climate Impacts
+> 
+> This script processes climate impact data for different scenarios (ssp126, ssp370) and years (2020, 2050, 2090), using projections from multiple studies (`burkeetal`, `djo`, `kahnetal`). It categorizes impacts into periods, averages them, and combines results at the administrative level (ADM0). The script calculates the mean impacts, and fractional losses for each scenario and period. GDP impacts are estimated by calculating the trade loss for the UK and global scenarios. It then summarizes these results, generating tables and maps, and saves the results to files for further analysis. The data is prepared to understand national and global climate damage assessments, emphasizing the UK, and helps in policy planning by showing potential economic impacts over different time horizons.
+> 
+>  - src1/topdown/burkeetal.R: Climate Impact Simulation and Mapping
+> 
+> This code script is part of an analysis for projecting climate impacts. It sets up parameters using statistical methods, specifically drawing coefficients from a multivariate normal distribution to simulate climate impacts based on temperature anomalies. The `setup` function initializes the coefficients depending on the scenario and `run_id`, while `simulate` calculates the impacts using temperature data. The results are generated through `country.project`, saved, and then processed to compute cumulative impacts. Mapping functions visually represent the data. The analysis concludes by calculating final results, formatting them for output, and adjusting confidence interval measures within the projections. The script manages data storage and retrieval, producing a CSV file with summarized projections, and ensures compatibility with subsequent analysis by adjusting the order and naming of confidence interval measures.
+> 
+>  - src1/topdown/driver.R: Projecting and Mapping Climate Impact on Country-level GDP
+> 
+> The script in `src1/topdown/driver.R` processes climate model data to simulate the impacts of climate change on different countries, particularly focusing on temperature changes from historical baselines. It mainly involves loading climate data, calculating temperature adjustments using CMIP6 scenarios, and assessing country-specific impacts over time. Key computations include adjusting national temperatures based on global mean surface temperature (GMST) differences and spreading these adjustments over projected years using provided shares. These simulations inform future economic impacts, specifically the change in GDP per capita. The script also includes functionalities to visualize results through map projections, depicting expected GDP losses under various scenarios. Customizable functions for running simulations and generating visualizations make this script adaptable for different climate models or scenarios. Additionally, the code allows for the incorporation of various impact measures (mean, 5% quantile, and 95% quantile) to illustrate potential ranges of economic losses.
+> 
+>  - src1/topdown/catastrophic.R: Catastrophic Climate Damage Simulation Code
+> 
+> This script analyzes national climate damages by simulating potential outcomes based on climate change data. It begins by setting the working directory and establishing the mean (\( \mu \)) and standard error (se) for a random coefficient used in damage calculations. The dataset, containing temperature projections from different scenarios, is loaded from a CSV file. For each unique run of the simulation, it applies a random damage coefficient drawn from a normal distribution with defined mean and standard error to calculate square-law damages. The script classifies the data into different periods (2011-2030, 2041-2060, and 2081-2100) before summarizing the calculated damages by scenario, period, and run_id using the `dplyr` package. Finally, the summarized results are saved to an R data file.
+> 
+>  - src1/topdown/togdp.R: Assessing Trade and GDP Impacts from Brexit Scenarios
+> 
+> The script from `src1/topdown/togdp.R` analyzes the economic impacts of different Brexit scenarios and climate change on the UK's GDP, exports, and imports. The code utilizes data sources from Latorre et al. 2019 and Dhingra et al. 2017, comparing "Soft Brexit" and "Hard Brexit" across various parameters. Linear regression is performed to model GDP change based on export and import variations. The `calc.tradeloss` function estimates trade-driven GDP loss using Comtrade data, while `calc.finals` computes GDP loss under future climate scenarios (ssp126, ssp370) across different time periods and confidence intervals. Finally, `final2tbl` prepares a comparative table summarizing the GDP impacts, demonstrating losses due to trade and climate changes, and differences between scenarios using a formatted table output.
+> 
+>  - src1/topdown/kahnetal.R: Temperature Impact Assessment for the UK
+> 
+> This R script, based on temperature data and economic modeling, aims to project the impact of temperature variations on the UK's economy. The model estimates temperature-related damages by computing differences from a 30-year mean temperature, generating coefficients using a multivariate normal distribution with specific parameters (`gamma`, `gammavcv`). The `setup` function initializes model conditions based on scenario and run ID, while the `simulate` function calculates climate impacts by analyzing temperature differences and updating a rolling historical temperature matrix. Impacts on different regions are determined, aggregated, and saved for further analysis. The results are further processed to calculate economic impacts relative to GDP using another script. Finalized results are written to a CSV file and adjusted for specific measures of confidence intervals, which are stored and reformatted for presentation.
+> 
+>  - src1/topdown/djo.R: UK Climate Damage Assessment Code
+> 
+> This script primarily handles data extraction and analysis related to GDP impacts on poorer countries over time. It sets up the working directory and sources essential scripts (`driver.R` and `togdp.R`). The script reads and cleans GDP per capita data for multiple countries, focusing on data starting from the 1970s. It identifies countries classified as 'poors' based on GDP per capita being below the median. A simulation function calculates impacts using coefficients for poorer countries, and results are generated through the `country.project` function. Results are processed to obtain final summaries, which are then saved as a CSV file. The script also reorganizes confidence interval labels ('ci95' and 'ci05') in the final dataset before tabulating and saving them.
+> 
+>  - src1/topdown/growth/diagnostics.R: Cap GDP Growth and Analyze Climate Loss  
+> 
+> This script analyzes economic data to assess the impact of climate change on GDP growth. It reads in regional climate impact data and socioeconomic data, then limits GDP annual growth rate changes to a maximum of 5%. The data is processed to replace negative or excessive growth with capped values and calculates cumulative losses. The processed data is then combined with recent GDP figures for further analysis. The script identifies regions with significant changes by 2099 under RCP 4.5 and summarizes the change in consumption over time, plotting these changes using ggplot for visual analysis. The result is a tabular breakdown of average losses per year, aiding in understanding climate impacts on economic growth across different regions and scenarios.
+> 
+>  - src1/topdown/growth/project-growth.R: Climate Damage Projection and Clustering in the UK
+> 
+> The R script processes climate impact data to assess potential economic losses under different representative concentration pathway (RCP) scenarios, specifically RCP 4.5 and RCP 8.5. It reads data from netCDF files within specified batch directories, extracting and calculating cumulative losses for various regions relative to the year 2005. An iterative approach is used to aggregate data across 38 batches while employing hierarchical clustering to group similar regions. The script calculates the mean losses for each cluster and compiles the results into a data frame that includes regional, yearly, and cluster-specific loss information. The final processed dataset is saved as a CSV file named "burkeetal.csv", providing a structured overview of projected climate-related economic impacts.
+> 
+>  - src1/regions/gadm2nuts.R: Converting GADM Regions to NUTS Codes
+> 
+> This script processes geographical data to create a mapping between GADM regions and NUTS regions within the UK. It begins by setting the working directory and importing necessary libraries. The script imports shapefiles for both the GADM (Global Administrative Areas) and NUTS (Nomenclature of Territorial Units for Statistics) regions. The centroids of the GADM regions are calculated, and events are generated from these centroids. The script then identifies which GADM centroids are within NUTS regions using a spatial join, checking the alignment of IDs between the two datasets. Finally, a crosswalk table combining the GADM and matched NUTS data, including NUTS IDs and names, is generated and saved as a CSV file, facilitating further analysis linking these different geographical classifications.
+> 
+>  - src1/regions/figures/maps.R: UK Regional Map Visualization with Climate Data
+> 
+> The script is designed to create regional maps for the United Kingdom using specific shapefiles and climate data. It begins by setting the working directory and loading necessary libraries such as PBSmapping and ggplot2. It imports several shapefiles representing different administrative levels in the UK and a climate raster file, organizing latitude and longitude lines for mapping. A ggplot object is created to display the data with a defined coordinate system, displaying polygons with specific colors and sizes, arranging them by administrative division. The map omits axis labels and ticks for a cleaner appearance. The resulting map is saved as a PDF. Additionally, the script evaluates area data from a shapefile with attributes, calculating an area ratio based on the known size of the Borough of Bedford and providing median and quantile analytics on this basis.
+> 
+>  - src1/hazards/cdiff.R: Calculating Climate Differences for Scenarios
+> 
+> This R script is designed to analyze climate data related to UK economic risks by calculating the changes in climate impact (cdiff) over specified periods and scenarios. It sets the working directory and sources a project script. The script iterates over unique scenarios and run IDs from a dataset, utilizing functions to retrieve warming values and patterns based on scenarios and run IDs. Within each period and year range, it calculates warming and climate differences, compiles these into a sub-result data frame, and aggregates results by period and location. The aggregated results are appended to a final results data frame, which associates climate changes with specific scenarios, run IDs, and patterns for further analysis.
+> 
+>  - src1/hazards/emdat.R: Visualizing Economic Impacts of UK Disasters
+> 
+> The script processes a dataset from an Excel file containing information on disasters and their impacts, including total damages and deaths. It utilizes R libraries to visualize the data, creating bar plots to show total damages in adjusted USD and total deaths, categorized by disaster type over years. Conversions from USD to GBP are applied using a fixed exchange rate and the value of statistical life from 2016. It combines this data with GDP and population information from 2015 to calculate comprehensive total damages, incorporating both financial and human impacts. The dataset is further processed, creating a combined data frame with specified years and visual plots displaying total damages in million British pounds. The plots show trends and highlight specific disaster types, using custom color coding, ultimately saving the visualization as a PDF file. Additionally, the script performs a proportion calculation related to GDP.
+> 
+>  - src1/synthesis/hierbayes.R: Bayesian Hierarchical Modeling of Treatment Effects in R
+> 
+> This code sets the working directory and loads necessary libraries, including 'rstan' for Bayesian analysis. It defines a hierarchical Bayesian model using the Stan programming language, focusing on analyzing treatment effects across two schools. Data for the model includes estimated treatment effects and their standard errors. The model parameters involve mean treatment effect (mu), variability (tau), and school-level variations (eta). The script iterates through simulations, updating a CSV file with new results after each iteration. This process involves generating random treatment effects and errors, fitting the model, and extracting parameter estimates, especially focusing on tau. Results are analyzed using different linear models to explore the relationship between the variability parameter (tau) and the treatment effects/sigma. The stepwise model selection is employed based on BIC. Visualizations are created using ggplot2, depicting relationships and trends between variables y2, sigma2, and tau, including log-transformed scale plots.
+> 
+>  - src1/synthesis/adm3combo.R: Synthesizing Climate Damage Data in the UK
+> 
+> This R script analyzes climate damage impacts across the UK via multiple channels such as sea level rise, agriculture, health, energy, and more. After establishing GDP projections and loading various damage datasets, economic losses are calculated as fractions of GDP for each county and scenario. The code aggregates results by regions (NUTS1 level), adjusts for known non-catastrophic damages, and applies CGE (Computable General Equilibrium) effects to enhance estimates. Coastal impacts, health, labor productivity, and other sectors are considered, with results combined and visualized by scenario and timeframe (2011-2030, 2041-2060, and 2081-2100). It then produces maps and graphs to show the distribution and impact of climate damages, and saves these visualizations for further analysis or reporting. Double counting adjustments and catastrophic risk contributions further refine the estimates.
+> 
+>  - src1/synthesis/pesetamap.R: PESETA IV Data Synthesis for UK Climate Damage Assessments
+> 
+> The script processes climate damage assessment data in the UK, focusing on the PESETA IV project by integrating results from climate impact channels. It begins by loading and aggregating gridded county-level results and saving them by channel. Coastal floods with implausible negative values are excluded. The script then scales damages using linear regression and matches them by county. It also verifies the estimates by calculating the mean damage across scenarios and periods and saves the matched results. Shape data for UK regions is imported to facilitate mapping, and the damages are joined with geographical data. These are used to create maps showing expected GDP damages, with outlines for low and high bounds specific to each damage channel, such as river floods, crop productivity, and other climate-related risks. Various summary statistics, like means and confidence intervals, are calculated to represent localized impacts.
+> 
+>  - src1/synthesis/damagefuncs.R: Climate Impact Assessments in the UK
+> 
+> The code in `damagefuncs.R` develops welfare damage functions (as a percentage of GDP) related to temperature changes for various climate channels, utilizing the UK Economic Risks data. It leverages data from "pesetaiv.csv" and employs a sensitivity analysis based on wheat impacts in South Central Europe. The script fits damage functions through the `fit.damages` method and visualizes these using ggplot2. The calculated functions are then used to project future climate-related damages across different scenarios and periods. This involves simulating temperature patterns for various scenarios, aggregating damage predictions across counties, and saving the results. Key outputs include visualizations of welfare damages relative to temperature changes and damage projections for scenarios, which are stored in .RData files for further analysis or reporting purposes. The script also aggregates and formats the results for electricity production differently from other channels due to its distinct characteristics.
+> 
+>  - src1/synthesis/barchart.R: Climate Damage Assessment in the UK Code
+> 
+> The R script consolidates multiple datasets regarding climate-related economic damages in the UK and calculates their impacts on GDP using historical data, projections, and risk assessments. It processes CSV files and RData files covering sea level rise, agriculture, algal blooms, milk and lamb production, biosphere damage, energy demand, health impacts, labor productivity, trade, and flooding. Using statistical analysis and computing fractions of GDP, the script integrates projections into scenario analyses. These include "High mitigation (SSP1-2.6)" and "Current policies (SSP3-7.0)" scenarios, adjusting for potential double-counting in drought and agricultural data. The data are further visualized with error bars and channels ranked by damage impact. Finally, the script accounts for missing non-catastrophic damages and catastrophic risks, generating several detailed summary tables and visualizations to illustrate the potential economic consequences under varying climate scenarios.
+> 
+>  - src1/synthesis/compare.R: Comparative Analysis of Climate Damages in the UK
+> 
+> This script compares welfare and economic damages in the UK and Ireland using data from the PESETA III and PESETA IV projects. It begins by setting the working directory and loading necessary libraries like `readxl` and `reshape2`. For PESETA III, welfare data is extracted and filtered for the UK and Ireland, with the data being reshaped for analysis. The project then moves to PESETA IV, where GDP data for 2015 is used to calculate expected economic damages due to climate change-related welfare impacts. These damages are computed as a percentage of GDP, and a visualization is created using `ggplot2`, showing welfare losses as a function of global temperature change. Additional data regarding flooding, infrastructure, and windstorms is imported from CSV files for further analysis. The script aims to quantify climate-related economic damages under different global warming scenarios.
+> 
+>  - src1/synthesis/bigtables.R: Climate Damage Data Synthesis and Export Scripts
+> 
+> The R script synthesizes climate damage data across different UK regions, incorporating various impact categories like coastal impacts, health, labor productivity, and more. It processes datasets for the UK, regional, and administrative levels, calculating mean and range values for each impact category. The data is disaggregated by time periods and scenarios (e.g., SSP370, SSP126) and reshaped for ease of analysis. Regional data is carefully ordered by specific UK regions, ensuring consistent analysis across geographic locations. The results for each category, along with total costs data, are saved as CSV files in the designated output folder. The script thus provides a comprehensive overview of potential economic impacts of climate change across multiple dimensions and geographic levels in the UK.
+> 
+>  - src1/lib/distance.R: Geographic Distance Calculation Functions
+> 
+> The code defines two functions for geographic calculations. The first function, `deg2rad`, converts degree measurements to radians, which is crucial for trigonometric functions. The second function, `gcd.slc`, calculates the great-circle distance between a reference point and a set of points on the Earth's surface, using their longitude and latitude in radians. It employs the spherical law of cosines to determine the distance, utilizing Earth's mean radius of 6371 km for the calculation. The commented section indicates an approximation for validating the formula used.
+> 
+>  - src1/lib/combine.R: Hierarchical Bayesian Model for Treatment Effects
+> 
+> The code utilizes the R libraries `sn` and `rstan` for statistical modeling and data processing. It defines a Stan model for Bayesian inference with a hierarchical structure to analyze treatment effects across multiple groups (denoted as "schools"). The function `hier.combine` processes a matrix `mcs` by computing means and standard deviations. If any standard deviations are zero, they are replaced by the mean of non-zero values. The Stan model is fitted to the data, extracting the parameter estimates, which are adjusted to minimize deviation from the overall mean, ensuring more reliable estimates with tighter bounds. The function returns resampled and combined data by selecting among these adjusted values, maintaining the diversity required for robust analysis.
+> 
+>  - src1/lib/disaggregate.R: Regional Disaggregation and Data Matching Script
+> 
+> This R script is designed to disaggregate regional data by linking geographic regions from a shapefile to specific attributes. It imports shapefiles containing geographical boundary data and combines them with regional attributes using the PBSmapping and dplyr libraries. The process involves calculating centroids of the regions, matching them to the provided regional shapefile, and determining which polygon each centroid belongs to. It addresses cases where regions do not match directly by assigning the most relevant region ID. Finally, it aligns names to match specific data regions and constructs area and population shares for the defined regions using a combination of joins and summaries. This is useful for regional analysis, such as assessing climate impacts at finer administrative levels.
+> 
+>  - src1/lib/aggregate.R: Aggregating Climate Data on UK Counties
+> 
+> This R script is designed for aggregating and analyzing spatial climate data in the UK. It uses a combination of raster manipulation, shapefile imports, and data aggregation techniques. Key functionalities include reading and transforming climate raster data, aggregating information to county-level administrative regions using weight maps, and linking gridded data with regional data for large-scale analysis. The script also supports population data processing and matching gridded climate impacts to regional assessments. With functions like `get.agginfo`, `county.average`, and `full.force.match`, the script calculates weighted aggregates, matches grid data to regions, and scales regional damages for model assessments. The use of `PBSmapping` and `dplyr` libraries facilitates geographic and data-intensive computations, respectively, ensuring accuracy in handling climate damage data across UK regions.
+> 
+>  - src1/lib/damagefunc.R: Climate Damage Function Fitting with Bayesian Regression
+> 
+> This script is designed to fit and visualize damage functions related to climate impacts using Bayesian regression models with the Stan language. It incorporates temperature differences to predict climate-related damages and supports three fitting approaches: Bayesian quadratic with prior, Bayesian linear or quadratic without prior, and ordinary least squares (OLS) for linear and quadratic specifications. The models account for uncertainties in impact assessments by using standard errors in the fitting process, and the Bayesian models enable posterior draws of coefficients. The script also includes functions to create visualizations of the fitted damage functions, allowing for examination of impact projections under varying temperature scenarios, and manages potential negative values using a customizable zero-negative threshold function. Additionally, the script includes region-specific fitting and plotting capabilities to facilitate a more localized damage analysis.
+> 
+>  - src1/lib/constants.R: Economic and Valuation Constants for UK Climate Assessment
+> 
+> The document defines several constants relevant to socioeconomic and economic evaluations in the UK. It includes GDP values in both USD and GBP for 2012, 2015, and 2020, alongside the population count in 2015. It specifies the USD to GBP conversion rate for 2015 as 0.6545. A valuation constant for 2016 is provided, representing the value of a statistical life at 1.83 million GBP. The UK's mortality rate is noted as 9 per 1000. The document provides GDP deflator indices for the years 2010 to 2021, indicating relative changes in price levels based on World Bank data.
+> 
+>  - src1/lib/report.R: Climate Damage Assessment Reporting Tools
+> 
+> The code provided includes functions for generating data tables and maps to assess climate damages across scenarios and periods. The `make.table` function creates statistical summaries of results based on specific scenarios ('ssp370' and 'ssp126'), calculating quantiles and means for climate data, as well as differences between scenarios. The `make.maps` function generates geographic maps using shapefiles for visualizing the mean and 95% confidence interval (CI95) of climate impact metrics over the UK. It utilizes the `ggplot2` package to style maps with color gradients. Parameters like limits and color scale can be customized for better visualization. The `make.maps.loop` function iterates over unique scenario-period combinations, calculating statistics for each period, and generates maps for both scenarios, combining results into a summary dataframe. These functions help visualize the regional impacts of climate change under different scenarios.
+> 
+>  - src1/lib/project.R: Climate Projections and Damage Assessment Code
+> 
+> This R script is designed to model and assess climate impacts for the UK within specified periods. It uses global mean surface temperature (GMST) data, climate pattern recognition, and world climate models to calculate end-of-century warming for different scenarios. The script reads various datasets, including grid temperature data, and leverages functions to derive warming patterns, temperature changes, and potential regional damages. It computes regional climate damage projections through a process of scenario evaluation, warming calculations, and extrapolation to pattern-based climate differences (cdiff). These differences are correlated with potential damages computed using coefficients from a regional climate impact assessment. The script also manages data caching for performance optimization and provides functions to map grid data to specific geographic regions using shapefiles. The results include summarized period-specific regional patterns and associated climate-induced damages.
+> 
+>  - src1/climate/resolution.R: Climate Data Raster Visualization in R
+> 
+> The code sets up an environment for geographic data visualization using climate data and shapefiles of the UK. It employs the HadGEM3 model from the Met Office Hadley Centre with longitudes and latitudes at resolutions of 0.35° and 0.23°, respectively. Shapefiles are imported to define boundaries at different administrative levels, while a raster from "uk-bio_1.nc" gives climate information. Longitude and latitude lines are generated to overlay onto the plot. The visual output is created with ggplot2, displaying the annual mean temperature using a gradient fill, with plotted polygons representing UK geographic boundaries. The layout is set with specific longitude and latitude limits and a fixed coordinate ratio. Data referenced is from WorldClim.
+> 
+>  - src1/climate/worldclim/adm0patterns.py: Climate Data Processing and Aggregation Script
+> 
+> The script preprocesses climate data using Python libraries such as NumPy, xarray, geopandas, and xagg for analysis of global administrative regions. It loads a pre-saved weight map from `adm0patterns_weights.pkl`, representing overlap weights between climate data and administrative boundaries. It processes ZIP files from a "future" directory by unzipping, reading TIFF files with xarray, adjusting datasets using `xagg`, and calculating population-weighted climate data aggregations, stored as CSVs. If the weight map doesn't exist, it is computed using population data, saved, and reused for future processing. Additionally, the script processes present climate data from a ZIP file, creating a similar aggregated CSV output. Temporary directories and extracted files are cleaned up using the `shutil` module to ensure efficient storage management during processing.
+> 
+>  - src1/climate/worldclim/global-lmst.R: Climate Model Data Processing Script
+> 
+> This R script processes climate data from WorldClim to assess land mean surface temperature (lmst) for both present and future scenarios at a global scale. Initially, it extracts and calculates the mean temperature for the period 1970-2000 using a baseline model. Subsequently, it iterates through future climate projections stored in zipped files, unzipping each and computing the lmst for various future models and scenarios. The results are compiled into a data frame indicating the period, model, scenario, and corresponding lmst. The script further calculates midyear for these periods and visualizes the changes in lmst relative to the baseline period using ggplot2. The analysis is plotted as a line graph showing temperature changes over time, categorized by scenario and model, enabling evaluation of potential future climate impacts.
+> 
+>  - src1/climate/worldclim/gendists.R: Generating Climate Warming Patterns and Distributions
+> 
+> The script is set to analyze climate model data, specifically focusing on global mean surface temperature (GMST) projections for the periods 1995-2015 and 2081-2100 using the CMIP6 dataset. It calculates the correlation between climate models and creates distributions of warming scenarios (ssp126 and ssp370). If instructed by the `do.redo.gendists` flag, the script uses raster data to assess temperature anomalies in relation to projected warming, optimizes the distribution of climate scenarios, and exports results. It also explores pattern assignments across scenarios, comparing them until consistent patterns are found. The script optionally plots warming distributions, emphasizing the climate model patterns and potential risks using ggplot2, with results output as a PDF. Additionally, common patterns across scenarios are compiled for further analysis.
+> 
+>  - src1/climate/worldclim/uk-crop-present.R: Unzipping and Processing Climate Data
+> 
+> The script sets the working directory and loads the necessary libraries, specifically `stringr` and `raster`. It iterates through all `.zip` files in the directory, unzipping them to extract and process raster data for 19 climate bands. Each `.zip` file is matched with corresponding `.tif` files, which are then read as raster layers and cropped to the specified extent covering the UK. The processed rasters are combined into a multi-layer stack, and subsequently, each is written to a NetCDF file using a modified filename. Finally, all temporary `.tif` files are removed to maintain directory cleanliness.
+> 
+>  - src1/climate/worldclim/uk-lmst.R: Calculating Mean Land Surface Temperature in UK  
+> 
+> This script analyzes climate data in the United Kingdom using raster data files to calculate the mean land surface temperature (lmst). The script sets the working directory to a specific path and uses the `raster` and `stringr` libraries. It first reads a baseline raster file of current conditions (1970-2000) from "uk-present" and calculates its mean temperature, storing the result in a data frame. For future scenarios, the script iterates over netCDF files in the "uk-future" directory, calculates the mean temperature for each file, and appends it to the data frame. The filenames are parsed to extract the period, model, and scenario information. Finally, the results are saved to a CSV file.
+> 
+>  - src1/climate/worldclim/display.R: Climate Impact Visualization for the UK
+> 
+> The script is designed for visualizing regional climate projections for the UK. It primarily utilizes the `ggplot2`, `cowplot`, `grid`, and `PBSmapping` libraries to create temperature maps and analysis plots. It reads climate projection data for different General Circulation Models (GCMs) and periods, then generates temperature maps with these data overlaid onto the UK map. Specifically, it projects temperature for two future periods, 2041-2060 and 2081-2100, under the SSP370 scenario, saving the figures as PDFs. Additionally, the script calculates and plots temperature changes over time based on historical data (1970-2000) against future projections up to 2100. It involves various scenarios and model runs with statistical summaries, including average temperature changes from a baseline period (1995-2015) and global warming impacts, providing insights into expected climatic shifts across the UK.
+> 
+>  - src1/climate/worldclim/uk-crop-future.R: Processing Future UK Climate Data
+> 
+> The script processes climate data from WorldClim in a future scenario context, with the focus on the United Kingdom. It begins by setting the working directory and loading necessary libraries. It iterates through each zipped file in the directory, extracting and processing TIFF files located within a folder named 'share'. For each file, it reads up to 19 data layers and crops them to a specified UK boundary extent. The cropped layers are combined into a stack. The final processed files are saved in NetCDF format with modified filenames, replacing "wc2.1_10m" with "uk". The script also cleans up by removing the 'share' directory after processing.
+> 
+>  - src1/climate/cmip6/find-2012.R: Analyzing Global Mean Surface Temperature Changes by 2012
+> 
+> The R script calculates the average global surface air temperature anomaly for the year 2012 relative to a 1850-1880 baseline using data from "gmst-annual.csv". The script utilizes the dplyr library to group temperature data by model, then computes the base period average and 2012 average for each model. It then calculates the mean temperature difference across models.
+> 
+>  - src1/climate/cmip6/gmst.R: Global Mean Surface Temperature Analysis Code
+> 
+> The code processes climate data using the CMIP6 model scenarios: 'historical', 'ssp126', and 'ssp370'. It reads climate model data from NetCDF files, determining times and temperature series, and computes global mean surface temperature (GSAT). Multiple model files are managed, including the different calendar and time unit formats. Grid sizes and weights are calculated to facilitate weighted averaging of temperature data. The code can operate in two modes (controlled by the `do.periods` flag): one for specific periods, producing results in larger chunks, and another on an annual basis. Depending on the mode, results are saved to either "gmst.csv" or "gmst-annual.csv", capturing scenario, model, and either periodical or annual GSAT values.
+> 
+>  - src1/climate/gsat/ssp370.R: Visualizing SSP3-7.0 Climate Projections
+> 
+> The script sets the working directory and imports required libraries. It reads a CSV file containing climate scenario data related to global surface air temperature (GSAT) under different Shared Socioeconomic Pathways (SSPs: SSP1-2.6 and SSP3-7.0). It writes a subset of this data, specifically for the year 2050, to another CSV file. The code then groups the data by year and scenario to calculate mean values and confidence intervals (CI5 and CI95). Labels are assigned to scenarios based on their SSP. A ggplot2 visualization is created for the SSP3-7.0 scenario, displaying trends from 1950 to 2100. The plot includes a line for mean GSAT and a ribbon showing the 5th and 95th percentile confidence intervals, with appropriate labeling and theming.
+> 
+>  - src1/climate/gsat/tipptadjust.R: Adjustment of Climate Projections Considering Tipping Points
+> 
+> The R script processes climate projection data, adjusting temperature projections by incorporating tipping point effects. It reads data from CSV files, selects random quantiles, and cleans up extrapolated data. Using a LOESS model, it predicts adjustments to the global surface air temperature (GSAT) values post-2014 across different scenarios and run IDs. These adjusted values account for tipping point influences which are gradually applied over time. The script uses data visualization to compare mean and confidence intervals of GSAT values before and after adjusting for tipping points, distinguishing between two climate scenarios: SSP1-2.6 and SSP3-7.0. The final adjusted data is written to a new CSV and projections for the year 2100 are extracted for further analysis or reporting.
+> 
+>  - src1/climate/gsat/biascorrect.R: Bias Correction in Climate Data
+> 
+> The script performs bias-correction on climate data based on research by Chris Smit. It processes a dataset of UK climate scenarios between SSP2-6.0 and SSP7-0.1 scenarios. Data for two periods, 1850-1900 and 1995-2014, is used to calculate the mean temperature change for different scenarios and model runs. It calculates differences in means between the two periods and compares the results to IPCC benchmarks, specifically referencing the expected temperature change range of 0.69 to 0.95 degrees, with a mean of 0.85 degrees. This approach ensures the dataset is accurately aligned with those climate change projections.
+> 
+>  - src1/climate/ukcp18/regtemps.py: Regional Temperature Aggregation in UKCP18
+> 
+> This script processes climate data for the UK, focusing on temperature data from present and future scenarios. It employs xarray and xagg libraries for data manipulation and aggregation. The script reads region data from a shapefile and applies it to future climate simulations stored in NetCDF files within a specified directory. It initially calculates a weightmap to account for pixel-region overlaps and uses this map for aggregating temperature datasets by region. Aggregated results are saved as CSV files for both future scenarios and present biological datasets stored with a different directory structure. This processing allows for regional assessments of potential climate impacts based on the UKCP18 climate projections.
+> 
+>  - src1/climate/ukcp18/load.R: UKCP18 Climate Data Processing Script
+> 
+> This script processes UK climate data from the UKCP18 project, focusing on temperature anomalies under various future emissions scenarios. It uses functions to read and manage historical and projected temperature data across different timescales and regions within the UK. The script calculates preindustrial, early 21st century, and projected temperatures for mid-century scenarios (2°C and 4°C global warming targets). The core function, `ukcp18.pattern.cdiff`, adjusts regional temperature changes relative to a baseline, while `ukcp18.project` evaluates possible climate impacts by calculating expected economic damages across UK regions for each scenario and period. It aggregates these results by scenario and run, providing a comprehensive assessment of projected climate damages across the UK, facilitating detailed analysis of adaptation strategies and their potential economic benefits.
+> 
+>  - src1/climate/ukcp18/regbest.py: Regional Temperature Aggregation Script
+> 
+> This script processes climate data for the United Kingdom using various Python libraries. It starts by setting the data path and reading regional spatial data through GeoPandas. A netCDF file, "Europe_TAVG_LatLong0.25.nc," containing temperature data is opened using xarray. A climatology DataArray is created and populated with temperature values on a yearly basis, up to 2012, to avoid 2013 data. The total temperature is computed by adding the climatology to the original temperature and removing the separate components. A weight map is created using xagg to determine pixel overlaps with UK regions. Finally, the data is aggregated based on these overlaps and exported to a CSV file.
+> 
+>  - src1/climate/best/plot.R: Climate Temperature Trends and Baselines
+> 
+> This R script processes and visualizes historical global and regional temperature data. It combines Global Land and Ocean, Global Land, Europe, and United Kingdom temperature data into a single dataset. The script reads temperature trends from several files, organizes and joins them into a comprehensive dataframe, and then reshapes the data for visualization. Using `ggplot2`, it first plots smoothed lines of raw temperature data, and then plots the temperature changes relative to a baseline period (1850-1900). The script calculates average baseline temperatures for the specified period and the more modern period (1981-2010) for comparison. The resultant plot, showing temperature changes, is saved as a PDF file named "historical.pdf". The script leverages `dplyr` for data manipulation and `reshape2` for reshaping data to support these operations.
+> 
+>  - src1/climate/tippts/compare.R: Temperature Impact Analysis with Tipping Points
+> 
+> This R script analyzes the impact of tipping points on temperature projections under scenarios RCP 4.5 and RCP 8.5. It imports climate data from Excel and compares temperature projections with and without tipping points. Data is visualized using ggplot2, showing the relationship between temperatures in scenarios with and without tipping points, emphasizing that the script highlights the importance of considering tipping points in climate projections. The visualization is saved as a PNG file. Further statistical analysis is performed to quantify the differences in temperature projections, recording the quantile-based adjustments between these scenarios over a specified range. The results are outputted to a CSV file, detailing the expected temperature adjustments and their quantiles, providing insights for understanding the impacts of tipping points in climate change modeling.
+> 
+>  - src1/climate/figures/timeseries.R: Timeseries Analysis of Climate Scenarios
+> 
+> This script analyzes climate data to visualize global surface air temperature (GSAT) projections and their variability under different socioeconomic pathways (SSP1-2.6 and SSP3-7.0). It utilizes data from SSP databases and CMIP6 models to construct distributions and baselines for temperatures relative to pre-industrial levels. Key calculations include the difference between projected and baseline temperatures for 2081-2100 compared to 1995-2005. The script generates histograms to indicate warming in 2100 and plots to display annual GSAT variations from 1850 to 2100 using both FAIR and CMIP6 climate models. Data points are visualized with ribbons depicting 5th to 95th percentile ranges, and lines represent individual GCM outputs, providing a comprehensive visual assessment of potential future climate trajectories.
+> 
+>  - src1/climate/ukcp09/regtemps.py: Regional Temperature Data Aggregation Script
+> 
+> This code processes climate data files from the UK Climate Projections 2009 (UKCP09) dataset. It utilizes various Python libraries including NumPy, xarray, xagg, and geopandas to handle numerical data, manipulate datasets, and work with geospatial data. The script reads shapefiles of UK regions and processes NetCDF files containing temperature data with longitude and latitude bounds. It fixes the dataset's structure, creates boundary arrays for longitude and latitude, and uses pixel overlaps to map climate data to regional boundaries, if the weightmap has not already been established. The climate data is then aggregated against these regions using the weightmap, and the result is exported to CSV format files for further analysis.
+> 
+>  - src1/climate/ukcp09/reporting-regions.R: Regional Temperature Projections and Climate Data Aggregation
+> 
+> The script processes climate simulation data to analyze temperature scenarios for the UK from 2070 to 2099 under different emission pathways using the UKCP09 dataset. It utilizes the `ncdf4` library to extract temperature data from netCDF files corresponding to the A1B, A1FI, and B1 scenarios, calculating mean and standard deviation of temperatures for each. The code indicates a mean global temperature increase of 3.40°C for A1B, 4.30°C for A1FI, and 2.65°C for B1. The `PBSmapping` library is used to import UK shapefiles to align temperature data with geographical regions. Regional identifiers from a separate CSV file on flooding are matched to geographical shapefile names, setting up for a detailed analysis of how these climate scenarios might impact specific regions in the UK.
+> 
+>  - src1/climate/ukcp09/reporting_regions.py: Regional Climate Scenario Processing
+> 
+> This script processes climate data to generate temperature projections for specific global scenarios using the UKCP09 dataset. It utilizes the xarray and xesmf packages to handle datasets and perform spatial interpolation, intending to assess future temperature scenarios for different parts of the UK. The script selects samples where temperature deviation is close to specified targets (2, 4, or 6 degrees) and computes average temperatures over these samples. It uses interpolation to map temperature data onto a new 2D grid, ensuring that NaN values are managed by substituting them where necessary. The results are saved into NetCDF files that represent projected mean temperatures for the specified climatic conditions. Baseline temperature computations are also included to provide a reference point, using similar methodologies and datasets for comparison.
+> 
+>  - src1/climate/era5/minmax.py: Calculating UK Daily Temperature Extremes
+> 
+> The script processes NetCDF files in the current directory to compute and store daily minimum, maximum, and average temperature values (tmin, tmax, tavg) in Celsius. These are calculated by grouping the temperature data by date and adjusting from Kelvin. The resultant data is saved into new NetCDF files, altering their filenames to include "-dailytemp-". Additionally, the script calculates annual mean temperatures over time and space, storing these results in a DataFrame that is subsequently exported to a CSV file named "ukmst.csv". The processed results are amalgamated across different chunks and concatenated along the 'year' dimension for final storage. The script handles date formatting to align with the proleptic Gregorian calendar, setting an epoch from 1990-01-01.
+> 
+>  - src1/socioeconomics/byadm3.R: Analyzing Regional Gross Disposable Household Income in the UK
+> 
+> The script processes socioeconomic data for the UK, focusing on regional Gross Disposable Household Income (GDHI) per capita. It loads GDHI data from an Excel file and calculates a scaling factor between GDHI and GDP per capita. It imports shapefiles to map geographical regions and calculates centroids for subnational administrative areas (adm3). The script integrates this geographic data with GDHI information, matching administrative levels to broader NUTS3 regions. It then summarizes the data by creating a new dataset (adm3info4) with county names, population, average GDHI, and scaled GDP per capita. Missing GDHI values are imputed with default data. Finally, it generates a visual representation using ggplot2, plotting GDHI across regions, and saving the output as a PDF. The aim is to link socioeconomic measures to specific geographic locations in the UK for further analysis or reporting.
+> 
+>  - src1/channels/agriculture/manyrun.sh: Multiple Iterations of Agriculture Simulation
+> 
+> The script `src1/channels/agriculture/manyrun.sh` is a shell script that executes a command ten times within a loop. Specifically, it runs an R script named `agcombine-adm3.R` in each iteration from 1 through 10. This script appears to be part of a larger agricultural assessment or data processing task related to climate impact studies.
+> 
+>  - src1/channels/agriculture/arable-project.R: Arable Agriculture Project: Climate Impact Mapping
+> 
+> This R script performs projections of arable agricultural impacts in the UK under different scenarios. It begins by reading a grid dataset and climate data, establishing the spatial reference system. Grid cells are matched with scenarios to calculate coefficients representing climate impacts. Results are projected across the dataset using a standardized climate model output. These projections are aggregated to administrative regions (ADM3) using shapefiles and production data. Agricultural production weights are estimated per region using a crosswalk of geographic identifiers and production data. The final output is the potential economic damage in monetary terms and expected arable loss, saved in data files for further analysis. The script includes visualization steps to map arable loss, using confidence intervals to display potential range and severity.
+> 
+>  - src1/channels/agriculture/milk.R: UK Climate Impact on Milk Production
+> 
+> This script analyzes the impact of climate change on milk production in the UK by utilizing climate data, damage functions from Jones et al. (2020), and regional milk production data. The script loads necessary libraries and data, performs calculations to derive damage assessments based on temperature changes relative to pre-industrial baselines, and fits damage functions for various regions. It visualizes the impact through ggplot2 and aggregates regional damage assessments with ADM3 spatial data, correlating milk production changes with population and geographic data. Results are saved and reported using additional data manipulations and visualizations. Specifically, the impacts are analyzed under the SSP370 scenario for the period 2081-2100, highlighting production losses within geographic regions. The outputs assist in mapping expected production losses with confidence intervals for further examination of geographic and future climate impacts on the agricultural sector.
+> 
+>  - src1/channels/agriculture/agcombine.R: Agricultural Economic Impact Analysis in the UK
+> 
+> The script is focused on assessing agricultural damage scenarios in the UK, using geographical and economic data. It incorporates shapefiles for regional analysis and outlines procedures for replacing Northern Ireland's damage estimates with zero. Different scenarios are analyzed for arable damage projections, with results grouped by scenario, run, and period. It calculates the damage as a fraction of UK GDP and adjusts for the CGE effect from the PESETA III model. The script generates a percentage estimate and visualizations of expected production losses. Additionally, it combines various datasets to synthesize results and examines crop productivity impacts, comparing scenarios and periods. It saves combined results into a file and prints summary tables, including an assessment for the scenario ssp370 for the period 2081–2100, providing GDP impact estimations in billions.
+> 
+>  - src1/channels/agriculture/arable.R: Assessing Climate Impact on UK Arable Agriculture
+> 
+> The R script processes climate and agricultural data to model climate effects on arable land in the UK. It loads temperature data from a specified netCDF file and agricultural grid and scenario data from CSV files. The script verifies data integrity, calculates logarithmic changes in arable area, and aggregates data spatially using raster coordinates. Linear models are fitted repeatedly to simulate varying temperature impacts on arable land. Results are stored in a list, and scenario-specific coefficients are saved. A dataset is compiled with the average impact curve from each grid cell, computing the effect of temperature differences on agriculture. The fraction of impact is constrained to one, and data is visualized using ggplot2 to illustrate variations in arable land caused by climate changes.
+> 
+>  - src1/channels/agriculture/ritchieetalerl.R: Visualization of Future UK Arable Land Distribution
+> 
+> The script sets the working directory to the specified path and reads in three CSV files: `ECO_AG_grid_2km.csv`, `ECO_AG_baseline.csv`, and `ECO_AG_climate.csv`. These data files are related to agricultural economic studies from Ritchie et al. The script uses the `dplyr` library to merge data from `ECO_AG_grid_2km.csv` and `ECO_AG_climate.csv`. It then utilizes `ggplot2` to generate a raster plot of projective arable land in 2100 by easting and northing coordinates, providing a visual representation of agricultural land distribution under future climatic scenarios.
+> 
+>  - src1/channels/agriculture/agcombine-adm3.R: Aggregating Agricultural Damage by Region
+> 
+> The code in `agcombine-adm3.R` aggregates agricultural damage data for administrative regions within the UK. It sets up the environment, loads necessary data, and calculates damage using mixed and standardized metrics. A crucial step involves checking data consistency across scenarios, periods, and counties. It adjusts the losses with the PESETA III CGE effect and checks for known combinations. Using loops, the code verifies data completeness and processes it with hierarchical combination, updating the `combo` dataset. For Northern Ireland, only PESETA damages are used. Consistency checks compare combined data with matched damage information. The final merged dataset is saved, ensuring comprehensive inclusion of agricultural damage metrics across all regional segments for different time periods.
+> 
+>  - src1/channels/agriculture/lambs.R: Assessing Climate Impact on Lamb Production in the UK
+> 
+> The script analyzes the impact of climate change on lamb production in the UK by using temperature data and damage functions. It uses historical climate data and projections to determine potential economic damages from temperature changes across regions. The method includes fitting a linear model for instantaneous development rates of lambs against temperature, then incorporating uncertainty assessments. The data is segmented by region, and losses are estimated under different climate scenarios. Using geospatial data and agricultural statistics, regional damage estimates are aggregated, and outputs are adjusted for population density to assess per capita impacts. Results are saved for further analysis and reporting, with visualizations created to depict expected losses and confidence intervals. The outputs are used to project future lamb production losses due to climate change in regions such as Scotland and various UK counties, with the potential to inform policy and mitigation strategies.
+> 
+>  - src1/channels/agriculture/livecombine.R: Livestock and Fisheries Economic Impact Assessments in the UK
+> 
+> The script analyzes economic damages from algal blooms and agricultural changes affecting milk production and lambs in the UK, measured as a percentage of 2015 GDP. It processes data on projected damages for each sector, calculates the damage as a fraction of GDP, and then combines these results to assess total economic impact. The results are formatted into tables for reporting. Additionally, there is mapping of combined damages across regions, leveraging geographical shapefiles and statistical summaries to visualize impacts on livestock in different counties. By aggregating these sector-specific damages, the code provides insights into the regional distribution of climate change damages on agriculture and fisheries, for both scenario analysis and temporal changes.
+> 
+>  - src1/channels/agriculture/amoc-calibrate.R: AMOC Weakening Simulation via Monte Carlo
+> 
+> This R script utilizes the `EnvStats` and `ggplot2` libraries to model the weakening of the Atlantic Meridional Overturning Circulation (AMOC) in response to climate warming. It defines a function `get.amoc` that calculates AMOC weakening using triangular distributions for the expected loss at 2°C and 4°C warming levels. It estimates mode and later creates loss values (L.2, L.4) through conditional logic, adjusting the distribution based on the mode calculated. The function calculates parameters `bb` and `dd` for an exponential decay model of AMOC weakening. The script conducts simulations to produce a graphical representation of AMOC weakening as a function of temperature, showing the mean and 90% confidence interval, plotting these results against pre-industrial warming levels using `ggplot2`.
+> 
+>  - src1/channels/agriculture/arable-combine.R: Scenario-Based AMOC Impact Integration on Arable Loss Projections
+> 
+> This script combines agricultural projections from two data sets, focusing on calculating and adjusting the Atlantic Meridional Overturning Circulation (AMOC) share for various scenarios and run IDs, covering the years 2011 to 2100. It loads data from two agricultural projection files, checks consistency, and sources auxiliary scripts for AMOC calibration. The procedure involves calculating the AMOC's impact over three periods (2011-2030, 2041-2060, 2081-2100) for each scenario and run ID, and subsequently merging projections from scenarios 1 and 3. It adjusts the projections based on AMOC influence, combining them to estimate loss in millions of GBP. The final results, summarizing loss per scenario and period, are saved for further analysis.
+> 
+>  - src1/channels/agriculture/Boulton/extract.py: Climate Data Aggregation for Agricultural Impact Analysis
+> 
+> This script processes climate data from NetCDF files for agricultural analysis. It imports necessary libraries and iterates over four specific filenames. For each file, it loads the dataset using xarray, calculates the year associated with each time entry, and then groups data by year. It counts the number of occurrences in each year, computes the mean temperature across time for each year, and retains only the data where the yearly count is maximal. The processed data is then saved to a new NetCDF file in a specified directory.
+> 
+>  - src1/channels/agriculture/Smith/bngconvert.py: BNG to WGS84 Coordinate Transformation for Agricultural Data
+> 
+> This script reads agricultural grid data from a CSV file "Ag_model_grid_2km.csv", which uses British National Grid coordinates, and converts these coordinates into longitude and latitude. It employs the 'pyproj' library to handle the coordinate transformation using specified projection parameters for both British National Grid (EPSG:27700) and WGS84. A transformer is created to convert the coordinates from Easting and Northing to their geographic longitude and latitude equivalents. These transformed coordinate values are added to new columns ('lon' and 'lat') in the dataframe. The updated dataframe is then saved to a new CSV file "Ag_model_grid_2km.v2.csv".
+> 
+>  - src1/channels/agriculture/lambs/mmc4.D.r: Estimation of Parasite Development and Mortality Rates
+> 
+> This R script is a parameter estimation tool for studying the development and mortality rates of parasitic nematodes, particularly Haemonchus contortus, Teladorsagia circumcincta, and Ostertagia ostertagi, across various temperatures. It fits linear models to data from sources such as Hsu and Levine (1976) and Pandey (1989) to determine the time to 50% development (D50) and 50% mortality (L50) under different conditions. The script includes transformations to handle proportion data effectively and calculates instantaneous rates for development and mortality. It also fits quadratic models to assess mortality and estimates minimum temperature thresholds for development using linear models. Lastly, it explores vertical migration patterns of L3 larvae on herbage and soil, providing insights into environmental adaptability and survival strategies of these nematodes, which are significant for agricultural management and parasite control.
+> 
+>  - src1/channels/fisheries/convert-adm3.R: Mapping Algal Bloom Damages by Administrative Region
+> 
+> The script sets the working directory and reads in algal bloom projection data from a CSV file. It utilizes a disaggregation function to process spatial data from a shapefile, creating a dataset with attributes for regions in the UK. The script then calculates new climate damage estimates at the ADM3 level by joining the algal bloom data with regional spatial attributes and applying area-based damage adjustments. Finally, the adjusted algal bloom damages are saved to an RData file for further analysis.
+> 
+>  - src1/channels/fisheries/algalblooms.R: Algal Bloom Impact on UK Fisheries: Modeling and Projections
+> 
+> The script `algalblooms.R` from the UK Economic Risks project analyzes the economic impacts of algal blooms on fisheries using climate data and damage functions. It sources necessary libraries and data, including historical temperature data and Jones et al. (2020) table, to calculate changes in costs due to algal blooms across different UK regions. The script fits damage functions based on temperature differences from pre-industrial levels, visualizing the uncertainty in these cost changes through plots. It projects regional and period-specific impacts using the UK's climate projections (UKCP18) and produces summaries using data manipulation and mapping functions from the `ggplot2` and `dplyr` libraries. The results are compiled in a CSV file and further analyzed and presented in a report, with maps illustrating potential damages to regions in monetary terms, highlighting the expected costs and their confidence intervals.
+> 
+>  - src1/channels/biosphere/notes.txt: Coastal Flood Risk Costs and Habitat Change Analysis
+> 
+> The document `src1/channels/biosphere/notes.txt` references a dataset titled "sayers-et-al-2020.csv". This dataset is identified as Table 15 and provides information on the annual costs associated with coastal flood risks for the most important habitats under both baseline conditions and climate change scenarios. The data is presented in British Pounds (£) and is sourced from authors who adapted habitat change figures from the study by Sayers et al., 2020.
+> 
+>  - src1/channels/biosphere/bioloss.R: Analyzing Biosphere Loss due to Climate Change Impacts
+> 
+> This script analyzes the impact of global temperature increase on species and habitat loss, using data from the UK to assess climate-related economic damages. It processes the biosphere data and visualizes the relationship between global temperature changes and biodiversity loss. The analysis incorporates stepwise modeling, including fitting damage functions and estimating willing-to-pay (WTP) metrics to gauge economic impacts. The script uses externally read warming scenarios (alldraws) to simulate biodiversity loss and economic damage based on the WTP estimates. It categorizes data by timeline periods and aggregates results using statistical summaries across different scenarios. Key outputs include graphs saved as PDFs and data tables for biodiversity and economic impact, presented in percentages. The code concludes by generating reports and saving the calculated results for dissemination in a structured format, including a table of WTP estimates from peer-reviewed UK sources related to climate change impacts on biodiversity.
+> 
+>  - src1/channels/biosphere/project.R: Modeling Climate-Related Economic Impacts on UK's Biosphere
+> 
+> The script processes data to assess the impact of climate variables on biosphere-related economic changes in the UK. It calculates value changes based on biodiversity and carbon sequestration, adjusted with a climate change ratio. The script uses temperature data from climate models and projects future impacts at various resolutions. The local and global economic damages are estimated using Monte Carlo simulations and regression models. Impacts are visualized using geographic plotting, and projections are aggregated to the administrative (ADM3) level. The script compares local and global damage effects against GDP, generating maps and summary tables for presentation. Different group assessments, such as 'local' or 'total', allow for detailed analysis of individual and combined impacts on the UK biosphere. Results are saved for use in further reports, providing comprehensive insights into future biosphere and climate-related economic changes.
+> 
+>  - src1/channels/energy/rodeetal.R: Analysis of Climate-Related Energy Expenditures in the UK
+> 
+> The code focuses on assessing climate-related economic damages in the UK, particularly in the energy sector, using projected data for two shared socioeconomic pathways (SSP3) under RCP45 and RCP85 scenarios. It processes climate impact data, computes damage functions, and visualizes changes in energy expenditures against temperature variations. Two methodologies are examined: the first involves averaging over regions and visualizing the data, while the second extends to project damages using shapefiles for geographical representation. The results include projected damages translated into financial terms using various growth assumptions, culminating in regional and UK-level damage estimates in millions of 2019 USD. Additionally, the code maps expected reductions in costs, showcasing geographic distributions of climate impact damages and changes in expenditures. The refined damage projections are filtered through several statistical processes to provide robust estimates suitable for comprehensive climate-economic impact analysis.
+> 
+>  - src1/channels/energy/convert-adm3.R: Energy Damage Disaggregation and Conversion to ADM3
+> 
+> The script sets the working directory and loads a project file related to energy channels. It uses a disaggregation function to refine geographical data, focusing on regions within Great Britain. New damage estimates are computed at the ADM3 level by joining them with additional attributes and factoring in population share. The resultant dataset, which reflects more granular damage assessments, is then saved for further use.
+> 
+>  - src1/channels/health/manyrun.sh: Automating Health Data Aggregation
+> 
+> The script iterates through a loop ten times, executing the R script `combine-adm3.R` during each iteration. This indicates that the goal is to repeatedly execute the same R script, potentially aggregating or processing data in some form, without specifying any changes or parameters within each execution beyond the repetition count of ten times.
+> 
+>  - src1/channels/health/emulate.R: Estimating Climate Impact on UK Mortality Using Bayesian Modeling
+> 
+> The script processes climate and economic data to model the impact of temperature changes on mortality rates in the UK. It starts by reading climate scenario data and compiling it into a structured data frame, categorizing mortality impacts by scenario, year, and adaptation strategy. The script leverages statistical plotting to visualize the mortality changes over time and across temperature differences. Using Bayesian regression with the Stan software, it fits models to analyze the cold and heat-related mortality impacts of climate changes, providing uncertainty estimates. The analysis extends to geographic regions, adjusting death rates regionally based on projected temperature differences, population data, and mortality rates. Outputs include a geographic plot of additional deaths and the script saves the results for future use. The code also sets up data for projecting changes into different UK regions and compiles the outputs into a CSV file for further analysis.
+> 
+>  - src1/channels/health/figures.R: Mapping Health Impacts in UK Regions
+> 
+> This script is used to create visualizations of projected changes in death rates across regions in the UK. It loads required data and libraries, including the shapefile for regional boundaries. Using the 'dplyr' library, the script merges health-related data with geographic identifiers. A function, `make.maps.loop`, is then called to generate maps illustrating the expected change in death rates per 100k people due to climate impacts, along with a 95% confidence interval for these projections. The analysis is represented spatially and aims to aid in understanding potential health impacts on different administrative regions.
+> 
+>  - src1/channels/health/notes.txt: Economic Costs of Heat-Related Mortality in the UK
+> 
+> The document outlines various resources related to the economic impacts of heat-related mortality in the UK due to climate change and socio-economic change, drawing from Hajat et al. (2014). It references an Excel file from a Nature study assessing these costs and provides specific tables from Hajat et al. (2014). Table 39 shows the total economic costs in £Million/year, adjusted to 2020 prices, without accounting for current adaptation. Table 40 presents these costs similarly but without a GDP uplift and estimates for low, central, and high climate change scenarios. Table 41 details mean, minimum, and maximum estimates of heat-related deaths per 100,000 population across different regions in the UK, providing a measure of the future health impacts attributable to climate change-induced temperature rises.
+> 
+>  - src1/channels/health/aggregate.R: Aggregating and Visualizing Climate Impact on UK Health
+> 
+> The script processes climate damage data by aggregating gridded health impact estimates into UK-level effects, using datasets such as grid patterns and mortality rates. It loads gridded results, verifies consistency across scenarios and run IDs, and adjusts for consistency between local and UK-level mortality. The script creates visualizations using ggplot2, and generates maps for analysis at various administrative levels, specifically ADM3 regions in the UK. Data is transformed and saved into CSV formats for further reporting, while ensuring all county-level calculations reflect UK-level figures. The script also integrates Monte Carlo simulations to refine these results, providing an aligned output between aggregated damage assessments at county and national levels. Final outputs include various tables and graphical representations of projected climate impacts on mortality, facilitating comprehensive evaluations of national climate damages and policy assessment.
+> 
+>  - src1/channels/health/pesetaiv.R: Health Impact Assessment from Climate Change in UK
+> 
+> The script models and projects climate-related health impacts in the UK, focusing on heat- and cold-related mortality rates. It analyzes historical mortality data, calculates mortality rates per 100,000 people for hot and cold temperatures, and estimates damage functions based on climate change-induced temperature differences. A damage function is fitted using selected climate scenarios to predict changes in mortality rates. These projections are made at both grid and UK-wide levels using specific aggregation functions. Results for periods like 2081-2100 are adjusted to prevent negative mortality rates. The final dataset includes mean and confidence intervals for each scenario and period, capturing the spatial distribution and magnitude of projected mortality changes. The data is then exported for further analysis and reporting.
+> 
+>  - src1/channels/health/combine-adm3.R: Combining Climate Impact and Mortality Data
+> 
+> The script combines datasets to assess climate impact on health across regions in the UK. It calculates death rates (per 100,000 people) from two datasets: one by Bressler et al., using UK mortality rates, and another with estimates based on GDP and the Value of Statistical Life (VSL). It performs calculations at the administrative level 3 (adm3) and integrates these results with region information for analysis. Using a hierarchical method to merge calculated death rates, the script iterates through scenarios, periods, and counties to populate a combined data structure. Conditional checks ensure the exclusion of already known combinations. The script includes code for producing tables summarizing damage and death rate statistics, calculating percentage GDP impacts, and providing a consolidated UK-wide report. Results are periodically saved to a dedicated file as processing progresses.
+> 
+>  - src1/channels/flooding/graphs.R: Flood Damage Analysis for UK Regions
+> 
+> This R script processes and visualizes flooding damage data for the UK, grouped by scenario, period, and run_id, and calculated as a percentage of the 2015 GDP. The script loads the necessary data and libraries, including dplyr for data manipulation and PBSmapping for geographic data handling. It computes summary statistics for the flooding damage data, then generates a formatted table of the percentage data, which is printed with specified decimal precision. Additionally, it maps the flooding damage across administrative regions by joining the damage data with geographic shapefile data (gadm36_GBR_3.shp), creating looped maps that represent expected flooding damage and 95% confidence interval estimates. This mapping process aids in spatially visualizing the economic impact of flooding scenarios at a granular level.
+> 
+>  - src1/channels/flooding/manyrun.sh: Execution of Flood Combination Script
+> 
+> The script iteratively executes an R script named `floodcombine-adm3.R` ten times using a for loop.
+> 
+>  - src1/channels/flooding/emulate.R: "Flooding Impact and Temperature Projection Analysis Script"
+> 
+> The script sets the working directory for analyzing flooding data and reads a CSV file ("table6-9-tabula.csv"). It utilizes the 'reshape2' library to reshape the data, extracting 'year', 'pop', and calculating 'percchange' and 'EAD' (Expected Annual Damage). It attempts to estimate temperature changes for years 2050 and 2080 under 2°C and 4°C warming scenarios by 2100, referencing temperature data from RCP 4.5 and RCP 8.5 scenarios. However, there is doubt about the validity of this approach. The temperature data (1986-2005 baseline), combined with correction factors, is used to establish models for temperature projections in 2050 and 2080. Linear models predict these future temperatures, which are incorporated back into the reformatted data. The script ends before visualizing the data using 'ggplot2'.
+> 
+>  - src1/channels/flooding/flooding-damage.R: UK Regional Flood Damage Analysis Code
+> 
+> The script conducts a regional analysis of flood damage in the UK utilizing data from the CCRA report. This involves loading flood damage data and processing it through damage functions. The model estimates changes in flooding costs due to climatic temperature differences from 2012, and fits these against quadratic functions to develop regional damage functions. The script employs ggplot2 to visualize these functions by region. Additionally, it corrects naming conventions to match with shapefiles for accurate regional data alignment and uses aggregated data on damage projections. These projections are matched with regional data sets, followed by further aggregation at an ADM3 level, accounting for regional discrepancies and corrections in projections. It saves the results, generating final reports using statistical summaries of flood damage in percentage terms relative to GDP, and aggregates these to ADM3 regions.
+> 
+>  - src1/channels/flooding/floodcombine-adm3.R: Combining Flood Damage Data by Administrative Areas
+> 
+> The script processes and combines flood damage data by administrative unit level 3 (adm3) using datasets for the UK's economic risks model. It calculates damage values by adjusting initial data with a CGE effect and transforms them into monetary values (in million GBP units). The script joins datasets containing flood damage scenarios with corresponding economic impacts. It checks for known combinations of scenario, period, and county, then iteratively computes combined flood damage data if not previously processed, using a function `hier.combine`. Results are appended to an existing dataset and saved periodically to a file for each county and period considered.
+> 
+>  - src1/channels/slr/graphs.R: Sea Level Rise Projections in UK Climate Scenarios
+> 
+> This R script processes sea-level rise (SLR) damage projections for the UK, simulating cost estimates across different scenarios (SSP1-2.6 and SSP3-7.0) and time periods (2020, 2050, 2090). The script reads data from Excel files and computes mean (mu) and confidence intervals (ci5 and ci95) of projected costs using skew-normal distributions. It allows computations for the whole UK or by region, generating Monte Carlo simulations to estimate variability. Results are visualized using ggplots, with outputs saved as CSV files. For spatial analysis, regional data is linked with geographical shape data to produce damage maps. This detailed analysis aids in understanding the economic impacts of climate change under various adaptation strategies and scenarios, expressed in billions of 2020 USD.
+> 
+>  - src1/channels/slr/matching.R: Coastal Segments to Administrative Division Matching in the UK
+> 
+> This R script processes shapefile data to associate UK coastal segments with specific administrative regions. It first sets the working directory and loads necessary libraries and shapefiles with geographical information on segments and administrative divisions. The script then filters UK segments and calculates the geographical distance between segment and administrative points, assigning each segment to the nearest administrative region. It creates a dataframe that records the share of each administrative region's coverage over the segments. Finally, the script outputs these associations in a CSV file named "matching.csv".
+> 
+>  - src1/channels/slr/tables.R: Sea Level Rise Impact Assessment in the UK
+> 
+> The script processes sea-level rise (SLR) impact data for the UK using economic scenarios. It sets up the working directory and imports necessary libraries and source files. Currency conversion and inflation factors are defined alongside extracting sheet names from a specified Excel file. Iterating over climate impacts such as Inundation, Relocation, Storms, Wetland, Protection, and total costs for periods 2020, 2050, and 2090, it examines two scenarios: '126' and '370'. The script calculates mean values and confidence intervals (CI5 and CI95) from data, using inflation adjustment, and fits skew normal distributions. Monte Carlo simulations produce projected SLR impacts, integrating GDP growth projections to assess percentages of impacts relative to GDP. The program compiles and formats results into tables for presentation and analysis.
+> 
+>  - src1/channels/slr/n95mc.R: Skewed Distribution Fitting and Sampling
+> 
+> This R script offers functions to model and sample data using a skew normal distribution tailored for sea level rise (SLR) analysis. It includes a `fit.skewnormal` function to estimate skew normal distribution parameters (mu, sigma, and alpha) based on provided mean and confidence intervals (ci5, ci95). The function employs optimization to find best fit parameter values while considering specified confidence intervals. The `r.twoskew` function allows for generating random samples from a defined skew normal distribution, with options to use a predefined fit or point estimate. The script utilizes the 'sn' library for its statistical operations. Overall, this script is used to enhance the statistical modeling of climate-induced sea level rise impacts.
+> 
+>  - src1/channels/slr/kopp-gslr.R: Sea Level and Temperature Simulation for Climate Scenarios
+> 
+> The script analyzes global sea level rise (GSLR) relative to the year 2000 by first correcting global surface air temperatures to the 1850-2000 period using historical data. It processes various climate models and scenarios, fitting skewed normal distributions to parameters of interest. For each unique scenario and model run, it calculates the sea level rise over time using dynamic equations of climate sensitivity and temperature changes. The results are aggregated and written to a CSV file. Using bootstrap methodologies, the results are further analyzed to obtain quantiles showing the 5th, 50th, and 95th percentiles of sea level rise projections. Results are visualized via ggplot as line graphs with shaded confidence intervals, focused on representing the uncertainty of each quantile for different climate scenarios.
+> 
+>  - src1/channels/labor/pesetaiii.R: Labor Productivity and Climate Damage in the UK
+> 
+> This script is part of a project assessing climate change impacts on labor productivity in the UK and Ireland. It analyzes welfare damages from temperature changes using data from the PESETA III project and simulates future climate projections. The script establishes a link between temperature variations and labor productivity impacts, fitting a damage function to quantify welfare losses as a percentage of GDP. It projects these damages across grid cells and aggregates regional results for further analysis. Outputs include regional damage assessments and map visualizations, factoring in the GDP of 2015 UK values. The results are refined by matching demographic data with productivity losses, ultimately calculating expected losses in monetary terms. The script concludes by mapping expected productivity losses and their confidence intervals across regions of the UK. These findings inform policy decision-making by illustrating potential economic impacts of climate change on labor productivity.
+> ===
+> 
+> Can you produce an expanded version of the Usage section that goes through these files (well, just the ones that are necessary to be run) and explains how each is contributing to  the whole assessment?
+**assistant**:
+> Certainly! Here's an expanded version of the Usage section for your README, incorporating descriptions of the critical files in your project, organized by the steps they belong to:
+> 
+> ```markdown
+> ## Usage
+> 
+> The following steps provide a comprehensive guide on how to run the code for assessing climate damages in the UK. Each step corresponds to different stages of preparation, processing, and analysis. The explanations include specific scripts you'll need to run and their contributions to the project.
+> 
+> ### Step 1: Prepare Inputs
+> 
+> 1. **Climate Data Preparation (`/climate/`)**:  
+>    Begin by processing climate data. This includes creating climate datasets needed for damage assessment processes.
+>    
+>    - **`worldclim/adm0patterns.py`**: Uses weight maps and climate data to aggregate regional impacts from both historical and future scenarios.
+> 
+>    - **`worldclim/global-lmst.R`**: Computes global land mean surface temperatures for historical and future periods, which underpins climate modeling.
+> 
+> 2. **Regional Mapping (`/regions/`)**:  
+>    Transform and convert regional data to align different geographical datasets.
+> 
+>    - **`gadm2nuts.R`**: Converts geographical data, crucial for aligning climate impacts with administrative units.
+> 
+> ### Step 2: Underlying Climate and Socioeconomic Visualizations
+> 
+> 3. **Climate Hazard Visualization (`/hazards/`)**:  
+>    Summarize potential climate hazards using geographical mapping and scenarios.
+> 
+>    - **`cdiff.R`**: Analyzes climate differences across scenarios, integrating these into regional analyses for visual impact assessment.
+> 
+> 4. **Socioeconomic Data Analysis (`/socioeconomics/`)**:  
+>    Integrate economic data for context on how climate impacts intersect with economic variables.
+> 
+>    - **`byadm3.R`**: Analyzes regional Gross Disposable Household Income (GDHI), correlating socioeconomic data with geographic information.
+> 
+> ### Step 3: Sector-Specific Analysis
+> 
+> 5. **Channel-Specific Projections (`/channels/`)**:  
+>    These scripts each target a specific sector under climate change scenarios.
+> 
+>    - **Agriculture**: 
+>      - **`agriculture/arable-project.R`**: Projects impacts on arable land and outputs economic damage estimates.
+>      - **`agriculture/milk.R`**: Assesses the effect on milk production under projected climate conditions.
+>      - **`livecombine.R`**: Integrates agricultural impacts, focusing on livestock and fisheries.
+>    
+>    - **Energy**: 
+>      - **`energy/rodeetal.R`**: Models energy expenditure changes due to climate variations under different scenarios.
+> 
+>    - **Health**: 
+>      - **`health/emulate.R`**: Evaluates the mortality rate shifts due to climate impacts using Bayesian models.
+> 
+>    - **Sea Level Rise (SLR) and Flooding**: 
+>      - **`slr/graphs.R`**: Projects economic impacts of SLR, leveraging simulations based on climate projections.
+>      - **`flooding/flooding-damage.R`**: Assesses regional flooding damage and projects future costs through modeling functions.
+> 
+> ### Step 4: High-Level Impact Assessments
+> 
+> 6. **Top-Down Damage Projections (`/topdown/`)**:  
+>    Assess broad climate damages at a national scale.
+> 
+>    - **`graphs.R`**: Visualizes economic impacts across scenarios, integrating data from key studies to display projected damages over time.
+>    
+>    - **`combine.R`**: Analyzes national impact, combining results from different sources to estimate GDP losses.
+> 
+> ### Step 5: Synthesis and Combined Results
+> 
+> 7. **Comprehensive Synthesis (`/synthesis/`)**:  
+>    Merge outputs from various analyses into a singular integrated assessment.
+> 
+>    - **`adm3combo.R`**: Aggregates channel-specific damages into a single comprehensive dataset detailing potential economic impacts across climate scenarios.
+> 
+>    - **`barchart.R`**: Integrates multiple sectoral impacts, providing error margins and confidence intervals for a consolidated economic damage view.
+> 
+> After completing these steps, the project will have generated detailed analyses of climate impacts on various sectors and regions within the UK. Check individual script documentation or inline comments for specific execution instructions and parameter settings.
+> ```
+> 
+> This section now highlights some specific scripts you run across each stage, detailing how they contribute to the overall climate damage assessment in the UK.

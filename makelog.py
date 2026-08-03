@@ -1,13 +1,21 @@
-from datetime import datetime
+import datetime
 import os, time, glob, pickle
-import openai, tiktoken
+from openai import OpenAI
+import tiktoken
 from dotenv import load_dotenv
 from whoosh.index import create_in, open_dir
 from whoosh.fields import *
 from chatwrap import chatlog
+import memory
+from memory import integration_long_term, default
+
+ltm = default.create_long_term()
 
 load_dotenv()
-openai.api_key = os.getenv('OPENAI_API_KEY')
+client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
+attempts = 3
+user_id = "jar"
 
 try:
     ix = open_dir("database/whoosh")
@@ -42,9 +50,9 @@ def num_tokens_from_string(string):
 def converse(messages, assistant_response, user_response, max_tokens):
     messages.append({"role": "assistant", "content": assistant_response})
     messages.append({"role": "user", "content": user_response})
-    completion = openai.ChatCompletion.create(model="gpt-4o-mini", messages=messages,
+    completion = client.chat.completions.create(model="gpt-4o-mini", messages=messages,
                                               max_tokens=max_tokens, temperature=1)
-    return completion['choices'][0]['message']['content']
+    return completion.choices[0].message.content
 
 def make_log(log_filename, ixwriter):
     filenameparts = log_filename[4:-4].split('_')
@@ -52,10 +60,12 @@ def make_log(log_filename, ixwriter):
     
     prompt1 = open('prompts/makelog1.md', 'r').read()
     content = open('logs/' + log_filename, 'r').read()
-    
+
     tokenlen = num_tokens_from_string(content)
     if tokenlen > 4097 - 500 - 350: # error of 350 observed
         messages = chatlog.load_log('', 'logs/' + log_filename)
+        if messages[0]['role'] == 'memory':
+            messages.pop(0)
         maxperstate = int((4097 - 500 - 350) / len(messages)) - 10 # **word**: ...
         content = ""
         for message in messages:
@@ -68,28 +78,42 @@ def make_log(log_filename, ixwriter):
                 content += message['content'][:allowedlen] + "..."
     
     extra = "\nPlease respond in the following template:\n\nSynopsis: [SYNOPSIS]\n"
-    
+
     messages.append({"role": "user", "content": prompt1 + "\n===\n" + content + "\n===\n" + extra})
-    completion = openai.ChatCompletion.create(model="gpt-4o-mini", messages=messages,
-                                              max_tokens=500, temperature=1)
-    response1 = completion['choices'][0]['message']['content']
-    response1 = response1.lstrip("#* \t\n")
+
+    for ii in range(attempts):
+        completion = client.chat.completions.create(model="gpt-4o-mini", messages=messages,
+                                                  max_tokens=500, temperature=1)
+        response = completion.choices[0].message.content
+        response1 = response.lstrip("#* \t\n")
     
-    if not (response1[:len("Synopsis:")] in ["Synopsis:", "Synopsis\n", "Synopsis*"]):
-        print("Bad start: " + response1)
-        return False
-        
-    synopsis = response1[len("Synopsis"):]
-    synopsis = synopsis.lstrip(":#* \t\n")
-    if not valid_synopsis(content, synopsis):
-        print("Invalid synopsis: " + response1)
-        return False
-    
+        if not (response1[:len("Synopsis:")] in ["Synopsis:", "Synopsis\n", "Synopsis*"]):
+            if ii == attempts-1:
+                print("Bad start: " + response1)
+                return False
+            
+            messages.append({"role": "assistant", "content": response})
+            messages.append({"role": "user", "content": "That response does not start with the text 'Synopsis:'. Can you try again? Make sure to not include any preliminary response text before the Synopsis."})
+            continue
+
+        synopsis = response1[len("Synopsis"):]
+        synopsis = synopsis.lstrip(":#* \t\n")
+        if not valid_synopsis(content, synopsis):
+            if ii == attempts-1:
+                print("Invalid synopsis: " + response1)
+                return False
+
+            messages.append({"role": "assistant", "content": response})
+            messages.append({"role": "user", "content": "The synoposis in that response was invalid. Maybe try a shorter synoposis?"})
+            continue
+
+        break
+            
     prompt2 = open('prompts/makelog2.md', 'r').read()
     response2 = converse(messages, response1, prompt2, 50)
     response2 = response2.lstrip("#* \t\n")
-    
-    allowed_attempts = 3
+
+    allowed_attempts = attempts
     logline = None
     while allowed_attempts > 0:
         allowed_attempts -= 1
@@ -149,6 +173,8 @@ if __name__ == '__main__':
     logs = sorted(os.listdir("logs"))
     syns = set(os.listdir("database/logs"))
 
+    memories = set()
+    
     for done in logs:
         if not os.path.isfile(os.path.join("logs", done)):
             continue
@@ -170,7 +196,30 @@ if __name__ == '__main__':
                 print(ex)
                 break
 
+            myuser_id = user_id
+            log4memory = chatlog.load_log(None, os.path.join("logs", done))
+            if log4memory[0]['role'] == 'memory':
+                myuser_id = log4memory[0]['content'].strip()
+                log4memory.pop(0)
+            print('"' + myuser_id + '"')
+            
+            integration_long_term.ingest_conversation(
+                ltm, user_id=myuser_id,
+                conversation_id=done,
+                messages=log4memory,
+                started_at=datetime.datetime.strptime(done[4:23], "%Y-%m-%d_%H-%M-%S"),
+                ended_at=datetime.datetime.now()
+            )
+
+            memories.add(myuser_id)
+
     ixwriter.commit()
+
+    print("Consolidating long-term memory.")
+    for myuser_id in memories:
+        notes = ltm.consolidate_user_memory_incremental(myuser_id, memory_batch_size=40, task_batch_size=15)
+        for note in notes:
+            print(note)
 
 
     

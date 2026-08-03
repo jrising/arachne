@@ -1,0 +1,124 @@
+**user**:
+> I have two directories in a folder for python: `memory` and `tests`. `memory` has an __init__.py. The unit tests in tests/ try to import from memory with "from memory import whatever". But when I call pytest from the root directory, it says No module named 'memory'.
+**assistant**:
+> This usually happens because Python isn’t seeing your project root on `sys.path`, so `memory` isn’t importable as a top-level package when pytest runs.
+> 
+> Here are the common fixes, in order of cleanliness:
+> 
+> ---
+> 
+> ## 1. Turn the root directory into a package (modern, clean)
+> 
+> If your structure is like:
+> 
+> ```text
+> project_root/
+>     memory/
+>         __init__.py
+>         ...
+>     tests/
+>         test_something.py
+> ```
+> 
+> then:
+> 
+> 1. Add a `pyproject.toml` (or `setup.cfg`) at `project_root/` to define an installable package.
+> 2. Give the package a name and src layout if you like.
+> 
+> Minimal `pyproject.toml` example (PEP 621):
+> 
+> ```toml
+> [build-system]
+> requires = ["setuptools>=61.0"]
+> build-backend = "setuptools.build_meta"
+> 
+> [project]
+> name = "memory"  # or better, a project name; then set package dir below
+> version = "0.0.1"
+> ```
+> 
+> If you prefer a `src/` layout:
+> 
+> ```text
+> project_root/
+>     src/
+>         memory/
+>             __init__.py
+>             ...
+>     tests/
+>         ...
+> ```
+> 
+> and in `pyproject.toml`:
+> 
+> ```toml
+> [tool.setuptools.packages.find]
+> where = ["src"]
+> ```
+> 
+> Then install in editable mode:
+> 
+> ```bash
+> cd project_root
+> pip install -e .
+> pytest
+> ```
+> 
+> Now `from memory import whatever` will work consistently, both in pytest and when running code normally.
+> 
+> ---
+> 
+> ## 2. Use `PYTHONPATH` for quick-and-dirty local testing
+> 
+> From the project root:
+> 
+> ```bash
+> PYTHONPATH=. pytest
+> ```
+> 
+> or on Windows:
+> 
+> ```bat
+> set PYTHONPATH=.
+> pytest
+> ```
+> 
+> This tells Python to treat the root directory as part of the module search path, making `memory` importable.
+> 
+> You can also put this in a `pytest.ini`:
+> 
+> ```ini
+> # pytest.ini
+> [pytest]
+> pythonpath = .
+> ```
+> 
+> Then `pytest` alone should work.
+> 
+> ---
+> 
+> ## 3. Use relative imports inside `tests/` (not my favorite)
+> 
+> In your tests, instead of:
+> 
+> ```python
+> from memory import whatever
+> ```
+> 
+> do:
+> 
+> ```python
+> from ..memory import whatever
+> ```
+> 
+> But this only works if `tests` is part of a package hierarchy (i.e. `tests/__init__.py` exists and the parent directory is importable), and it tends to be more brittle. I’d favor 1 or 2.
+> 
+> ---
+> 
+> If you tell me:
+> 
+> - Your exact directory layout (a `tree` output)
+> - How you’re invoking pytest (command, working directory)
+> - Whether you already have a `pyproject.toml` or `setup.py`
+> 
+> I can give you a minimal, copy‑paste configuration that will make this work reliably.

@@ -1,0 +1,827 @@
+**assistant**:
+> The following past discussions are relevant to your query:
+> 
+> *   **2024-02-20 15:02:19**: In a discus
+**user**:
+> Here is the code I have used to synthesize estimates of adaptation returns from multiple studies:
+> ===
+> ## setwd("~/Library/CloudStorage/GoogleDrive-jrising@udel.edu/My Drive/Research/COP30 Ada")
+> 
+> library(dplyr)
+> library(tidyr)
+> library(digest)
+> library(ggplot2)
+> source("src/interpret.R")
+> source("src/loader.R")
+> 
+> df <- get.adapt.df(T)
+> 
+> ## Correct the AdaptationImpact lines
+> dfai <- subset(df, Expression == "AdaptationImpact")
+> if (nrow(dfai) > 0) {
+>     ## Grab baseline levels, where same source and scenario
+>     df2 <- get.macro.df(T)
+> 
+>     dfai2 <- dfai %>% mutate(Year=as.numeric(substring(Scenario, nchar(Scenario) - 4, nchar(Scenario))),
+>                              Scenario=substring(Scenario, 1, nchar(Scenario) - 5)) %>% filter(Quantification != "Increase in public investment needed to offset climate change damage (percent of GDP)")
+>     dfai3 <- dfai2 %>% left_join(df2, by=c('Paper ID', 'Country(ies)', 'Scenario', 'Year'), suffix=c('', '.macro')) %>% filter(!is.na(Value.macro)) %>%
+>         mutate(Expression="AvoidedImpact", Value=abs(as.numeric(Value.macro) - as.numeric(Value)))
+> 
+>     df <- rbind(subset(df, Expression != "AdaptationImpact"), dfai3[, 1:ncol(df)])
+> }
+> 
+> 
+> failures <- data.frame()
+> allvals <- data.frame()
+> for (ii in 1:nrow(df)) {
+>     if (is.na(df$Value[ii])) {
+>         if (!is.na(df$`Low Value`[ii]) && !is.na(df$`High Value`[ii]))
+>             df$Value[ii] <- (df$`Low Value`[ii] + df$`High Value`[ii]) / 2
+>         else
+>             next
+>     }
+>     rowvals <- get.row.values(df[ii,])
+>     if (df$Value[ii] == "Rode et al. coeffs.csv") {
+>         ## Replace with the adaptation ratios
+>         rowvals$values <- rowvals$extras$mu.adtratio * 100
+>         rowvals$sds <- rowvals$extras$sd.adtratio * 100
+>         df$Expression[ii] <- "AvoidedImpact / BaselineImpact"
+>         df$Units[ii] <- "%"
+>     }
+>     if (is.null(rowvals)) {
+>         rowvals <- list('isos'=df$`Country(ies)`[ii], 'values'=as.numeric(df$Value[ii]), 'isoglobal'=1)
+>         if (all(is.na(rowvals$values)))
+>             next
+>         failures <- rbind(failures, data.frame(countries=df$`Country(ies)`[ii], sector=df$`Impacted Sector`[ii], units=df$Units[ii], Expression=df$Expression[ii]))
+>     }
+>     if (length(rowvals$isos) > 1 &&
+>         (all(rowvals$values == rowvals$values[1]) || (is.numeric(rowvals$values) && all(abs(rowvals$values - rowvals$values[1]) < 1e-6)))) {
+>         if (all(rowvals$isos == alliso)) {
+>             hash <- "global"
+>         } else {
+>             hash <- df$`Country(ies)`[ii]
+>         }
+>         rowvals$isos <- hash
+>         if (length(rowvals$values) > 1)
+>             rowvals$values <- rowvals$values[1]
+> 
+>     }
+> 
+>     allvals <- rbind(allvals, data.frame(Source=df$`Paper ID`[ii], Sector=df$`Impacted Sector`[ii], Solution=df$Solution[ii],
+>                                          Expression=df$Expression[ii], Value=as.numeric(rowvals$values), ISO=rowvals$isos, ISO2Global=rowvals$isoglobal,
+>                                          SD=estimate.sd(df[ii,]), Units=df$Units[ii]))
+> }
+> 
+> ## Check for unknown country names
+> table(failures$Expression)
+> head(failures %>% filter(Expression == "AvoidedImpact / AdaptationCost") %>% group_by(countries) %>% dplyr::summarize(count=n()) %>% arrange(-count), 20)
+> head(failures %>% group_by(countries, sector, units) %>% dplyr::summarize(count=n()) %>% arrange(-count), 20)
+> 
+> allvals2 <- standardize.adapt(allvals)
+> 
+> ## Drop known problematic values
+> allvals2 <- subset(allvals2, Source != "10.1017/S1355770X17000407" &
+>                              !(Source == "10.1057/s41599-022-01130-7" & (Sector != "All" | Solution != "Any")))
+> 
+> ## Drop references to "BaselineLevel"
+> allvals3 <- allvals2 %>% mutate(Units=ifelse(Expression == "AvoidedImpact / BaselineLevel", "% Baseline", Units),
+>                                 Expression=ifelse(Expression == "AvoidedImpact / BaselineLevel", "AvoidedImpact", Expression))
+> 
+> write.csv(allvals3, "Dataset/2 - Cleaned Inputs/adaptation.csv", row.names=F)
+> 
+> ## Drop AvoidedImpact units % (because % of what?), and change AvoidedImpact units pp to %, so matches later
+> allvals4 <- rbind(subset(allvals3, Expression != "AvoidedImpact" | !(Units %in% c("%", "percentage points", "pp"))),
+>                   subset(allvals3, Expression == "AvoidedImpact" & Units %in% c("percentage points", "pp")) %>% mutate(Units="%"))
+> 
+> ## Check common Expressions
+> sort(table((allvals4 %>% filter(!is.na(Expression) & Expression != '') %>% mutate(label=paste0(Expression, " (", Units, ")")))$label))
+> 
+> ## Check where I'll be summing over units
+> allvals4 %>% group_by(Source, Sector, ISO, Expression, Units) %>% summarize(count=n()) %>% filter(count > 1)
+> 
+> allvals5 <- allvals4 %>% filter(!(Expression %in% c("No CC", "billion per 1°C warming", "% of GRP",
+>                                                     "Potential yield loss in Cauca river basin for sugarcane",
+>                                                     "Minimum increase in Chocó and Nariño", "Maximum increase in Arauca department",
+>                                                     "Average increase", "Projected average increase", "Maximum change in Huila",
+>                                                     "Minimum change in Cesar", "AdaptationCost(delayed)/AdaptationCost(timely)",
+>                                                     "Potential impact on agricultural GDP"))) %>%
+>     group_by(Source, Sector, ISO, Expression, Units) %>% summarize(ISO2Global=mean(ISO2Global), SD=mean(SD, na.rm=T),
+>                                                                                         Value=ifelse(Units[1] %in% c("ratio", "%"), mean(Value, na.rm=T),
+>                                                                                                      sum(Value, na.rm=T))) %>%
+>     filter(!is.na(Value) & Expression != "") %>% filter(!(Expression %in% c('AdaptationCost(Delayed) / AdaptationCost(Timely)', 'RateOfReturn()') | (Expression %in% c("BaselineImpact - AdaptationCost", 'AdaptationCost') & Units %in% c("ratio", "%"))))
+> 
+> ## Check common expressions
+> tocheck <- apply(allvals3[, c('Expression', 'Units')], 1, function(row) paste(row, collapse=', '))
+> sort(table(tocheck[(!tocheck %in% apply(allvals5[, c('Expression', 'Units')], 1, function(row) paste(row, collapse=', ')))]))
+> 
+> sort(table((allvals5 %>% filter(!is.na(Expression) & Expression != '') %>% mutate(label=paste0(Expression, " (", Units, ")")))$label))
+> 
+> ## Replace MonetaryBenefits + NonMonetaryBenefits with TotalBenefits and drop the single references
+> allvals5$Expression <- gsub("\\(TotalBenefits\\)", "TotalBenefits", gsub("MonetaryBenefits \\+ NonMonetaryBenefits", "TotalBenefits", allvals5$Expression))
+> allvals6 <- allvals5[!grepl("MonetaryBenefits", allvals5$Expression) & !grepl("NonMonetaryBenefits", allvals5$Expression),]
+> 
+> ## Drop some expressions with multiple units
+> allvals7 <- allvals6 %>% filter(!((Source == "10.5194/hess-20-4143-2016" & Sector == "Water" & ISO == "global") |
+>                                   (Source == "M18" & Sector == "Labour, infrastructure (roads, bridges and urban flooding)" & ISO == "COD") |
+>                                   Expression %in% c("FailureProbability", "DiscountedSum() [million USD]", "% change", "PNER", "[billion USD]", "DiscountedSum()", "EconomicBenefits",
+>                                                     "Plant has a cooling system installed. Temperature is above 35°C", "AdaptationCosts+AdaptationImpact"))) %>%
+>     mutate(Expression=ifelse(Expression %in% c("DiscountedSum(AdaptationCost)", "AdaptationCost [billion USD / yr]", "AdaptationCost [million USD / yr]"), "AdaptationCost",
+>                       ifelse(Expression == "AvoidedImpact / BaselineLevel", "AvoidedImpact", Expression)))
+> 
+> ## Drop the expressions with non-matching units
+> allvals8 <- rbind(allvals7 %>% group_by(Source, Sector, ISO) %>% filter(Expression %in% c("AvoidedImpact / AdaptationCost", "AvoidedImpact / BaselineImpact",
+>                                                                                           "RateOfReturn(TotalBenefits - AdaptationCosts)", "TotalBenefits / AdaptationCost")),
+>                   allvals7 %>% group_by(Source, Sector, ISO) %>% filter(!(Expression %in% c("AvoidedImpact / AdaptationCost", "AvoidedImpact / BaselineImpact",
+>                                                                                             "RateOfReturn(TotalBenefits - AdaptationCosts)", "TotalBenefits / AdaptationCost")) &
+>                                                                         Units == names(sort(1 / table(Units)))[1]))
+> 
+> ## Check common combinations of expressions
+> checkexpr <- allvals8 %>% group_by(Source, Sector, ISO) %>% summarize(nexp=length(unique(paste0(Expression, " (", Units, ")"))),
+>                                                                       exprs=paste(sort(unique(paste0(Expression, " (", Units, ")"))), collapse=', '))
+> 
+> checkexpr %>% filter(nexp > 1) %>%
+>     group_by(exprs) %>% summarize(count=n()) %>% arrange(-count)
+> 
+> expunits <- unique(allvals8[, c('Expression', 'Units')])
+> 
+> ## TODO: MC sample from SD
+> 
+> allvals9 <- allvals8 %>% select(-Units, -SD) %>% pivot_wider(names_from=Expression, values_from=c(Value))
+> 
+> knowncols <- paste0(unique(expunits$Expression))
+> 
+> bcr.from.eirr <- function(eirr) {
+>     cbr <- exp(-eirr / 100) / (eirr / 100)
+>     (1 / cbr) * (exp(-0.05) / 0.05)
+> }
+> 
+> allvals9$AdaptatioRatio.est <- NA
+> allvals9$BCR.est <- NA
+> allvals9$EIRR.est <- NA
+> allvals9$TotalToLossRatio.est <- NA
+> for (ii in 1:nrow(allvals9)) {
+>     if (sum(!is.na(allvals9[ii, knowncols])) >= 2) {
+>         ## Build up par: AdaptatioRatio, BCR, TotalToLossRatio, Discount rate (%)
+>         if (!is.na(allvals9$`AvoidedImpact / BaselineImpact`[ii])) {
+>             par <- allvals9$`AvoidedImpact / BaselineImpact`[ii]
+>         } else {
+>             par <- mean(allvals9$`AvoidedImpact / BaselineImpact`, na.rm=T)
+>         }
+>         if (!is.na(allvals9$`TotalBenefits / AdaptationCost`[ii])) {
+>             par <- c(par, allvals9$`TotalBenefits / AdaptationCost`[ii])
+>         } else if (!is.na(allvals9$`AvoidedImpact / AdaptationCost`[ii])) {
+>             par <- c(par, allvals9$`AvoidedImpact / AdaptationCost`[ii])
+>         } else {
+>             par <- c(par, mean(allvals9$`TotalBenefits / AdaptationCost`, na.rm=T))
+>         }
+> 
+>         par <- c(par, 1, 5)
+> 
+>         soln <- optim(par, # AdaptatioRatio, BCR, TotalToLossRatio, Discount rate (%)
+>                       function(par) {
+>                           discsumfactor <- 1 / (1 - 1 / (1 + par[4] / 100))
+>                           err0 <- abs(par[3] - 1) # prior on 1
+>                           err1 <- par[1] / (allvals9$`AvoidedImpact / BaselineImpact`[ii] / 100) - 1
+>                           err2 <- par[1] / (allvals9$`AvoidedImpact`[ii] / allvals9$BaselineImpact[ii]) - 1
+>                           err3 <- par[2] / allvals9$`TotalBenefits / AdaptationCost`[ii] - 1
+>                           err3b <- par[2] / (allvals9$`AvoidedImpact / AdaptationCost`[ii] * par[3]) - 1
+>                           err3c <- par[2] / ((allvals9$`AvoidedImpact`[ii] / allvals9$`AdaptationCost`[ii]) * par[3]) - 1
+>                           err3d <- par[2] / ((allvals9$`AvoidedImpact`[ii] / sum(c(allvals9$CapExCost[ii], allvals9$OpExCost[ii] * discsumfactor), na.rm=T)) * par[3]) - 1
+>                           err4 <- par[2] / (allvals9$AvoidedImpact[ii] * par[3] / allvals9$AdaptationCost[ii]) - 1
+>                           err4b <- par[2] / (allvals9$AvoidedImpact[ii] * par[3] / sum(c(allvals9$CapExCost[ii], allvals9$OpExCost[ii] * discsumfactor), na.rm=T)) - 1 # AvoidedImpact / CapExCost approx= BCR
+>                           err5 <- (par[2] - 1) * discsumfactor / (allvals9$`DiscountedSum(TotalBenefits - AdaptationCost)`[ii] / allvals9$AdaptationCost[ii]) - 1
+>                           err5b <- (par[2] - 1) * discsumfactor / ((allvals9$`DiscountedSum(AvoidedImpact)`[ii] - allvals9$`AdaptationCost`[ii]) / allvals9$AdaptationCost[ii]) - 1
+>                           err6 <- par[3] / (allvals9$`AvoidedImpact`[ii] / (allvals9$`TotalBenefits / AdaptationCost`[ii] * allvals9$`AdaptationCost`[ii])) - 1
+> 
+>                           sqrt(sum(c(err0, err1^2, err2^2, err3^3, err3b^2, err3c^2, err3d^2, err4^2, err4b^2, err5^2, err5b^2, err6^2), na.rm=T))
+>                       })
+>     } else {
+>         soln <- list('par'=rep(NA, 5))
+>     }
+> 
+>     ## NA-out entries we have no information on
+>     if (is.na(allvals9$`AvoidedImpact / BaselineImpact`[ii]) && (is.na(allvals9$`AvoidedImpact`[ii]) || is.na(allvals9$BaselineImpact[ii])))
+>         soln$par[1] <- NA
+>     if (is.na(allvals9$`AvoidedImpact / AdaptationCost`[ii]) && (is.na(allvals9$AvoidedImpact[ii]) || (is.na(allvals9$AdaptationCost[ii]) && is.na(allvals9$CapExCost[ii]) && is.na(allvals9$OpExCost[ii]))) && (is.na(allvals9$`AvoidedImpact`[ii]) || is.na(allvals9$`TotalBenefits / AdaptationCost`[ii]) || is.na(allvals9$`AdaptationCost`[ii])))
+>         soln$par[3] <- NA
+>     if (is.na(soln$par[2]) || ((is.na(allvals9$`DiscountedSum(TotalBenefits - AdaptationCost)`[ii]) || is.na(allvals9$AdaptationCost[ii])) && is.na(allvals9$OpExCost[ii])))
+>         soln$par[4] <- NA
+> 
+>     allvals9$`AdaptatioRatio.est`[ii] <- ifelse(is.na(allvals9$`AvoidedImpact / BaselineImpact`[ii]), soln$par[1], allvals9$`AvoidedImpact / BaselineImpact`[ii])
+>     allvals9$`EIRR.est`[ii] <- allvals9$`RateOfReturn(TotalBenefits - AdaptationCost)`[ii] # currently no inferrence
+>     if (!is.na(allvals9$`TotalBenefits / AdaptationCost`[ii])) {
+>         allvals9$`BCR.est`[ii] <- allvals9$`TotalBenefits / AdaptationCost`[ii]
+>     } else if (!is.na(soln$par[2])) {
+>         allvals9$`BCR.est`[ii] <- soln$par[2]
+>     } else if (!is.na(allvals9$`EIRR.est`[ii])) {
+>         allvals9$`BCR.est`[ii] <- bcr.from.eirr(allvals9$`EIRR.est`[ii])
+>     } else {
+>         allvals9$`BCR.est`[ii] <- NA
+>     }
+>     allvals9$TotalToLossRatio.est[ii] <- (allvals9$`AvoidedImpact`[ii] / (allvals9$`TotalBenefits / AdaptationCost`[ii] * allvals9$`AdaptationCost`[ii]))
+>     if (is.na(allvals9$TotalToLossRatio.est[ii]) && !is.na(soln$par[3]) && abs(soln$par[3] - 1) > .001) # don't record if heavily dominated by prior
+>         allvals9$TotalToLossRatio.est[ii] <- soln$par[3]
+> }
+> 
+> write.csv(allvals9, "Dataset/4 - Final Outputs/adaptation.csv", row.names=F)
+> 
+> ## Looking for additional BCR
+> allvals9$knowncount <- sapply(1:nrow(allvals9), function(ii) sum(!is.na(allvals9[ii, knowncols])))
+> subset(allvals9, is.na(BCR.est) & knowncount >= 2)
+> 
+> allvals9 %>% ungroup() %>% summarize(AdaptationRatio.true=sum(!is.na(`AvoidedImpact / BaselineImpact`)),
+>                                      AdaptatioRatio.count=sum(!is.na(AdaptatioRatio.est)),
+>                                      BCR.true=sum(!is.na(`TotalBenefits / AdaptationCost`)),
+>                                      BCR.count=sum(!is.na(BCR.est)),
+>                                      EIRR.true=sum(!is.na(`RateOfReturn(TotalBenefits - AdaptationCost)`)),
+>                                      EIRR.count=sum(!is.na(EIRR.est)),
+>                                      TotalToLossRatio.count=sum(!is.na(TotalToLossRatio.est)))
+> ## Correct A11 Sector
+> allvals9$Sector[allvals9$Source == 'A11'] <- "Coastal regions"
+> 
+> sort(table(allvals9$Sector))
+> 
+> allvals9$BCR.est[allvals9$BCR.est > 1e2] <- NA
+> allvals9$EIRR.est[allvals9$EIRR.est > 1e3] <- NA
+> 
+> pdf <- allvals9 %>% pivot_longer(cols=ends_with(".est"), names_to="Variable", values_to="Value") %>%
+>     mutate(label=ifelse(Variable == "AdaptatioRatio.est", "Adaptation Benefit (%)",
+>                  ifelse(Variable == "BCR.est", "Benefit-Cost Ratio (ratio)",
+>                  ifelse(Variable == "EIRR.est", "Economic Rate of Return (% / yr)",
+>                  ifelse(Variable == "TotalToLossRatio.est", "Loss-to-Total Ratio (ratio)", NA)))),
+>            inferred=ifelse(Variable == "AdaptatioRatio.est", is.na(`AvoidedImpact / BaselineImpact`),
+>                     ifelse(Variable == "BCR.est", is.na(`TotalBenefits / AdaptationCost`),
+>                     ifelse(Variable == "EIRR.est", is.na(`RateOfReturn(TotalBenefits - AdaptationCost)`),
+>                     ifelse(Variable == "TotalToLossRatio.est", T, NA)))))
+> 
+> sectormap <- list("Agricultural"="Agriculture", "Farmers"="Agriculture", "Sustainable agriculture"="Agriculture",
+>                   "Energy/Electricity"="Energy", "Power"="Energy", "Electricity"="Energy", "Utilities & Grid"="Energy",
+>                   "Power Sector"="Energy", "Oil & gas"="Energy", "Electricity sector"="Energy",
+>                   "Household Demand"="Households", "Vulnerable households"="Households",
+>                   "Various (fluvial flooding on Debt/GDP ratio)"="Multiple",
+>                   "Water resources and flood management"="Water",
+>                   "Water supply and sanitation"="Water", "Water Management"="Water",
+>                   "Drinking Water"="Water", "Drinking water"="Water",
+>                   "Transportation Impacts"="Transport", "Shipping"="Transport",
+>                   "Roads"="Transport", "Road Infrastructure"="Transport",
+>                   "Road infrastructure"="Transport",
+>                   "River Navigation"="Transport",
+>                   "Rail Infrastructure"="Transport",
+>                   "Rail"="Transport",
+>                   "Industrials"="Industry",
+>                   "Construction & infrastructure"="Infrastructure",
+>                   "Communication services"="Services",
+>                   "Infrastructure, Agriculture and protection against wildfires"="Multiple",
+>                   "Agriculture and infrastructure"="Multiple",
+>                   "Labour, Agriculture, Infrastructure"="Multiple",
+>                   "Transport, Forestry, Agriculture, Water, Fishing, Energy, Urban (land use planning and sustainable urban development)."="Multiple",
+>                   "Total average from agriculture, health, infrastructure, water"="Multiple",
+>                   "Coastal property"="Coastal", "Coastal regions"="Coastal", "Coastal Real Estate"="Coastal", "Coastal Property"="Coastal",
+>                   "Coastal protection (population impacted by sea level rise)"="Coastal",
+>                   "Forestry and nature"="Ecosystems", "Forestry"="Ecosystems", "Fisheries"="Ecosystems", "Forestry/Land Use"="Ecosystems",
+>                   "Resilient cities"="Cities", "Urban Drainage"="Cities", "Infrastructure and households"="Cities",
+>                   "Storms"="Disasters", "Disaster risk management"="Disasters", "Risk management"="Disasters", "Insurance"="Disasters",
+>                   "Admin Support"="Services", "Agriculture, infrastructure and disaster preparedness"="Multiple",
+>                   "Coastal Management"="Coastal", "Const, Manuf, Agri"="Multiple",
+>                   "Construction"="Infrastructure", "Direct losses"="Multiple", "Economic Amplification Ratio"="Multiple",
+>                   "Ecosystem Services"="Ecosystems", "Environment"="Ecosystems", "Firms"="Industry",
+>                   "Flooding"="Disasters", "Food"="Households", "Food & beverages"="Households", "Food Services"="Services",
+>                   "Habitat"="Ecosystems", "Health Care"="Health", "Healthcare"="Health", "Household"="Households",
+>                   "Hydrocarbons"="Energy", "Labor"="Industry", "Manufacturing"="Industry",
+>                   "Materials"="Industry", "Municipalities"="Cities", "Percentage of capital damaged"="Multiple",
+>                   "Property Damage"="Households", "Residential Infrastructure"="Infrastructure",
+>                   "Retail"="Services", "Shellfish/Finfish"="Ecosystems", "Total losses"="Multiple",
+>                   "Warehousing"="Industry", "Water Res"="Water", "Wholesale"="Services",
+>                   "Winter Recreation"="Services", "Transportation"="Transport", "Housing"="Households", "Real Estate"="Households",
+>                   "Shellfish"="Ecosystems", "Various"="Multiple", "Tourism"="Services", "Ag/Water Res"="Multiple",
+>                   "Coastal/Urban"="Cities", "Food inflation"="Households", "Headline inflation"="Households", "All"="Multiple")
+> pdf$Sector2 <- sapply(pdf$Sector, function(ss) ifelse(ss %in% names(sectormap), sectormap[[ss]],
+>                                                ifelse(ss %in% unlist(sectormap), ss, "Unknown")))
+> sort(table(pdf$Sector2))
+> sort(table(pdf$Sector[pdf$Sector2 == "Unknown"]))
+> 
+> ggplot(pdf, aes(Value)) +
+>     facet_wrap(~ label, scales='free', ncol=2) +
+>     geom_histogram(aes(fill=Sector2), bins=10) +
+>     scale_x_log10() +
+>     theme_bw()
+> ## ggsave("Dataset/5 - Report Items/Adaptation/adaptation2.pdf", width=6.5, height=5)
+> 
+> ## Group into WB categories
+> sectormap.wb <- list("Agriculture"="Agriculture, forestry, fisheries",
+>                      "Energy"="Infrastructure", "All"="Combined", "Households"="Human health",
+>                      "Ecosystems"="Agriculture, forestry, fisheries",
+>                      "Disasters"="Extreme weather events",
+>                      "Firms"="Combined", "Services"="Combined",
+>                      "Food & beverages"="Human health", "Healthcare"="Human health",
+>                      "Industry"="Combined", "Materials"="Infrastructure",
+>                      "Health"="Human health", "Cities"="Infrastructure",
+>                      "Transport"="Infrastructure", "Water"="Water supply and flood protection",
+>                      "Multiple"="Combined", "Coastal"="Coastal zones",
+>                      "Tourism"="Combined", "Hydrocarbons"="Infrastructure",
+>                      "Residential"="Infrastructure", "Housing"="Infrastructure", "Infrastructure"="Infrastructure",
+>                      "Various"="Combined", "Agriculture, infrastructure and disaster preparedness"="Combined",
+>                      "Percentage of capital damaged"="Combined")
+> 
+> pdf2 <- pdf
+> pdf2$Sector2 <- sapply(pdf2$Sector2, function(ss) ifelse(ss %in% names(sectormap.wb), sectormap.wb[[ss]], "Combined"))
+> 
+> library(ggpattern)
+> source("~/research/futureloss/src/lib/gribrand.R", chdir=T)
+> 
+> pdf2$Sector2 <- factor(pdf2$Sector2, levels=c("Infrastructure", "Coastal zones",
+>                                               "Water supply and flood protection",
+>                                               "Agriculture, forestry, fisheries", "Human health",
+>                                               "Extreme weather events", "Combined"))
+> 
+> ggplot(subset(pdf2, label != "Loss-to-Total Ratio (ratio)"), aes(Value)) +
+>     facet_wrap(~ label, scales='free', ncol=1) +
+>     geom_histogram_pattern(aes(pattern=Sector2, pattern_angle=Sector2),
+>                            fill=gri.night,
+>                            pattern_density=0.2, pattern_spacing=0.025,
+>                            pattern_fill=gri.molten,
+>                            pattern_colour=gri.molten, bins=10) +
+>     scale_x_log10() +
+>     scale_pattern_manual("Sector:", values=c('stripe', 'stripe', 'stripe',
+>                                              'stripe', 'crosshatch', 'crosshatch', 'none'),
+>                          breaks=levels(pdf2$Sector2)) +
+>     scale_pattern_angle_manual("Sector:", values=c(0, 45, 90, 135, 0, 45, 0)) +
+>     theme_bw() + gri_theme
+> ## ggsave("Dataset/5 - Report Items/Adaptation/adaptation3.pdf", width=6.5, height=5)
+> 
+> ggplot(subset(pdf2, label == "Benefit-Cost Ratio (ratio)"), aes(Value)) +
+>     geom_histogram(aes(fill=Sector2), bins=10) +
+>     ylab("Count of sector-level BCR estimates") +
+>     scale_x_log10("Benefit-Cost Ratio (ratio)") +
+>     scale_fill_manual("Sector:", values=grilse.colours,
+>                       breaks=levels(pdf2$Sector2)) +
+>     theme_bw() + gri_theme
+> ggsave("Dataset/5 - Report Items/Adaptation/adaptation3-bcr.pdf", width=6.5, height=3.5)
+> 
+> ggplot(subset(pdf2, label == "Adaptation Benefit (%)"), aes(Value / 100)) +
+>     geom_histogram(aes(fill=Sector2), bins=10) +
+>     ylab("Count of Sector-level AER estimates") +
+>     scale_x_log10("Adaptation Effectiveness Ratio") +
+>     scale_fill_manual("Sector:", values=grilse.colours,
+>                       breaks=levels(pdf2$Sector2)) +
+>     theme_bw() + gri_theme
+> ggsave("Dataset/5 - Report Items/Adaptation/adaptation3-adtratio.pdf", width=6.5, height=3.5)
+> 
+> ggplot(subset(pdf2, label == "Economic Rate of Return (% / yr)"), aes(Value)) +
+>     geom_histogram(aes(fill=Sector2), bins=10) +
+>     ylab("Count of sector-level EIRR estimates") +
+>     scale_x_log10("Economic Rate of Return (% / yr)") +
+>     scale_fill_manual("Sector:", values=grilse.colours,
+>                       breaks=levels(pdf2$Sector2)) +
+>     theme_bw() + gri_theme
+> ggsave("Dataset/5 - Report Items/Adaptation/adaptation3-eirr.pdf", width=6.5, height=3.5)
+> 
+> write.csv(pdf2[, c('Source', 'Sector', 'ISO', 'ISO2Global', 'Variable', 'Value', 'inferred', 'Sector2')],
+>           "Dataset/4 - Final Outputs/adaptation-standardsectors.csv", row.names=F)
+> 
+> rbind(cbind(Scope="Global", pdf %>% group_by(Variable) %>% summarize(mu=median(Value, na.rm=T), ci25=quantile(Value, .25, na.rm=T), ci75=quantile(Value, .75, na.rm=T),
+>                                                                      sources=length(unique(Source[!is.na(Value)])))),
+>       cbind(Scope="LLMICs", pdf %>% filter(ISO %in% polydata$ADM0_A3[polydata$INCOME_GRP.mine %in% c("Low income", "Lower middle income")]) %>%
+>                             group_by(Variable) %>% summarize(mu=median(Value, na.rm=T), ci25=quantile(Value, .25, na.rm=T), ci75=quantile(Value, .75, na.rm=T),
+>                                                              sources=length(unique(Source[!is.na(Value)])))))
+> 
+> median(pdf$Value[pdf$Variable == 'AdaptatioRatio.est'], na.rm=T)
+> median(pdf$Value[pdf$Variable == 'BCR.est'], na.rm=T)
+> median(pdf$Value[pdf$Variable == 'EIRR.est'], na.rm=T)
+> mean(pdf$Value[pdf$Variable == 'TotalToLossRatio.est'], na.rm=T) # Actually loss to total
+> 
+> summary(lm(Value ~ Sector2, data=subset(pdf, Variable == 'AdaptatioRatio.est')))
+> summary(lm(Value ~ Sector2, data=subset(pdf, Variable == 'BCR.est')))
+> summary(lm(Value ~ Sector2, data=subset(pdf, Variable == 'EIRR.est')))
+> 
+> ## Look for evidence of bias
+> 
+> ## Add on Sample
+> 
+> table(df$Sample)
+> allvals10 <- allvals9 %>% left_join(df %>% group_by(`Paper ID`, `Impacted Sector`) %>% summarize(Sample=ifelse(all(Sample == "Lead"), "Lead",
+>                                                                                                        ifelse(all(Sample == "Need"), "Need", "Mixed"))),
+>                                    by=c('Source'='Paper ID', 'Sector'='Impacted Sector'))
+> 
+> ## No evidence of diminishing returns
+> 
+> summary(lm(AdaptatioRatio.est ~ Sample, data=allvals10))
+> summary(lm(BCR.est ~ Sample, data=allvals10))
+> summary(lm(EIRR.est ~ Sample, data=allvals10))
+> summary(lm(TotalToLossRatio.est ~ Sample, data=allvals10))
+> 
+> ## Look at type of value
+> 
+> table(df$`Type of Value`)
+> allvals10 <- allvals9 %>% left_join(df %>% group_by(`Paper ID`, `Impacted Sector`) %>%
+>                                    summarize(ValueType=ifelse(all(`Type of Value` == "Economic"), "Economic",
+>                                                        ifelse(all(`Type of Value` == "Fiscal"), "Fiscal",
+>                                                        ifelse(all(`Type of Value` == "Monetary"), "Monetary",
+>                                                               "Various")))),
+>                                    by=c('Source'='Paper ID', 'Sector'='Impacted Sector'))
+> 
+> ## No evidence of diminishing returns
+> 
+> summary(lm(AdaptatioRatio.est ~ ValueType, data=allvals10))
+> summary(lm(BCR.est ~ ValueType, data=allvals10))
+> summary(lm(EIRR.est ~ ValueType, data=allvals10))
+> summary(lm(TotalToLossRatio.est ~ ValueType, data=allvals10))
+> 
+> ## Add on Ex-Post/Ante
+> 
+> df1 <- read_sheet('https://docs.google.com/spreadsheets/d/123998UyrnzjYQeSGkY74XGT6wokyboZ46vaFKThNnCc/edit?gid=1603615647#gid=1603615647', sheet='Adaptation', skip=1)
+> df2 <- read.csv("~/projects/ailit/summary-adapt.csv")
+> df2$Soft.Options[is.na(df2$Soft.Options)] <- df2$X.Soft.Options.[is.na(df2$Soft.Options)]
+> df2$Concerns <- ""
+> df2b <- df2[, c("Author.s.", "Year", "Paper.Title",  "Link.to.paper", "Paper.ID", "Reviewer", "Status", "Country.ies.", "Impacted.Sector", "Scenario.s.",
+>                 "Methodology", "Benefits.of.Adaptation", "Costs.of.Adaptation", "Ante.Post.", "Planning.Process", "Soft.Options", "Sufficiency.Definition",
+>                 "Concerns", "Highlights", "More.Notes")]
+> names(df2b) <- names(df1)
+> df3 <- rbind(df1, df2b)
+> 
+> allvals10 <- allvals9 %>% left_join(df3 %>% group_by(`Paper ID`) %>% summarize(Has.Post=grepl("ex-post", tolower(`Ante/Post?`)),
+>                                                                               Has.Ante=grepl("ex-ante", tolower(`Ante/Post?`)),
+>                                                                               Post.Ante=ifelse(Has.Post & !Has.Ante, "Ex-Post",
+>                                                                                         ifelse(Has.Ante & !Has.Post, "Ex-Ante", "Other"))),
+>                                    by=c('Source'='Paper ID'))
+> 
+> summary(lm(AdaptatioRatio.est ~ Post.Ante, data=allvals10))
+> summary(lm(BCR.est ~ Post.Ante, data=allvals10))
+> summary(lm(EIRR.est ~ Post.Ante, data=allvals10))
+> summary(lm(TotalToLossRatio.est ~ Post.Ante, data=allvals10))
+> ===
+> 
+> As you can see, the structure here is:
+>  - Cleaning
+>  - Standardizing (combining estimates to the national-sector level, using common units), so that I can then do:
+>  - Inferring of key outcomes (AdaptatioRatio, BCR, and EIRR).
+>  - Presenting
+> 
+> Without direct reference to the code, can you provide a clear appendix methodology write-up on how we do this?
+**assistant**:
+> Certainly! Here's a draft for an appendix detailing the methodology for synthesizing estimates of adaptation returns:
+> 
+> ---
+> 
+> ### Methodology for Synthesizing Adaptation Return Estimates
+> 
+> #### Overview
+> 
+> This analysis involves synthesizing estimates of adaptation returns from various studies. The goal is to derive standardized and comparable metrics, specifically the Adaptation Ratio, Benefit-Cost Ratio (BCR), and Economic Internal Rate of Return (EIRR). The process is structured into three main stages: data cleaning, standardization, inference of key outcomes, and presentation.
+> 
+> #### 1. Data Cleaning
+> 
+> The initial stage focuses on correcting and aligning data from multiple sources to prepare for further analysis. Key steps include:
+> 
+> - **Correction of Data Entries**: We identify and amend discrepancies in data expressions, such as "AdaptationImpact," by recalculating values using baseline levels from the same source and scenario.
+> - **Handling Missing Values**: For entries with missing central values but available ranges (low and high values), we impute the central value by averaging the bounds.
+> - **Filtering Problematic Entries**: Observations with ambiguously defined metrics or problematic data entries are identified and excluded from the analysis.
+> 
+> #### 2. Standardization
+> 
+> To ensure consistency across different studies and units, we standardize estimates at the national and sector level:
+> 
+> - **Unit Conversion**: Measurements are converted into common units where possible. For instance, values originally given in "percentage points" are converted to percentages.
+> - **Aggregation**: Data is aggregated at the country or regional level to derive representative metrics that can be used for comparison across different contexts.
+> - **Filtering**: Observations with non-comparable units or conflicting expressions are excluded during this stage.
+> 
+> #### 3. Inferring Key Outcomes
+> 
+> We focus on deriving critical adaptation metrics by applying mathematical and statistical techniques:
+> 
+> - **Estimation of Adaptation Ratio and EIRR**: Using known relationships and available metrics, such as Avoided vs. Baseline Impact and Total Benefits vs. Adaptation Cost, we derive the Adaptation Ratio and, where possible, the EIRR.
+> - **Optimization**: We employ optimization techniques to solve for unknown parameters that align with observed data, particularly where direct measurements are missing.
+> 
+> #### 4. Presentation
+> 
+> Finally, the synthesized data is prepared for visualization and reporting:
+> 
+> - **Visualization**: Histograms and other graphical methods are used to present the distribution and variability of key metrics like the Adaptation Ratio and BCR across different sectors.
+> - **Sector Classification**: Adaptation outcomes are categorized into World Bank sectors and other relevant classifications to facilitate contextual analysis.
+> - **Reporting**: The results are summarized in reports with descriptive statistics and visual aids that highlight the economic returns of adaptation strategies across various contexts and sectors.
+> 
+> By employing this structured methodology, our analysis provides comparable, robust, and insightful estimates of adaptation returns that inform policy and decision-making.
+> 
+> --- 
+> 
+> Feel free to adjust the wording or add additional technical specifications as needed.
+**user**:
+> Awesome. Can you build out the "Optimization" section (which I would call the "Error minimization" section, with specific formula?
+**assistant**:
+> Absolutely! Below is a detailed outline for the "Error Minimization" section, including specific formulations you can incorporate into your methodology document.
+> 
+> ---
+> 
+> ### Error Minimization
+> 
+> This section details the framework employed to estimate key adaptation metrics—specifically the Adaptation Ratio, Benefit-Cost Ratio (BCR), and Economic Internal Rate of Return (EIRR)—through an optimization process that minimizes estimation errors among correlated values.
+> 
+> #### 1. Overview of Optimization Framework
+> 
+> In the context of synthesizing adaptation returns, optimization is employed to identify the best-fitting parameters that align estimated values with observed data points, ultimately leading to the calculation of our key metrics. By minimizing the error between predicted and actual values, we ensure robustness in our estimates.
+> 
+> #### 2. Error Functions
+> 
+> We utilize several error functions based on relevant economic relationships among the adaptation metrics:
+> 
+> 1. **Absolute Error (EA)**:
+>    \[
+>    E_A = \left| V_{obs} - V_{est} \right|
+>    \]
+>    where \(V_{obs}\) represents the observed value and \(V_{est}\) denotes the estimated value.
+> 
+> 2. **Squared Error (ES)**:
+>    \[
+>    E_S = \left( V_{obs} - V_{est} \right)^2
+>    \]
+>    This function is favored when emphasis is placed on larger discrepancies due to the squaring effect.
+> 
+> 3. **Root Mean Squared Error (RMSE)**:
+>    \[
+>    RMSE = \sqrt{\frac{1}{n} \sum_{i=1}^{n} \left( V_{obs,i} - V_{est,i} \right)^2}
+>    \]
+>    where \(n\) is the total number of observations. RMSE provides a comprehensive view of the typical magnitude of the residuals.
+> 
+> #### 3. Optimization Problem
+> 
+> For finding optimal parameters, we define a multi-parameter optimization problem that aims to minimize the cumulative error across multiple relationships. The optimization function can be framed as:
+> 
+> \[
+> \min_{p} f(p) = \sqrt{\sum_{j=0}^{m} E_j(p)}
+> \]
+> where \(p\) represents the parameters \( \text{Adaptation Ratio (AR)}, \text{BCR}, \text{TotalToLossRatio} \), and any other relevant metrics, and \(E_j\) denotes the error functions for the respective equations involved.
+> 
+> #### 4. Relevant Economic Relationships
+> 
+> To perform the optimization, we leverage specific economic relationships linking the metrics:
+> 
+> - **Adaptation Ratio (AR)**:
+>    \[
+>    AR = \frac{AvoidedImpact}{BaselineImpact}
+>    \]
+> 
+> - **Benefit-Cost Ratio (BCR)**:
+>    \[
+>    BCR = \frac{TotalBenefits}{AdaptationCost}
+>    \]
+> 
+> - **Total-to-Loss Ratio**:
+>    \[
+>    TotalToLossRatio = \frac{AvoidedImpact}{TotalBenefits}
+>    \]
+> 
+> The minimization function assesses errors in these derived forms against observed relationships, searching for values of \(p\) that provide the least cumulative error from all relevant expressions.
+> 
+> #### 5. Sample Optimization Procedure
+> 
+> The optimization begins by initializing parameters based on available data points or mean values, and then iteratively adjusts the parameters to minimize \(f(p)\):
+> 
+> 1. Define initial parameters \(p_0\).
+> 2. Calculate initial error \(f(p_0)\).
+> 3. Iterate:
+>    - Update parameters using optimization algorithm (e.g., gradient descent or other numerical methods).
+>    - Calculate updated error.
+>    - Check for convergence (i.e., when changes in error fall below a predefined threshold).
+> 
+> 4. Output the optimized parameters and their corresponding minimized error values.
+> 
+> The outcomes provide a robust foundation for reporting key adaptation returns, ensuring that the values used in the final analysis reflect the best available estimates based on observed data.
+> 
+> ---
+> 
+> Feel free to modify or expand upon the formulas and narrative as necessary for your specific context!
+**user**:
+> Hmm. Forget defining error.I mean more things like the Adaptation Ratio (AR). So, this part of the code:
+> ===
+>         if (!is.na(allvals9$`AvoidedImpact / BaselineImpact`[ii])) {
+>             par <- allvals9$`AvoidedImpact / BaselineImpact`[ii]
+>         } else {
+>             par <- mean(allvals9$`AvoidedImpact / BaselineImpact`, na.rm=T)
+>         }
+>         if (!is.na(allvals9$`TotalBenefits / AdaptationCost`[ii])) {
+>             par <- c(par, allvals9$`TotalBenefits / AdaptationCost`[ii])
+>         } else if (!is.na(allvals9$`AvoidedImpact / AdaptationCost`[ii])) {
+>             par <- c(par, allvals9$`AvoidedImpact / AdaptationCost`[ii])
+>         } else {
+>             par <- c(par, mean(allvals9$`TotalBenefits / AdaptationCost`, na.rm=T))
+>         }
+> 
+>         par <- c(par, 1, 5)
+> 
+>         soln <- optim(par, # AdaptatioRatio, BCR, TotalToLossRatio, Discount rate (%)
+>                       function(par) {
+>                           discsumfactor <- 1 / (1 - 1 / (1 + par[4] / 100))
+>                           err0 <- abs(par[3] - 1) # prior on 1
+>                           err1 <- par[1] / (allvals9$`AvoidedImpact / BaselineImpact`[ii] / 100) - 1
+>                           err2 <- par[1] / (allvals9$`AvoidedImpact`[ii] / allvals9$BaselineImpact[ii]) - 1
+>                           err3 <- par[2] / allvals9$`TotalBenefits / AdaptationCost`[ii] - 1
+>                           err3b <- par[2] / (allvals9$`AvoidedImpact / AdaptationCost`[ii] * par[3]) - 1
+>                           err3c <- par[2] / ((allvals9$`AvoidedImpact`[ii] / allvals9$`AdaptationCost`[ii]) * par[3]) - 1
+>                           err3d <- par[2] / ((allvals9$`AvoidedImpact`[ii] / sum(c(allvals9$CapExCost[ii], allvals9$OpExCost[ii] * discsumfactor), na.rm=T)) * par[3]) - 1
+>                           err4 <- par[2] / (allvals9$AvoidedImpact[ii] * par[3] / allvals9$AdaptationCost[ii]) - 1
+>                           err4b <- par[2] / (allvals9$AvoidedImpact[ii] * par[3] / sum(c(allvals9$CapExCost[ii], allvals9$OpExCost[ii] * discsumfactor), na.rm=T)) - 1 # AvoidedImpact / CapExCost approx= BCR
+>                           err5 <- (par[2] - 1) * discsumfactor / (allvals9$`DiscountedSum(TotalBenefits - AdaptationCost)`[ii] / allvals9$AdaptationCost[ii]) - 1
+>                           err5b <- (par[2] - 1) * discsumfactor / ((allvals9$`DiscountedSum(AvoidedImpact)`[ii] - allvals9$`AdaptationCost`[ii]) / allvals9$AdaptationCost[ii]) - 1
+>                           err6 <- par[3] / (allvals9$`AvoidedImpact`[ii] / (allvals9$`TotalBenefits / AdaptationCost`[ii] * allvals9$`AdaptationCost`[ii])) - 1
+> 
+>                           sqrt(sum(c(err0, err1^2, err2^2, err3^3, err3b^2, err3c^2, err3d^2, err4^2, err4b^2, err5^2, err5b^2, err6^2), na.rm=T))
+>                       })
+> ===
+> 
+> Can you list all of the equations used?
+**assistant**:
+> Certainly! Below is a detailed breakdown of the equations used in the optimization process, as implemented in the provided code snippet.
+> 
+> ### 1. Initial Parameter Assignments
+> 
+> Before optimization begins, parameters are set based on available values:
+> 
+> - **Adaptation Ratio (AR)**:
+>    \[
+>    \text{AR} = \begin{cases}
+>    \frac{\text{AvoidedImpact}}{\text{BaselineImpact}}, & \text{if } \text{AvoidedImpact / BaselineImpact} \text{ is available} \\
+>    \text{mean}(\text{AvoidedImpact / BaselineImpact}), & \text{otherwise}
+>    \end{cases}
+>    \]
+> 
+> - **Benefit-Cost Ratio (BCR)**:
+>    \[
+>    \text{BCR} = \begin{cases}
+>    \frac{\text{TotalBenefits}}{\text{AdaptationCost}}, & \text{if } \text{TotalBenefits / AdaptationCost} \text{ is available} \\
+>    \frac{\text{AvoidedImpact}}{\text{AdaptationCost}}, & \text{if } \text{AvoidedImpact / AdaptationCost} \text{ is available} \\
+>    \text{mean}(\text{TotalBenefits / AdaptationCost}), & \text{otherwise}
+>    \end{cases}
+>    \]
+> 
+> - **Total-to-Loss Ratio** (defaulted to 1 initially):
+>    \[
+>    \text{TotalToLossRatio} = 1
+>    \]
+> 
+> - **Discount Rate** (defaulted to 5%):
+>    \[
+>    \text{Discount Rate} = 5
+>    \]
+> 
+> ### 2. Optimization Function
+> 
+> The core optimization function calculates various errors based on the parameters \(par\):
+> 
+> - **Discount Sum Factor**:
+>    \[
+>    \text{discsumfactor} = \frac{1}{1 - \frac{1}{1 + \frac{par[4]}{100}}}
+>    \]
+> 
+> #### Error Calculations
+> 
+> The error terms are defined as follows:
+> 
+> 1. **Error on TotalToLossRatio** (prior set to 1):
+>    \[
+>    err0 = \left| par[3] - 1 \right|
+>    \]
+> 
+> 2. **Error for Adaptation Ratio** (given as a percentage):
+>    \[
+>    err1 = \frac{par[1]}{\frac{allvals9[\text{AvoidedImpact} / \text{BaselineImpact}][ii]}{100}} - 1
+>    \]
+> 
+> 3. **Error for AvoidedImpact** relative to BaselineImpact:
+>    \[
+>    err2 = \frac{par[1]}{\frac{allvals9[\text{AvoidedImpact}][ii]}{allvals9[\text{BaselineImpact}][ii]}} - 1
+>    \]
+> 
+> 4. **Error for BCR based on TotalBenefits to AdaptationCost**:
+>    \[
+>    err3 = \frac{par[2]}{allvals9[\text{TotalBenefits} / \text{AdaptationCost}][ii]} - 1
+>    \]
+> 
+> 5. **Error for BCR based on AvoidedImpact to AdaptationCost**:
+>    \[
+>    err3b = \frac{par[2]}{\left( \frac{allvals9[\text{AvoidedImpact} / \text{AdaptationCost}][ii]}{par[3]} \right)} - 1
+>    \]
+> 
+> 6. **Error for BCR based on AvoidedImpact to Cost**:
+>    \[
+>    err3c = \frac{par[2]}{\left( \frac{allvals9[\text{AvoidedImpact}][ii]}{allvals9[\text{AdaptationCost}][ii]} \times par[3] \right)} - 1
+>    \]
+> 
+> 7. **Error considering Capital and Operational Expenditure**:
+>    \[
+>    err3d = \frac{par[2]}{\left( \frac{allvals9[\text{AvoidedImpact}][ii]}{\sum \left( allvals9[\text{CapExCost}][ii] + allvals9[\text{OpExCost}][ii] \times discsumfactor \right)} \times par[3] \right)} - 1
+>    \]
+> 
+> 8. **Error based on AvoidedImpact to AdaptationCost**:
+>    \[
+>    err4 = \frac{par[2]}{\frac{allvals9[\text{AvoidedImpact}][ii] \times par[3]}{allvals9[\text{AdaptationCost}][ii]}} - 1
+>    \]
+> 
+> 9. **Error for AvoidedImpact relative to Capital Expenditure**:
+>    \[
+>    err4b = \frac{par[2]}{\left( \frac{allvals9[\text{AvoidedImpact}][ii] \times par[3]}{\sum \left( allvals9[\text{CapExCost}][ii] + allvals9[\text{OpExCost}][ii] \times discsumfactor \right)} \right)} - 1
+>    \]
+> 
+> 10. **Error for Discounted Sum of TotalBenefits minus AdaptationCost**:
+>     \[
+>     err5 = \frac{(par[2] - 1) \times discsumfactor}{\frac{allvals9[\text{DiscountedSum(TotalBenefits - AdaptationCost)}][ii]}{allvals9[\text{AdaptationCost}][ii]}} - 1
+>     \]
+> 
+> 11. **Alternate Error for Discounted Sum of AvoidedImpact minus AdaptationCost**:
+>     \[
+>     err5b = \frac{(par[2] - 1) \times discsumfactor}{\frac{allvals9[\text{DiscountedSum(AvoidedImpact)}][ii] - allvals9[\text{AdaptationCost}][ii]}{allvals9[\text{AdaptationCost}][ii]}} - 1
+>     \]
+> 
+> 12. **Error for TotalToLossRatio**:
+>     \[
+>     err6 = \frac{par[3]}{\left( \frac{allvals9[\text{AvoidedImpact}][ii]}{\left( \frac{allvals9[\text{TotalBenefits} / \text{AdaptationCost}][ii] \times allvals9[\text{AdaptationCost}][ii]}{allvals9[\text{AdaptationCost}][ii]} \right)} \right)} - 1
+>     \]
+> 
+> #### 3. Overall Error Metric
+> 
+> The overall function to be minimized is the square root of the sum of squared errors:
+> 
+> \[
+> \text{minimize} \quad \sqrt{\sum_{k=0}^{n} err_k^2} = \sqrt{err0^2 + err1^2 + err2^2 + err3^2 + err3b^2 + err3c^2 + err3d^2 + err4^2 + err4b^2 + err5^2 + err5b^2 + err6^2}
+> \]
+> 
+> This framework guides the optimization process, resulting in the most accurate estimates of the key adaptation metrics. 
+> 
+> --- 
+> 
+> Feel free to modify or expand upon this content as needed for your document!
+**user**:
+> Can you repeat these "Error in" equations, but rather than par[k], use \alpha for par[1], \beta for par[2], \gamma for par[3], \epsilon for par[4]?
+**assistant**:
+> Certainly! Below are the equations for the errors, with the substitutions made for the parameters:
+> 
+> ### Error Calculations Using \( \alpha, \beta, \gamma, \epsilon \)
+> 
+> 1. **Error on TotalToLossRatio** (prior set to 1):
+>    \[
+>    err_0 = \left| \gamma - 1 \right|
+>    \]
+> 
+> 2. **Error for Adaptation Ratio** (given as a percentage):
+>    \[
+>    err_1 = \frac{\alpha}{\frac{allvals9[\text{AvoidedImpact} / \text{BaselineImpact}][ii]}{100}} - 1
+>    \]
+> 
+> 3. **Error for AvoidedImpact** relative to BaselineImpact:
+>    \[
+>    err_2 = \frac{\alpha}{\frac{allvals9[\text{AvoidedImpact}][ii]}{allvals9[\text{BaselineImpact}][ii]}} - 1
+>    \]
+> 
+> 4. **Error for BCR based on TotalBenefits to AdaptationCost**:
+>    \[
+>    err_3 = \frac{\beta}{allvals9[\text{TotalBenefits} / \text{AdaptationCost}][ii]} - 1
+>    \]
+> 
+> 5. **Error for BCR based on AvoidedImpact to AdaptationCost**:
+>    \[
+>    err_3b = \frac{\beta}{\left( \frac{allvals9[\text{AvoidedImpact} / \text{AdaptationCost}][ii]}{\gamma} \right)} - 1
+>    \]
+> 
+> 6. **Error for BCR based on AvoidedImpact to Cost**:
+>    \[
+>    err_3c = \frac{\beta}{\left( \frac{allvals9[\text{AvoidedImpact}][ii]}{allvals9[\text{AdaptationCost}][ii]} \times \gamma \right)} - 1
+>    \]
+> 
+> 7. **Error considering Capital and Operational Expenditure**:
+>    \[
+>    err_3d = \frac{\beta}{\left( \frac{allvals9[\text{AvoidedImpact}][ii]}{\sum \left( allvals9[\text{CapExCost}][ii] + allvals9[\text{OpExCost}][ii] \times discsumfactor \right)} \times \gamma \right)} - 1
+>    \]
+> 
+> 8. **Error based on AvoidedImpact to AdaptationCost**:
+>    \[
+>    err_4 = \frac{\beta}{\frac{allvals9[\text{AvoidedImpact}][ii] \times \gamma}{allvals9[\text{AdaptationCost}][ii]}} - 1
+>    \]
+> 
+> 9. **Error for AvoidedImpact relative to Capital Expenditure**:
+>    \[
+>    err_4b = \frac{\beta}{\left( \frac{allvals9[\text{AvoidedImpact}][ii] \times \gamma}{\sum \left( allvals9[\text{CapExCost}][ii] + allvals9[\text{OpExCost}][ii] \times discsumfactor \right)} \right)} - 1
+>    \]
+> 
+> 10. **Error for Discounted Sum of TotalBenefits minus AdaptationCost**:
+>     \[
+>     err_5 = \frac{(\beta - 1) \times discsumfactor}{\frac{allvals9[\text{DiscountedSum(TotalBenefits - AdaptationCost)}][ii]}{allvals9[\text{AdaptationCost}][ii]}} - 1
+>     \]
+> 
+> 11. **Alternate Error for Discounted Sum of AvoidedImpact minus AdaptationCost**:
+>     \[
+>     err_5b = \frac{(\beta - 1) \times discsumfactor}{\frac{allvals9[\text{DiscountedSum(AvoidedImpact)}][ii] - allvals9[\text{AdaptationCost}][ii]}{allvals9[\text{AdaptationCost}][ii]}} - 1
+>     \]
+> 
+> 12. **Error for TotalToLossRatio**:
+>     \[
+>     err_6 = \frac{\gamma}{\left( \frac{allvals9[\text{AvoidedImpact}][ii]}{\left( \frac{allvals9[\text{TotalBenefits} / \text{AdaptationCost}][ii] \times allvals9[\text{AdaptationCost}][ii]}{allvals9[\text{AdaptationCost}][ii]} \right)} \right)} - 1
+>     \]
+> 
+> ### Overall Error Metric
+> 
+> The overall function to be minimized remains:
+> 
+> \[
+> \text{minimize} \quad \sqrt{\sum_{k=0}^{n} err_k^2} = \sqrt{err_0^2 + err_1^2 + err_2^2 + err_3^2 + err_3b^2 + err_3c^2 + err_3d^2 + err_4^2 + err_4b^2 + err_5^2 + err_5b^2 + err_6^2}
+> \]
+> 
+> This setup allows for the systematic minimization of the combined error across all relevant economic relationships, ensuring a robust estimation of the adaptation metrics.

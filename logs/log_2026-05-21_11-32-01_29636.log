@@ -1,0 +1,88 @@
+**assistant**:
+> Below are selected log entries of past conversations, as part of an experimental AI memory system. T
+**user**:
+> I get an error when using mpic++: 
+> ```
+> /Users/admin/opt/anaconda3/bin/mpic++: line 299: x86_64-apple-darwin13.4.0-clang++: command not found
+> ```
+**assistant**:
+> This error typically indicates that there is a problem with your MPI installation, specifically with the `mpic++` compiler wrapper. It seems that `mpic++` is trying to invoke a compiler named `x86_64-apple-darwin13.4.0-clang++`, which it cannot find.
+> 
+> Here are some steps you can take to resolve this issue:
+> 
+> 1. **Check Compiler Installation**: Ensure that Clang++ is installed on your system. Since you're on macOS, it should be available through Xcode or the Command Line Tools. You can install Command Line Tools with:
+>    ```bash
+>    xcode-select --install
+>    ```
+> 
+> 2. **Update MPI Configuration**: It's possible that the MPI configuration is using an incorrect compiler path or a non-existent compiler. Check the configuration file for MPI (usually something like `mpicc/config`) and update the paths to the appropriate Clang compiler paths. You might want to reinstall MPI to ensure it's using the correct compilers.
+> 
+> 3. **Reinstall MPI**: If you installed MPI with Conda or a package manager, try reinstalling it. With Conda, use:
+>    ```bash
+>    conda install -c conda-forge mpi
+>    ```
+> 
+> 4. **Verify `mpic++` Version**: Check the version of `mpic++` to ensure it's compatible with your system and compilers:
+>    ```bash
+>    mpic++ --version
+>    ```
+> 
+> 5. **Manually Set Compiler**: You can manually specify the compiler by exporting the appropriate environment variables before using MPI:
+>    ```bash
+>    export OMPI_CXX=clang++
+>    export OMPI_CC=clang
+>    ```
+> 
+> 6. **Check `PATH` and Symlinks**: Ensure that the directories containing `clang` and `clang++` are in your `PATH` and that symlinks are set correctly.
+> 
+> If these steps don't resolve the issue, consider providing more details about your MPI installation method and any custom configurations you may have applied.
+**user**:
+> I did `conda install -c conda-forge mpi` and that seemed to succeed, but when I say `mpic++ --version`, I get the error:
+> ```
+> % mpic++ --version
+> /Users/admin/opt/anaconda3/bin/mpic++: line 283: x86_64-apple-darwin13.4.0-clang++: command not found
+> ```
+**assistant**:
+> It looks like the `mpic++` wrapper is still pointing to an outdated or incorrect Clang++ version path. Here are steps to help you resolve this:
+> 
+> 1. **Check Current MPI Configuration**: Start by checking how MPI is configured. The `mpic++` wrapper may contain hard-coded paths. You can open the `mpic++` script in an editor:
+>    ```bash
+>    nano /Users/admin/opt/anaconda3/bin/mpic++
+>    ```
+>    Look for any lines that reference `x86_64-apple-darwin13.4.0-clang++` and modify them to use the correct `clang++` path. The path is usually just `clang++` if installed correctly.
+> 
+> 2. **Find Installed Compiler**: Run the following command to locate where Clang++ is installed:
+>    ```bash
+>    which clang++
+>    ```
+>    The output will give you the correct path to `clang++`. Ensure that this path is used in the `mpic++` file.
+> 
+> 3. **Reconfigure MPI**: If you don't want to manually edit the `mpic++` script, you can try reinstalling the MPI package with:
+>    ```bash
+>    conda remove mpi
+>    conda install -c conda-forge mpich  # or openmpi depending on your preference
+>    ```
+> 
+> 4. **Check Environment Variables**: Make sure that your environment variables point to the correct compiler. You may want to export these variables in your shell configuration file (like `.bash_profile` or `.zshrc`):
+>    ```bash
+>    export CC=clang
+>    export CXX=clang++
+>    ```
+> 
+> 5. **Rebuild MPI Configuration** (if needed): If you had a previous MPI installation, it’s possible that remnants of it are still causing conflicts. You could try clearing out your Anaconda environment and recreating it:
+>    ```bash
+>    conda create --name mpi-env mpi -c conda-forge
+>    conda activate mpi-env
+>    ```
+> 
+> 6. **Use an Alternative MPI Implementation**: If MPICH or OpenMPI doesn’t work seamlessly, you can also try using the following to potentially resolve compatibility issues:
+>    ```bash
+>    conda install -c anaconda openmpi
+>    ```
+> 
+> 7. **Test Again**: After making these changes, try running:
+>    ```bash
+>    mpic++ --version
+>    ```
+> 
+> Let me know if any of these steps help or if you hit any other issues!

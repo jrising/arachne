@@ -1,0 +1,476 @@
+**user**:
+> I am writing up a methods appendix for a report. The first part of this section discusses risk modeling:
+> ```
+> \subsection{Risk modeling}
+> 
+> We assess coastal impacts by combining probabilistic projections of global mean sea-level rise (GSLR) with two global, engineering–economic coastal impact models: CIAM \citep{diaz2016estimating} and DIVA \citepalias{lincked2019d23}. Both models represent coastal processes, assets at risk, and adaptation responses at a high spatial resolution. Since realised adaptation levels are uncertain, we treat the difference between “no/ad hoc adaptation” and “optimal (least-cost) adaptation” cases as an explicit source of uncertainty in future damages.
+> 
+> Global sea-level rise is projected using the semi-empirical model of \citet{kopp2016temperature}, driven by temperatures from the FaIR simple climate model. To propagate uncertainty consistently, each FaIR Monte Carlo temperature trajectory is randomly matched to a Monte Carlo realization from the HadCRUT-based historical temperature ensemble used by \citet{kopp2016temperature}. Kopp et al. provide two separate calibrations (based on different observational datasets), each with its own parametric uncertainty; for each run we randomly draw from one of these calibrations and its parameter distribution. This yields a joint ensemble of temperature and sea-level trajectories.
+> 
+> To supply CIAM with representative low, central, and high sea-level scenarios, we re-sample this ensemble via bootstrap. In each of 1000 bootstrap iterations, we identify the model run whose 2100 GSLR outcome is closest to a target quantile (5th, 50th, or 95th percentile), thus constructing three internally consistent time series representing low-, median-, and high-end GSLR under the FaIR-driven temperature uncertainty and the Kopp et al. semi-empirical relationship. These trajectories are used as inputs to CIAM for subsequent impact estimation.
+> 
+> CIAM is built on the DIVA coastal segmentation, which partitions the global coastline into 12{,}148 segments with relatively homogeneous physical characteristics (median segment length about 18\,km). The UK coastline is represented by 402 of these segments. For each segment, CIAM combines physical attributes (e.g., coastline length, elevation profile, storm surge statistics, wetland extent) and socio-economic attributes (e.g., income, population density, capital stock, land value) with cost data for coastal protection and retreat. Physical attributes are taken from DIVA, while socio-economic variables and cost parameters draw on the data sources documented in \citet{diaz2016estimating}. CIAM operates in decadal time steps, initialised in 2000 and extending to 2200; we focus on the period up to 2100. Model costs are denominated in 2010 US dollars and are converted to 2020 US dollars using a 20\% decadal inflation factor.
+> 
+> Impacts in CIAM are decomposed into five cost categories at the segment level:
+> (i) protection costs (e.g., constructing and maintaining sea walls and dikes),
+> (ii) retreat costs (relocating population and mobile capital, and demolishing immobile capital),
+> (iii) inundation costs (permanent loss of land and abandoned immobile capital),
+> (iv) wetland costs (lost wetland ecosystem services), and
+> (v) flood costs (expected storm-surge damages to capital and expected mortality).
+> The total cost of sea-level rise for a segment is the discounted sum of these components over the planning horizon.
+> 
+> Adaptation behaviour is represented by a segment-level social planner who chooses an adaptation strategy $s$ to minimise the discounted sum of protection, retreat, inundation, wetland, and flood costs over an adaptation planning period. Formally, for each segment and planning period, the planner solves
+> \[
+> \min_s \sum_{t \in \Delta t} \frac{1}{(1+r)^t} \Bigl(
+> \text{ProtectionCost}_{s t} +
+> \text{RetreatCost}_{s t} +
+> \text{InundationCost}_{s t} +
+> \text{WetlandCost}_{s t} +
+> \text{FloodCost}_{s t}
+> \Bigr),
+> \]
+> where $\Delta t$ contains decadal time steps $t$ within the current planning period and $r$ is the discount rate. Under the “no adaptation” case, protection is never undertaken and retreat is chosen myopically within each time step in response to realised sea-level rise. Under “optimal adaptation”, the planner can undertake both protection and retreat once per planning period, with perfect foresight over the current and next planning periods. CIAM solves this optimisation independently for each of the 12{,}148 segments and sequentially across planning periods (default periods are 2000; 2010--2040; 2050--2090; 2100--2140; 2150--2180; 2190--2200), implying a limited-horizon but forward-looking adaptation strategy.
+> 
+> DIVA-based results are used analogously, with impacts computed across similar categories of coastal damage and adaptation and aggregated to the national level for the UK. In both modelling frameworks, we extract annual monetary costs by segment (or region), aggregate them to country-level damages, and express outcomes in billions of pounds per year. To represent adaptation uncertainty, we treat the no-/limited-adaptation and optimal-adaptation runs as bounding cases. For each model, we perform Monte Carlo sampling over these adaptation cases and over GSLR trajectories, yielding a distribution of possible national coastal damage outcomes.
+> 
+> Finally, we convert the resulting coastal damages into percentage losses of UK GDP by dividing the annual monetary losses by a no-damage GDP baseline for the corresponding year. Where needed, we harmonise currencies, price levels, and baseline GDP paths to be consistent with the rest of the sectoral impact analysis. Further details of the uncertainty propagation, currency conversion, and model-combination procedures applied across all sectors are provided in \citet{rising2026comprehensive}, and are not repeated here.
+> ```
+> 
+> Now, I need two more sections, where I discuss modeling adaptation and adding in stochastic annual variability and extreme events.
+> 
+> Here is the code that produces the adaptation modeling:
+> ```
+> setwd("~/Dropbox/HMT/channels/slr")
+> 
+> library(readxl)
+> library(reshape2)
+> library(dplyr)
+> library(ggplot2)
+> library(scales)
+> 
+> do.aggregate <- 'ADM2'
+> 
+> alldf <- data.frame()
+> sheetnames <- excel_sheets("UK results v1.xlsx")
+> for (ssp in c('126', '370')) {
+>     for (quant in c('5', '50', '95')) {
+>         for (opt in c('noadapt', 'optimal')) {
+>             for (cost in c('total', 'protection')) {
+>                 if (opt == 'noadapt' && cost == 'protection')
+>                     values <- 0
+>                 else if (cost == 'protection' && quant != '50')
+>                     values <- NA
+>                 else {
+>                     print(c(ssp, quant, opt, cost))
+>                     sheetname <- paste(ssp, quant, opt, cost, sep='_')
+>                     if (!(sheetname %in% sheetnames)) {
+>                         print(sheetname)
+>                         next
+>                     }
+>                     df <- read_excel("UK results v1.xlsx", sheet=sheetname)
+>                     names(df)[1] <- "segment"
+>                     df2 <- melt(df, 'segment')
+>                     names(df2)[2] <- 'year'
+>                     df2$year <- as.numeric(as.character(df2$year))
+>                     alldf <- rbind(alldf, cbind(ssp, quant, opt, cost, subset(df2, year <= 2100)))
+>                 }
+>             }
+>         }
+>     }
+> }
+> 
+> if (do.aggregate != 'none') {
+>     matching <- read.csv("matching.csv")
+>     diva <- read.csv("../../regions/diva.csv")
+>     matching2 <- matching %>% left_join(diva, by=c('segment'='locationid'))
+>     matching2$region <- sapply(matching2$locationna, function(ss) paste0("UnitedKingdom", as.numeric(gsub(" United Kingdom", "", ss))))
+>     matching3 <- matching2 %>% left_join(alldf, by=c('region'='segment'), relationship='many-to-many')
+>     matching3 <- matching3[, -which(names(matching3) == 'segment')]
+>     names(matching3)[names(matching3) == do.aggregate] <- 'segment'
+>     alldf <- matching3 %>% group_by(segment, ssp, quant, opt, cost, year) %>%
+>         summarize(value=sum(value * share) / sum(share)) %>% filter(!is.na(value))
+> }
+> 
+> ## Produce national-level graph
+> alldf2 <- alldf %>% group_by(ssp, quant, opt, cost, year) %>% summarize(value=sum(value)) %>%
+>     group_by(ssp, quant, opt, year) %>% summarize(protection=c(value[cost == 'protection'], 0)[1], damages=value[cost == 'total'] - protection) %>%
+>     group_by(ssp, quant, opt, year) %>% reframe(costlabel=c('Damages', 'Protection'), value=c(damages, protection))
+> alldf2$ssplabel <- ifelse(alldf2$ssp == 126, "SSP1-2.6", "SSP3-7.0")
+> alldf2$optlabel <- ifelse(alldf2$opt == 'noadapt', "No Adaptation", "Optimal Adaptation")
+> alldf2$costlabel <- factor(alldf2$costlabel, levels=c('Damages', 'Protection'))
+> ggplot(subset(alldf2, quant == 50), aes(year, fill=costlabel)) +
+>     facet_grid(ssplabel ~ optlabel, scales='free_y') +
+>     geom_col(aes(y=value)) + geom_errorbar(data=subset(alldf2, quant == 5 & costlabel == 'Damages') %>% left_join(subset(alldf2, quant == 95 & costlabel == 'Damages'), by=c('ssplabel', 'optlabel', 'year', 'costlabel'), suffix=c('.05', '.95')), aes(ymin=value.05, ymax=value.95)) +
+>     theme_bw() + xlab(NULL) + ylab("Damages and Costs ($billion") +
+>     scale_fill_manual(name="Cost:", values=c('#d95f02', '#7570b3'))
+> 
+> ## Setup for main calibration
+> alldf2 <- dcast(alldf, segment + year + ssp ~ opt + cost + quant, value.var='value')
+> 
+> sum(alldf2$optimal_total_50 < alldf2$optimal_protection_50)
+> 
+> source("../../lib/damagefunc.R")
+> 
+> gslr <- read.csv("../../climate/gslrquants.csv")
+> alldf2$ssp <- paste0("ssp", alldf2$ssp)
+> 
+> alldf3 <- alldf2 %>% left_join(subset(gslr, quantile == .5), by=c('ssp'='scenario', 'year'))
+> 
+> ggplot(alldf3, aes(year)) +
+>     geom_point(aes(y=noadapt_total_50, colour="noadapt total")) +
+>     geom_point(aes(y=optimal_protection_50, colour="protection")) +
+>     geom_point(aes(y=optimal_total_50, colour="optimal total")) +
+>     theme_bw()
+> 
+> mean(alldf3$noadapt_total_50 != alldf3$optimal_total_50 & alldf3$optimal_protection_50 != 0 & alldf3$optimal_total_50 != alldf3$optimal_protection_50)
+> length(unique(subset(alldf3, noadapt_total_50 != optimal_total_50 & optimal_protection_50 != 0 & optimal_total_50 != optimal_protection_50)$segment)) / length(unique(alldf3$segment))
+> 
+> alldf3$noadapt_total_se <- (alldf3$noadapt_total_95 - alldf3$noadapt_total_5) / (qnorm(.95) - qnorm(0.05))
+> alldf3$optimal_total_se <- (alldf3$optimal_total_95 - alldf3$optimal_total_5) / (qnorm(.95) - qnorm(0.05))
+> 
+> ## seg <- subset(alldf3, noadapt_total_50 != optimal_total_50 & optimal_protection_50 != 0 & optimal_total_50 != optimal_protection_50)$segment[1]
+> results.filename <- paste0("results", ifelse(do.aggregate != 'none', paste0('-', do.aggregate), ''), ".RData")
+> if (file.exists(results.filename)) {
+>     load(results.filename)
+> } else {
+>     results <- data.frame()
+> }
+> ## results <- rbind(results, data.frame(segment="UnitedKingdom8742", coeff0=NA, coeff1=NA, coeff2=NA, sigma=NA, eta=NA, delta=NA, dDdI=NA))
+> 
+> fit <- NA # saved model
+> for (seg in unique(alldf3$segment)) {
+>     segdf <- subset(alldf3, segment == seg)
+>     if (all(segdf$noadapt_total_50 == segdf$optimal_total_50) || all(segdf$optimal_protection_50 == 0) ||
+>         all(segdf$optimal_total_50 == segdf$optimal_protection_50))
+>         next
+>     if (seg %in% results$segment)
+>         next
+>     print(seg)
+> 
+>     ggplot(segdf, aes(year)) +
+>         geom_point(aes(y=noadapt_total_50, colour="noadapt total")) +
+>         geom_point(aes(y=optimal_total_50, colour="optimal total")) +
+>         geom_point(aes(y=optimal_protection_50, colour="protection")) +
+>         theme_bw()
+> 
+>     segdf2.totalmu <- melt(segdf[, c('year', 'ssp', 'noadapt_total_50', 'optimal_total_50')], c('year', 'ssp'))
+>     segdf2.totalmu$adaptation <- substring(segdf2.totalmu$variable, 1, 7)
+>     segdf2.totalse <- melt(segdf[, c('year', 'ssp', 'noadapt_total_se', 'optimal_total_se')], c('year', 'ssp'))
+>     segdf2.totalse$adaptation <- substring(segdf2.totalse$variable, 1, 7)
+> 
+>     segdf2 <- segdf2.totalmu %>% left_join(segdf2.totalse, by=c('year', 'ssp', 'adaptation'), suffix=c('.mu', '.se')) %>%
+>         left_join(segdf[, c('year', 'ssp', 'optimal_protection_50', 'gslr.mu')], by=c('year', 'ssp')) %>%
+>         mutate(protection=ifelse(variable.mu == 'optimal_total_50', optimal_protection_50, 0))
+>     segdf2.totalcost <- dcast(segdf2, ssp + adaptation ~ year, value.var='value.mu')
+>     segdf2.totalse <- dcast(segdf2, ssp + adaptation ~ year, value.var='value.se')
+>     segdf2.protection <- dcast(segdf2, ssp + adaptation ~ year, value.var='protection')
+>     segdf2.gslr <- dcast(segdf2, ssp + adaptation ~ year, value.var='gslr.mu')
+> 
+>     scale.cdiff <- max(segdf2.gslr[, -1:-2])
+>     scale.impact <- max(segdf2.totalcost[, -1:-2])
+>     scale.protect <- max(segdf2.protection[, -1:-2])
+> 
+>     stan.data <- list(T=ncol(segdf2.totalcost) - 2, N=nrow(segdf2.totalcost),
+>                       time=as.numeric(names(segdf2.totalcost)[-1:-2]),
+>                       cdiff=segdf2.gslr[, -1:-2] / scale.cdiff,
+>                       impact=segdf2.totalcost[, -1:-2] / scale.impact,
+>                       impact_se=segdf2.totalse[, -1:-2] / scale.impact,
+>                       invest=segdf2.protection[, -1:-2] / scale.protect,
+>                       sigmacauchy=2.5)
+> 
+>     init <- function(chain_id) {
+>         mydf <- segdf2[sample(nrow(segdf2), nrow(segdf2), replace=T),]
+>         mydf$cdiff <- mydf$gslr.mu / scale.cdiff
+>         mydf$cdiff2 <- mydf$cdiff^2
+>         mydf$impact <- mydf$value.mu / scale.impact
+>         mydf$invest <- mydf$protection / scale.protect
+> 
+>         mod <- lm(impact ~ cdiff + cdiff2, data=mydf)
+>         ## exp(eta * invest) = runif => eta = log(runif) / invest
+>         eta = log(runif(1)) / sample(mydf$invest[mydf$invest > 0], 1)
+> 
+>         list(coeff=coef(mod)[1:2], coeff3=coef(mod)[3], sigma=sd(mydf$impact, na.rm=T), neta=-eta, delta=runif(1),
+>              tau=matrix(rnorm(stan.data$T * stan.data$N), stan.data$N, stan.data$T))
+>     }
+> 
+>     fit <- stan(model_code=stan.code.noprior3, data=stan.data, init=init, chains=4, open_progress=F)
+>     la <- extract(fit, permute=T)
+> 
+>     ## y / Y = beta1 + beta2 * t / T => y = beta1 * Y + beta2 * Y/T * t
+>     coeff0 <- la$coeff[, 1] * scale.impact
+>     coeff1 <- la$coeff[, 2] * scale.impact / scale.cdiff
+>     coeff2 <- la$coeff3 * scale.impact / (scale.cdiff^2)
+>     sigma <- la$sigma * scale.impact
+>     ## exp(-neta * adap / scale.protect)
+>     eta <- -la$neta / scale.protect
+> 
+>     ## Estimate benefit of $1 under SSP3-7.0
+>     discountrate <- 0.05
+>     simdf <- subset(segdf, ssp == 'ssp370' & year >= 2020)
+> 
+>     ## simout <- data.frame(year=simdf$year, obsdmg=simdf$noadapt_total_50,
+>     ##                      simdmg=mean(coeff0) + mean(coeff1) * simdf$gslr.mu + mean(coeff2) * simdf$gslr.mu^2,
+>     ##            protection=mean(la$delta)^(simdf$year - 2030) * (simdf$year >= 2030))
+>     ## simout$simdmg2 <- (mean(coeff0) + mean(coeff1) * simdf$gslr.mu + mean(coeff2) * simdf$gslr.mu^2) * exp(mean(eta) * simout$protection / 1e9)
+>     ## dDdI <- 1e9 * sum((simout$simdmg - simout$simdmg2) * exp(-discountrate * (simdf$year - 2030)))
+> 
+>     dDdI <- sapply(1:4000, function(ii) {
+>         simdmg0 <- simdf$noadapt_total_50
+>         protection <- la$delta[ii]^(simdf$year - 2030) * (simdf$year >= 2030)
+>         simdmg1 <- simdf$noadapt_total_50 * exp(eta[ii] * protection / 1e9)
+>         1e9 * sum((simdmg0 - simdmg1) * exp(-discountrate * (simdf$year - 2030)))
+>     })
+> 
+>     results <- rbind(results, data.frame(segment=seg, coeff0, coeff1, coeff2, sigma, eta, delta=la$delta, dDdI))
+>     save(results, file=results.filename)
+> }
+> 
+> results2 <- results %>% group_by(segment) %>% summarize(dDdI=mean(dDdI))
+> 
+> source("~/projects/research-common/R/myPBSmapping.R")
+> 
+> ## colours <- c('#8c510a', '#d8b365', '#f6e8c3', '#f5f5f5', '#c7eae5', '#5ab4ac', '#01665e')
+> breaks <- c(0.3, 1, 3, 10, 30, 100, 300)
+> 
+> if (do.aggregate == 'none') {
+>     shp <- importShapefile("../../regions/divabuffer/divabuffer.shp")
+>     shp01 <- importShapefile("../../regions/divabuffer/divabuffer-01.shp")
+> 
+>     polydata <- attr(shp, 'PolyData')
+>     polydata$segment <- sapply(polydata$locationna, function(str)
+>         paste0(paste(strsplit(str, " ")[[1]][-1], collapse=''), strsplit(str, " ")[[1]][1]))
+> 
+>     polydata2 <- polydata %>% left_join(results2, by='segment') %>% filter(countryid == 'GBR')
+>     shp2 <- shp %>% left_join(polydata2[, c('PID', 'countryid', 'dDdI', 'length')]) %>% filter(X > -20 & !is.na(countryid))
+> 
+>     polydata01 <- attr(shp01, 'PolyData')
+>     shp201 <- shp01 %>% left_join(polydata01[, c('PID', 'countryid')]) %>% filter(X > -20 & countryid == 'GBR')
+> 
+>     ggplot(shp201, aes(X, Y, group=paste(PID, SID))) +
+>         coord_map() +
+>         geom_polygon(fill=muted('red')) +
+>         geom_polygon(data=subset(shp2, !is.na(dDdI)), aes(fill=dDdI)) +
+>         geom_point(data=subset(polydata2, !is.na(dDdI)), aes(x=longi, y=lati, group=PID, colour=dDdI), size=2) +
+>         scale_fill_steps2("Social benefit of\ninvestment (£/£)", midpoint=0, low='#8c510a', high='#01665e', mid='#f5f5f5', breaks=breaks, trans='log10') +
+>         scale_colour_steps2("Social benefit of\ninvestment (£/£)", midpoint=0, low='#8c510a', high='#01665e', mid='#f5f5f5', breaks=breaks, trans='log10') +
+>         theme_bw() + xlab(NULL) + ylab(NULL)
+>     ggsave("dDdI.pdf", width=5, height=6.8)
+> } else if (do.aggregate == 'ADM2') {
+>     shp <- importShapefile("../../regions/gadm36_GBR_shp/gadm36_GBR_2.shp")
+>     polydata <- attr(shp, "PolyData")
+> 
+>     polydata2 <- polydata %>% left_join(results2, by=c('NAME_2'='segment'))
+>     shp2 <- shp %>% left_join(polydata2[, c('PID', 'dDdI')])
+> 
+>     ggplot(shp2, aes(X, Y, agroup=paste(PID, SID))) +
+>         coord_map(xlim=c(-8, 1.7), ylim=c(50.3, 60.4)) +
+>         geom_polygon(fill=muted('red')) +
+>         geom_polygon(data=subset(shp2, !is.na(dDdI)), aes(fill=dDdI)) +
+>         scale_fill_steps2("Social benefit of\ninvestment (£/£)", midpoint=0, low='#8c510a', high='#01665e', mid='#f5f5f5', breaks=breaks, trans='log10', show.limits=T) +
+>         scale_colour_steps2("Social benefit of\ninvestment (£/£)", midpoint=0, low='#8c510a', high='#01665e', mid='#f5f5f5', breaks=breaks, trans='log10', show.limits=T) +
+>         theme_bw() + xlab(NULL) + ylab(NULL)
+>     ggsave("dDdI-ADM2.pdf", width=5, height=6.2)
+> 
+>     ## Calculate R2 by row
+>     results$r2 <- NA
+>     for (seg in unique(results$segment)) {
+>         segdf <- subset(alldf3, segment == results$segment[ii])
+>         yvar <- var(c(segdf$noadapt_total_50, segdf$optimal_protection_50, segdf$optimal_total_50))
+>         iis <- which(results$segment == seg)
+>         results$r2[iis] <- 1 - results$sigma[iis]^2 / yvar
+>     }
+> 
+>     ggplot(results %>% group_by(segment) %>% summarize(r2=mean(r2)), aes(r2)) +
+>         geom_histogram() + theme_bw() + xlab("Coefficient of variation")
+> }
+> 
+> load.slr.adapt <- function() {
+>     load("channels/slr/results.RData")
+>     results$mc <- rep(1:4000, nrow(results) / 4000)
+> 
+>     diva <- read.csv("channels/slr/diva_published/data/gis/diva.csv") %>% filter(countryid == "GBR")
+>     diva$segment <- sapply(diva$locationna, function(ss) paste0("UnitedKingdom", as.numeric(gsub(" United Kingdom", "", ss))))
+> 
+>     return(list(results, diva))
+> }
+> 
+> slr.adapt.prop <- function(spend.MGBPyr, results.diva) {
+>     results2 <- results.diva[[1]] %>% group_by(mc) %>% mutate(spend=spend.MGBPyr * dDdI / sum(dDdI))
+> 
+>     stopifnot(abs(sum(results2$spend) / 4000 - spend.MGBPyr) < 1)
+> 
+>     results2$adaptation <- 0
+>     scaling <- data.frame()
+>     for (year in 2025:2075) {
+>         results2$adaptation <- results2$spend + results2$adaptation * results2$delta
+>         results2$scale <- exp(results2$eta * results2$adaptation / 1000) # as billion
+>         scaling <- rbind(scaling, results2 %>% group_by(segment) %>% dplyr::summarize(mu=mean(scale), ci25=quantile(scale, .25), ci75=quantile(scale, .75), year=year))
+>     }
+> 
+>     scaling2 <- scaling %>% left_join(results.diva[[2]], by='segment') %>% rename(Region=locationid)
+>     return(scaling2)
+> }
+> ```
+> 
+> Can you please write up a clear, succinct methodology for the
+> adaptation section, including showing the figure dDdI-ADM2.pdf? Figures
+> for this section will be in the `figures/adapt/slr` folder. For figure
+> labels, include the prefix "slr-".
+> 
+> Follow conventions of (1) Use UK spelling; (2) using LaTeX and surround math with $...$, \[
+> ... \], and the like; (3) avoid an overly step-by-step description and
+> do not use subsections; (4) if you need to use indices, counties are
+> i, Monte Carlos are m, and years are t; (5) do not refer to function
+> or column names explicitly; and (6) use natbib references, and where
+> new ones are required follow the references with note in parentheses
+> of what it should refer to.
+**assistant**:
+> Here is a draft adaptation-methods paragraph you can drop in as a new subsection after the risk-modelling text.
+> 
+> ```latex
+> \subsection{Adaptation modelling}
+> 
+> To assess the effectiveness of incremental coastal adaptation investment, we estimate a reduced-form relationship between sea-level rise, adaptation effort, and total coastal damages. Starting from the national and sub-national results produced by the coastal impact models, we construct a panel of decadal damages under two adaptation cases (no or ad hoc adaptation; optimal adaptation) and two emissions pathways (SSP1-2.6 and SSP3-7.0), for each UK coastal area $i$ and year $t$ up to 2100. For each area and year, we compute mean total damages and associated uncertainty under both adaptation cases, and we separate the protection component of costs from the remaining damage categories. These coastal impact outputs are then matched with probabilistic projections of global mean sea-level rise (central quantile) for the corresponding scenario and year.
+> 
+> For each coastal area $i$, we focus on those locations where sea-level rise, protection spending, and the difference between optimal and no-adaptation damages are all non-trivial, so that adaptation effects can be identified. For such locations, we pool observations across emissions pathways and years and re-express total damages $D_{i t}$, protection investment $I_{i t}$, and sea-level rise $\Delta SL_{t}$ in normalised form to improve numerical conditioning. We then fit, using Bayesian inference, a parametric damage function of the form
+> \[
+> D_{i t} \approx \beta_{0,i} + \beta_{1,i} \Delta SL_{t} + \beta_{2,i} \Delta SL_{t}^2,
+> \]
+> augmented by a multiplicative adaptation term that captures how cumulative local protection effort reduces damages. Specifically, we assume that cumulative adaptation effort at time $t$ in area $i$ evolves according to
+> \[
+> A_{i t} = I_{i t} + \delta_i A_{i, t-1},
+> \]
+> where $\delta_i \in (0,1)$ is an area-specific parameter governing the persistence of adaptation benefits over time. Conditional on $A_{i t}$, residual damages are assumed to scale as
+> \[
+> D_{i t}^{\text{adapted}} = D_{i t}^{\text{no-adapt}} \exp\left( \eta_i \frac{A_{i t}}{\text{scale}} \right),
+> \]
+> where $D_{i t}^{\text{no-adapt}}$ denotes the counterfactual no-adaptation damages implied by the quadratic baseline, $\eta_i \leq 0$ is an area-specific adaptation effectiveness parameter, and the denominator rescales adaptation effort into billions of pounds to aid interpretation. The model includes an additive error term with area-specific scale $\sigma_i$, and is estimated jointly for all years and adaptation cases, using priors on coefficients and noise terms that favour smooth damage responses but allow for substantial heterogeneity across coastal areas (following weakly informative-prior recommendations in Bayesian applied work; \citealp{gelman2008weakly} (Bayesian regression practice)).
+> 
+> For each coastal area $i$, we draw an ensemble of Monte Carlo realisations $m$ of $(\beta_{0,i},\beta_{1,i},\beta_{2,i},\eta_i,\delta_i,\sigma_i)$ from the fitted posterior distribution. These draws are then used to simulate the discounted benefit of a marginal, centrally financed adaptation programme, defined as an additional constant national expenditure stream on coastal protection over 2025--2075. In each Monte Carlo realisation, the national expenditure is allocated across coastal areas in proportion to their location-specific present-value marginal damage reduction, such that regions with higher estimated returns receive larger shares of the budget. Given an assumed social discount rate and a baseline sea-level trajectory under SSP3-7.0, we propagate the additional expenditure forward in time using the persistence parameter $\delta_i$, compute the resulting reduction in discounted damages relative to the no-additional-investment counterfactual, and thereby obtain an implied social benefit of adaptation per pound spent for each area and realisation, denoted $B_{i m}$.
+> 
+> The resulting distribution of $B_{i m}$ is summarised at the county level by averaging across Monte Carlo draws and reporting the mean present-value benefit of one pound of additional coastal adaptation spending, expressed as a benefit--cost ratio. These ratios are then mapped across UK counties to provide a spatial profile of adaptation effectiveness. Figure~\ref{fig:slr-dDdI-ADM2} shows the resulting distribution of the social benefit of adaptation investment across counties, with values plotted on a logarithmic scale. This figure highlights substantial spatial heterogeneity in the expected returns to coastal adaptation, reflecting differences in exposure, baseline risk, and the scope for cost-effective protection.
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=0.7\textwidth]{figures/adapt/slr/slr-dDdI-ADM2.pdf}
+>   \caption{Estimated social benefit of additional coastal adaptation investment (present-value benefit per pound spent) across UK counties, based on the reduced-form adaptation model described in the text.}
+>   \label{fig:slr-dDdI-ADM2}
+> \end{figure}
+> ```
+**user**:
+> Thank you. Next, I would like you to provide a succinct methods section for
+> "Variability and extreme events". Here is the relevant code:
+> ```
+> setwd("~/Dropbox/HMT/channels/slr")
+> 
+> library(dplyr)
+> 
+> load("results.RData")
+> models <- results %>% group_by(segment) %>% mutate(mc=1:n())
+> matching <- read.csv("matching.csv")
+> 
+> diva <- read.csv("~/Dropbox/UK Economic Risks/channels/slr/diva_published/data/gis/diva.csv")
+> matching2 <- matching %>% left_join(diva, by=c('segment'='locationid'))
+> matching2$region <- sapply(matching2$locationna, function(ss) paste0("UnitedKingdom", as.numeric(gsub(" United Kingdom", "", ss))))
+> 
+> gslr <- read.csv("../../climate/gslrquants.csv")
+> 
+> slrdraw <- function(qq, slr, evals) {
+>     inverse_cdf <- splinefun(c(0, qq, 1), c(slr[1] - (slr[2] - slr[1]), slr, slr[length(slr)] + diff(tail(slr, 2))), method = "monoH.FC")
+>     inverse_cdf(evals)
+> }
+> 
+> draws <- data.frame()
+> for (scenario in c('Most Likely', 'High Risk')) {
+>     for (year in 2025:2075) {
+>         print(c(scenario, year))
+>         if (scenario == 'Most Likely') {
+>             slr <- slrdraw(c(0.25, .75), sort(gslr$gslr.mu[gslr$year == year & gslr$quantile == 0.5]), runif(4000))
+>         } else {
+>             gslr2 <- gslr[gslr$year == year & gslr$scenario == 'ssp370',]
+>             slr <- slrdraw(gslr2$quantile, gslr2$gslr.mu, runif(4000))
+>         }
+> 
+>         models2 <- models %>% left_join(data.frame(mc=1:4000, slr), by='mc') %>% mutate(ead1=coeff0 + coeff1 * slr + coeff2 * slr^2,
+>                                                                                         ead=ifelse(ead1 < 0, sigma, ead1),
+>                                                                                         draw=rexp(4000, 1/ead))
+> 
+> 
+>         draws <- rbind(draws, cbind(scenario=scenario, year=year, models2 %>% select(!c(coeff0:dDdI, ead1))))
+>     }
+> }
+> 
+> ## Project according to scenarios
+> results <- data.frame()
+> for (scenario in c('Most Likely', 'High Risk')) {
+>     ## Annual projections
+>     for (year in 2025:2075) {
+>         draws2 <- draws[draws$climscen == scenario & draws$year == year,]
+>         results <- rbind(results, cbind(scenario=scenario, year=year, measure="EAD", draws2 %>% group_by(segment) %>%
+>                                                                                      summarize(mu=mean(ead), ci05=quantile(ead, .05),
+>                                                                                                ci95=quantile(ead, .95))))
+>     }
+> }
+> 
+> scenario <- 'High Risk'
+> ## 1-in-200 year projections
+> for (year in c(2030, 2040, 2050)) {
+>     ## 1-in-10 year outcome
+>     draws2 <- draws[draws$climscen == scenario & draws$year >= year & draws$year < year + 10,]
+>     worsts <- draws2 %>% group_by(year, mc) %>%
+>         summarize(draw=sum(draw)) %>% group_by(mc) %>% summarize(worst.year=year[which.max(draw)])
+>     draws3 <- draws2 %>% left_join(worsts, by='mc') %>% group_by(segment, mc) %>% summarize(draw=draw[year == worst.year])
+> 
+>     ## All uncertainty
+>     results <- rbind(results, cbind(scenario=scenario, year=year, measure="Extreme",
+>                                     draws3 %>% group_by(segment) %>%
+>                                     summarize(mu=mean(draw), ci05=quantile(draw, .05), ci95=quantile(draw, .95))))
+> }
+> 
+> write.csv(results, "dataset.csv", row.names=F)
+> 
+> library(ggplot2)
+> results <- read.csv("dataset.csv")
+> 
+> ggplot(subset(results, measure == 'EAD'), aes(year, mu, group=segment)) +
+>     facet_wrap(~ scenario, ncol=1) +
+>     geom_line(aes(colour=scenario), alpha=.5) +
+>     geom_jitter(data=subset(results, measure == 'Extreme'),
+>                 aes(x=year + 5, y=ci95), colour=scales::muted("red"), width=4, height=0) +
+>     theme_bw() + scale_x_continuous(NULL, expand=c(0, 0)) + ylab("Coastal damages (billion USD)") +
+>     scale_colour_discrete("Scenario:") + theme(legend.justification=c(1, 0), legend.position=c(.99, 0.01))
+> ggsave("dataset-byseg.pdf", width=6.5, height=4)
+> ```
+> 
+> Please note that you will not have to explain the definitions of
+> "Expected annual damages (EAD)", the "1-in-200" events, the High Risk
+> or Most Likely scenarios, since the
+> principles behind these will be described in another
+> non-channel-specific section.
+> 
+> Please include a LaTeX figure description for `dataset-byseg.pdf` which will be in the same figures folder?
+**assistant**:
+> ```latex
+> \subsection{Variability and extreme events}
+> 
+> To capture the role of interannual variability and rare extremes in coastal damages, we extend the reduced-form adaptation model to a stochastic process for annual event losses. For each UK coastal area $i$, we take the posterior draws of the segment-specific damage-function parameters and combine them with probabilistic sea-level projections to generate Monte Carlo realisations $m$ of annual expected damages over 2025--2075, under both the Most Likely and High Risk climate scenarios.
+> 
+> For each year $t$, we first construct an ensemble of global mean sea-level anomalies by sampling from the relevant quantile curves of the sea-level projection model. Under the Most Likely case, we interpolate around the central quantile to obtain a representative distribution of sea-level outcomes, whereas under the High Risk case we sample directly from the full scenario-specific quantile function (here SSP3-7.0). For each Monte Carlo draw $m$, this yields a realisation of sea-level rise $\Delta SL_{t m}$, which is combined with the corresponding draw of the reduced-form coefficients to obtain an implied segment-level expected annual damage,
+> \[
+> \text{EAD}_{i t m}^{\ast} = \beta_{0,i m} + \beta_{1,i m} \Delta SL_{t m} + \beta_{2,i m} \Delta SL_{t m}^2.
+> \]
+> To avoid non-physical negative values, we bound expected damages below by the estimated noise scale, and denote the resulting non-negative annual expectation by $\text{EAD}_{i t m}$.
+> 
+> Conditional on $\text{EAD}_{i t m}$, we then represent realised annual coastal losses as a stochastic outcome from an exponential distribution with mean $\text{EAD}_{i t m}$. This choice yields a right-skewed distribution of annual damages with occasional large realisations, consistent with the dominance of infrequent surge and storm events in coastal loss statistics. For each area $i$, year $t$, and Monte Carlo draw $m$, we simulate a single exponential draw to obtain a realisation of annual damage $L_{i t m}$. Aggregating across Monte Carlo draws, we compute for each segment and year the mean $\text{EAD}_{i t} = \mathbb{E}_m[L_{i t m}]$ and associated central credible interval, under both the Most Likely and High Risk scenarios.
+> 
+> To approximate multi-year extreme losses, we further analyse the High Risk scenario by examining decadal blocks centred on selected years (2030, 2040, 2050). For each central year $\tau \in \{2030, 2040, 2050\}$ and each Monte Carlo draw $m$, we identify the single year $t$ within the surrounding decade $[\tau, \tau+9]$ that yields the largest total national damage. This is done by summing $L_{i t m}$ across all coastal areas $i$ for each year within the decade, and selecting the year with the maximum aggregate loss. For each segment $i$ and Monte Carlo draw $m$, we then retain the corresponding annual loss in that worst national year, $L^{\text{extreme}}_{i \tau m}$. The distribution of these decadal maxima is summarised, for each segment and central year $\tau$, by its mean and central credible interval, and reported as a proxy for 1-in-200-year coastal loss events at the segment level.
+> 
+> The resulting time series of mean expected annual damages and decadal extreme losses are used in two ways. First, they are aggregated across segments to obtain national profiles of EAD and representative rare-event damages under each scenario. Second, we retain the segment-level series to illustrate the diversity of temporal patterns across UK coastal areas, including the relative magnitude of typical annual damages versus rare, high-loss years. Figure~\ref{fig:slr-dataset-byseg} shows, for each segment, the evolution of expected annual damages under the Most Likely and High Risk scenarios and the corresponding segment-level contributions to the decadal extreme events.
+> 
+> \begin{figure}[t]
+>   \centering
+>   \includegraphics[width=0.8\textwidth]{figures/adapt/slr/slr-dataset-byseg.pdf}
+>   \caption{Time series of expected annual coastal damages and decadal extreme-event damages by coastal segment. Lines show expected annual damages under the Most Likely and High Risk climate scenarios, while red markers indicate segment-level damages in the nationally worst year within each selected decade under the High Risk case.}
+>   \label{fig:slr-dataset-byseg}
+> \end{figure}
+> ```

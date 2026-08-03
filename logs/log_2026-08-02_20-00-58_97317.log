@@ -1,0 +1,609 @@
+**user**:
+> I'm trying to make an automated system to push all changes from my local directory to a dreamhost server. Here's my current script draft:
+> ```
+> #!/bin/bash
+> 
+> set -e  # Exit on any error
+> 
+> # Paths
+> LOCAL_PATH="~/projects/arachne"
+> REMOTE_PATH="projects/arachne"
+> FILE_PATHS=logs database knowledge/entries.txt memory/bayesian.txt
+> BACKUP_PATH="existencia.org:projects/arachne-backup"
+> LAST_UPDATED_FILE="last_updated.txt"
+> UPDATE_CHECK_URL="https://arachne.existencia.org/checkupdate"
+> 
+> 
+> ssh existencia.org << 'ENDSSH'
+>     # Create a backup of the current project folder
+>     echo "Creating a backup of the current project..."
+>     cp -r ${REMOTE_PATH} ${BACKUP_PATH}
+> ENDSSH
+> # Sync logs and database
+> echo "Syncing logs and database..."
+> for path in $FILE_PATHS
+> do
+>     rsync -avz $LOCAL_LOGS/$path $REMOTE_LOGS/$path
+> done
+> 
+> # Git operations
+> echo "Syncing code with git..."
+> git -C $PROJECT_PATH add . && git -C $PROJECT_PATH commit -m "Automated sync" && git -C $PROJECT_PATH push
+> 
+> # SSH into DreamHost and handle deployment
+> ssh existencia.org << 'ENDSSH'
+>     
+> 
+>     echo "Updating code on DreamHost..."
+>     cd ${REMOTE_PATH}
+>     git pull
+>     source venv/bin/activate
+>     pip install -r requirements.txt
+>     
+>     # Update last updated file
+>     echo "$(date)" > $LAST_UPDATED_FILE
+> ENDSSH
+> 
+> # Check the update status
+> if curl -s $UPDATE_CHECK_URL | grep -q "($date)"; then
+>     echo "Update succeeded!"
+> else
+>     echo "Update failed!"
+>     ssh existencia.org << 'ENDSSH'
+>         # Roll-back changes
+>         cp -r ${BACKUP_PATH} ${REMOTE_PATH}
+> ENDSSH
+>     exit 1  # Signal failure
+> fi
+> 
+> # If we reach this point, it means the deployment succeeded
+> echo "Deployment successful!"
+> 
+> # Error fallback logic
+> trap 'echo "Error during deployment! Rolling back..."; ssh user@dreamhost "rm -rf /path/to/project/*; cp -r ${BACKUP_PATH}project_backup_latest/* /path/to/project/; echo \"Rollback complete!\""; \
+> osascript -e \'display notification "Deployment failed! Rolled back to previous version." with title "Deployment Error"\'' ERR
+> ```
+> 
+> 1. Is there anything I need to fix here?
+> 2. How do I get the virtual environment updating to work? I have a virtual environment locally and on the remote server, but I don't maintain a requirements.txt file to make sure they're sinced.
+**assistant**:
+> Yes—there are several issues to fix before relying on this for deployments.
+> 
+> ## 1. Problems in the current script
+> 
+> ### Paths and variables
+> 
+> ```bash
+> LOCAL_PATH="~/projects/arachne"
+> ```
+> 
+> Because `~` is inside quotes, Bash will **not** expand it to your home directory. Use:
+> 
+> ```bash
+> LOCAL_PATH="$HOME/projects/arachne"
+> ```
+> 
+> Also, these variables are referenced but never defined:
+> 
+> ```bash
+> $LOCAL_LOGS
+> $REMOTE_LOGS
+> $PROJECT_PATH
+> $date
+> ```
+> 
+> Presumably `LOCAL_LOGS` / `REMOTE_LOGS` should be based on `LOCAL_PATH` / `REMOTE_PATH`.
+> 
+> ---
+> 
+> ### Your SSH heredocs prevent variable substitution
+> 
+> This:
+> 
+> ```bash
+> ssh existencia.org << 'ENDSSH'
+>     cp -r ${REMOTE_PATH} ${BACKUP_PATH}
+> ENDSSH
+> ```
+> 
+> uses a *quoted* heredoc delimiter (`<< 'ENDSSH'`). That deliberately prevents local Bash from expanding `${REMOTE_PATH}` and `${BACKUP_PATH}`.
+> 
+> The remote shell also does not know those variables, so it will see empty values unless they happen to be defined in the remote shell environment.
+> 
+> You can either:
+> 
+> 1. let local variables expand (less robust for complex scripts), or
+> 2. pass them as arguments to a remote Bash process (recommended).
+> 
+> For example:
+> 
+> ```bash
+> ssh existencia.org bash -s -- "$REMOTE_PATH" "$BACKUP_PATH" <<'REMOTE'
+> remote_path=$1
+> backup_path=$2
+> 
+> cp -a -- "$remote_path" "$backup_path"
+> REMOTE
+> ```
+> 
+> ---
+> 
+> ### Use absolute remote paths
+> 
+> This is risky:
+> 
+> ```bash
+> REMOTE_PATH="projects/arachne"
+> ```
+> 
+> A relative remote path depends on the remote account’s working directory. Use an absolute path, such as:
+> 
+> ```bash
+> REMOTE_PATH="/home/YOUR_DREAMHOST_USER/projects/arachne"
+> BACKUP_ROOT="/home/YOUR_DREAMHOST_USER/projects/arachne-backups"
+> ```
+> 
+> Find your DreamHost home directory with:
+> 
+> ```bash
+> ssh existencia.org 'pwd'
+> ```
+> 
+> ---
+> 
+> ### Backup behavior is not safe yet
+> 
+> This:
+> 
+> ```bash
+> cp -r ${REMOTE_PATH} ${BACKUP_PATH}
+> ```
+> 
+> has a few problems:
+> 
+> - A backup destination that already exists can cause nested directories such as `arachne-backup/arachne`.
+> - It overwrites or mixes backups rather than retaining deploy-specific versions.
+> - It does not preserve metadata as well as `cp -a`.
+> - Your rollback command copies the backup *into* the target rather than replacing the target.
+> 
+> Prefer timestamped backup directories:
+> 
+> ```bash
+> DEPLOY_ID="$(date -u +%Y%m%dT%H%M%SZ)"
+> BACKUP_PATH="$BACKUP_ROOT/$DEPLOY_ID"
+> ```
+> 
+> Then restore by removing the failed deployment directory and copying the backup back in its place.
+> 
+> ---
+> 
+> ### `git commit` fails when there is nothing to commit
+> 
+> With:
+> 
+> ```bash
+> set -e
+> git add . && git commit -m "Automated sync" && git push
+> ```
+> 
+> the script stops when there are no staged changes, because `git commit` exits nonzero in that case.
+> 
+> Use:
+> 
+> ```bash
+> git -C "$LOCAL_PATH" add -A
+> 
+> if ! git -C "$LOCAL_PATH" diff --cached --quiet; then
+>     git -C "$LOCAL_PATH" commit -m "Automated deployment: $DEPLOY_ID"
+>     git -C "$LOCAL_PATH" push
+> else
+>     echo "No code changes to commit."
+> fi
+> ```
+> 
+> ---
+> 
+> ### The error trap is declared too late
+> 
+> Your `trap ... ERR` is at the end of the script. It cannot catch errors that occur before Bash reaches that line.
+> 
+> Also, the trap’s rollback command refers to unrelated placeholder paths:
+> 
+> ```bash
+> user@dreamhost
+> /path/to/project
+> ${BACKUP_PATH}project_backup_latest
+> ```
+> 
+> Define the trap near the beginning, after the backup configuration is known.
+> 
+> ---
+> 
+> ### Your health check uses an undefined date variable
+> 
+> This will not work:
+> 
+> ```bash
+> if curl -s $UPDATE_CHECK_URL | grep -q "($date)"; then
+> ```
+> 
+> `$date` is never set, and the parentheses are literal characters.
+> 
+> A much better pattern is:
+> 
+> 1. Generate a unique deployment ID locally.
+> 2. Write that exact ID to a file on the server.
+> 3. Make `/checkupdate` return that file’s contents.
+> 4. Verify that the endpoint returns the expected ID.
+> 
+> For example:
+> 
+> ```bash
+> DEPLOY_ID="$(date -u +%Y%m%dT%H%M%SZ)"
+> ```
+> 
+> Then:
+> 
+> ```bash
+> curl --fail --silent --show-error "$UPDATE_CHECK_URL" |
+>     grep -Fqx "$DEPLOY_ID"
+> ```
+> 
+> This confirms that your web application is actually serving the version just deployed—not merely that the server responded.
+> 
+> ---
+> 
+> ## A cleaner deployment script
+> 
+> This is a reasonable starting point. Replace the remote paths and branch name as appropriate.
+> 
+> ```bash
+> #!/usr/bin/env bash
+> set -Eeuo pipefail
+> 
+> HOST="existencia.org"
+> 
+> LOCAL_PATH="$HOME/projects/arachne"
+> 
+> # Use the actual absolute DreamHost account path.
+> REMOTE_PATH="/home/YOUR_DREAMHOST_USER/projects/arachne"
+> BACKUP_ROOT="/home/YOUR_DREAMHOST_USER/projects/arachne-backups"
+> 
+> UPDATE_CHECK_URL="https://arachne.existencia.org/checkupdate"
+> BRANCH="main"
+> 
+> DEPLOY_ID="$(date -u +%Y%m%dT%H%M%SZ)"
+> BACKUP_PATH="$BACKUP_ROOT/$DEPLOY_ID"
+> BACKUP_READY=0
+> 
+> rollback() {
+>     local status=$?
+> 
+>     # Avoid recursively invoking the error trap if rollback itself fails.
+>     trap - ERR
+> 
+>     echo "Deployment failed (exit $status)."
+> 
+>     if [[ "$BACKUP_READY" -eq 1 ]]; then
+>         echo "Restoring remote backup: $BACKUP_PATH"
+> 
+>         ssh "$HOST" bash -s -- "$REMOTE_PATH" "$BACKUP_PATH" <<'REMOTE'
+> set -Eeuo pipefail
+> 
+> remote_path=$1
+> backup_path=$2
+> 
+> if [[ ! -d "$backup_path" ]]; then
+>     echo "Backup does not exist: $backup_path" >&2
+>     exit 1
+> fi
+> 
+> rm -rf -- "$remote_path"
+> cp -a -- "$backup_path" "$remote_path"
+> 
+> echo "Rollback complete."
+> REMOTE
+>     else
+>         echo "No backup was created; cannot roll back automatically." >&2
+>     fi
+> 
+>     # Optional macOS notification.
+>     osascript -e 'display notification "Deployment failed; rollback attempted." with title "Arachne Deployment"' \
+>         2>/dev/null || true
+> 
+>     exit "$status"
+> }
+> 
+> trap rollback ERR
+> 
+> echo "Committing and pushing local code..."
+> git -C "$LOCAL_PATH" add -A
+> 
+> if ! git -C "$LOCAL_PATH" diff --cached --quiet; then
+>     git -C "$LOCAL_PATH" commit -m "Automated deployment: $DEPLOY_ID"
+>     git -C "$LOCAL_PATH"
+**user**:
+> Oops, looks like the cleaner script got cut off. Also, addressing your questions, $LOCAL_LOGS and $PROJECT_PATH were both supposed to be $LOCAL_PATH, and $REMOTE_LOGS was supposed to be $REMOTE_PATH.
+> 
+> The $(date) was supposed to call the date command. It doesn't have to be a date though-- as you suggest, it could be any unique id.
+**assistant**:
+> Correct: `${LOCAL_LOGS}` and `${PROJECT_PATH}` can simply be `${LOCAL_PATH}`, and `${REMOTE_LOGS}` can be `${REMOTE_PATH}`.
+> 
+> Below is the complete version of the cleaner script, adjusted to synchronize your selected non-Git files too. It uses a unique deployment ID rather than a date string, but that ID is timestamp-based and can be written to `last_updated.txt` and checked through your endpoint.
+> 
+> Replace `YOUR_DREAMHOST_USER` with the actual Unix username / home-directory path on DreamHost.
+> 
+> ```bash
+> #!/usr/bin/env bash
+> set -Eeuo pipefail
+> 
+> # ---- Configuration ----------------------------------------------------------
+> 
+> HOST="existencia.org"
+> 
+> LOCAL_PATH="$HOME/projects/arachne"
+> 
+> # Use absolute paths on the remote server.
+> REMOTE_PATH="/home/YOUR_DREAMHOST_USER/projects/arachne"
+> BACKUP_ROOT="/home/YOUR_DREAMHOST_USER/projects/arachne-backups"
+> 
+> BRANCH="main"
+> UPDATE_CHECK_URL="https://arachne.existencia.org/checkupdate"
+> 
+> # Files/directories that are deliberately not managed by Git, but should be
+> # copied from local to remote during deployment.
+> FILE_PATHS=(
+>     "logs"
+>     "database"
+>     "knowledge/entries.txt"
+>     "memory/bayesian.txt"
+> )
+> 
+> # Unique deployment marker, e.g. 20260803T142530Z-12345
+> DEPLOY_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+> BACKUP_PATH="$BACKUP_ROOT/$DEPLOY_ID"
+> BACKUP_READY=0
+> 
+> # ---- Rollback ---------------------------------------------------------------
+> 
+> rollback() {
+>     local status=$?
+> 
+>     # Do not invoke this trap again if rollback itself encounters an error.
+>     trap - ERR
+> 
+>     echo >&2
+>     echo "Deployment failed (exit status $status)." >&2
+> 
+>     if [[ "$BACKUP_READY" -eq 1 ]]; then
+>         echo "Restoring remote backup: $BACKUP_PATH" >&2
+> 
+>         ssh "$HOST" bash -s -- "$REMOTE_PATH" "$BACKUP_PATH" <<'REMOTE'
+> set -Eeuo pipefail
+> 
+> remote_path=$1
+> backup_path=$2
+> 
+> if [[ ! -d "$backup_path" ]]; then
+>     echo "Cannot roll back: backup does not exist: $backup_path" >&2
+>     exit 1
+> fi
+> 
+> rm -rf -- "$remote_path"
+> cp -a -- "$backup_path" "$remote_path"
+> 
+> echo "Rollback complete."
+> REMOTE
+>     else
+>         echo "No remote backup was completed, so automatic rollback is unavailable." >&2
+>     fi
+> 
+>     # Optional: macOS desktop notification. Safe to ignore on non-macOS systems.
+>     osascript \
+>         -e 'display notification "Deployment failed; rollback attempted." with title "Arachne Deployment"' \
+>         2>/dev/null || true
+> 
+>     exit "$status"
+> }
+> 
+> # Define this before doing deployment work.
+> trap rollback ERR
+> 
+> # ---- Local Git push ---------------------------------------------------------
+> 
+> echo "Committing and pushing local code..."
+> 
+> git -C "$LOCAL_PATH" add -A
+> 
+> # `git commit` exits nonzero if there is nothing to commit, so test first.
+> if ! git -C "$LOCAL_PATH" diff --cached --quiet; then
+>     git -C "$LOCAL_PATH" commit -m "Automated deployment: $DEPLOY_ID"
+>     git -C "$LOCAL_PATH" push origin "$BRANCH"
+> else
+>     echo "No Git changes to commit."
+> fi
+> 
+> # ---- Remote backup ----------------------------------------------------------
+> 
+> echo "Creating remote backup..."
+> 
+> ssh "$HOST" bash -s -- "$REMOTE_PATH" "$BACKUP_ROOT" "$BACKUP_PATH" <<'REMOTE'
+> set -Eeuo pipefail
+> 
+> remote_path=$1
+> backup_root=$2
+> backup_path=$3
+> 
+> if [[ ! -d "$remote_path" ]]; then
+>     echo "Remote project directory does not exist: $remote_path" >&2
+>     exit 1
+> fi
+> 
+> mkdir -p -- "$backup_root"
+> 
+> # The backup path must not already exist; this avoids mixing deployments.
+> if [[ -e "$backup_path" ]]; then
+>     echo "Backup path unexpectedly already exists: $backup_path" >&2
+>     exit 1
+> fi
+> 
+> cp -a -- "$remote_path" "$backup_path"
+> 
+> echo "Backup created at: $backup_path"
+> REMOTE
+> 
+> BACKUP_READY=1
+> 
+> # ---- Sync non-Git state -----------------------------------------------------
+> 
+> echo "Syncing non-Git files and directories..."
+> 
+> for path in "${FILE_PATHS[@]}"; do
+>     local_item="$LOCAL_PATH/$path"
+>     remote_item="$REMOTE_PATH/$path"
+> 
+>     if [[ ! -e "$local_item" ]]; then
+>         echo "Warning: skipping missing local item: $local_item" >&2
+>         continue
+>     fi
+> 
+>     # Ensure the remote parent directory exists, especially for individual files.
+>     remote_parent="$(dirname "$remote_item")"
+>     ssh "$HOST" "mkdir -p -- $(printf '%q' "$remote_parent")"
+> 
+>     if [[ -d "$local_item" ]]; then
+>         # A trailing slash means “copy the directory's contents,” rather than
+>         # potentially creating logs/logs or database/database.
+>         rsync -az --delete \
+>             "$local_item/" \
+>             "$HOST:$remote_item/"
+>     else
+>         rsync -az \
+>             "$local_item" \
+>             "$HOST:$remote_item"
+>     fi
+> done
+> 
+> # ---- Deploy on remote -------------------------------------------------------
+> 
+> echo "Updating code and dependencies on DreamHost..."
+> 
+> ssh "$HOST" bash -s -- \
+>     "$REMOTE_PATH" \
+>     "$BRANCH" \
+>     "$DEPLOY_ID" <<'REMOTE'
+> set -Eeuo pipefail
+> 
+> remote_path=$1
+> branch=$2
+> deploy_id=$3
+> 
+> cd -- "$remote_path"
+> 
+> # `git pull --ff-only` refuses unexpected merge commits. This is desirable:
+> # the server should not contain hand-edited Git-tracked code.
+> git fetch origin "$branch"
+> git checkout "$branch"
+> git pull --ff-only origin "$branch"
+> 
+> # Do not `source venv/bin/activate` in deployment scripts.
+> # Calling the virtual environment's Python directly is clearer and safer.
+> if [[ ! -x "venv/bin/python" ]]; then
+>     echo "Remote virtual environment missing; creating it."
+>     python3 -m venv venv
+> fi
+> 
+> venv/bin/python -m pip install --upgrade pip
+> 
+> # This is conditional until you adopt a dependency file.
+> if [[ -f "requirements.txt" ]]; then
+>     venv/bin/python -m pip install -r requirements.txt
+> else
+>     echo "No requirements.txt found; leaving remote virtual environment unchanged."
+> fi
+> 
+> # This is the value that /checkupdate should return.
+> printf '%s\n' "$deploy_id" > last_updated.txt
+> 
+> # If this is a DreamHost Passenger application, uncomment the appropriate
+> # restart mechanism if needed:
+> #
+> # touch tmp/restart.txt
+> #
+> # Or, depending on your setup:
+> # touch passenger_wsgi.py
+> REMOTE
+> 
+> # ---- Verify that the deployed application is live --------------------------
+> 
+> echo "Checking deployment status..."
+> 
+> # `-f`: treat HTTP 4xx/5xx as an error
+> # `-sS`: silent except for meaningful errors
+> #
+> # grep -F: fixed-string matching
+> # grep -x: require the entire response line to equal DEPLOY_ID
+> if curl --fail --silent --show-error "$UPDATE_CHECK_URL" |
+>     tr -d '\r' |
+>     grep -Fqx "$DEPLOY_ID"; then
+> 
+>     echo "Deployment successful: $DEPLOY_ID"
+>     trap - ERR
+> 
+>     osascript \
+>         -e 'display notification "Deployment succeeded." with title "Arachne Deployment"' \
+>         2>/dev/null || true
+> else
+>     echo "Update check did not return expected deployment ID: $DEPLOY_ID" >&2
+>     exit 1
+> fi
+> ```
+> 
+> ## `checkupdate` endpoint
+> 
+> For this to work, `https://arachne.existencia.org/checkupdate` should return the literal contents of `last_updated.txt`, with no page template or extra text.
+> 
+> For example, in Flask:
+> 
+> ```python
+> from pathlib import Path
+> from flask import Response
+> 
+> @app.route("/checkupdate")
+> def checkupdate():
+>     deployment_id = Path("last_updated.txt").read_text().strip()
+>     return Response(deployment_id + "\n", mimetype="text/plain")
+> ```
+> 
+> The test is then meaningful: it checks that the public web app—not merely the SSH server—serves the exact deployment you just made.
+> 
+> If your application process retains the contents of the file in memory, have the endpoint read the file on every request, as above. If it fails because the old application process is still running, enable the relevant DreamHost/Passenger restart command in the remote deployment section.
+> 
+> ## Virtual environments and dependencies
+> 
+> A virtual environment is not something you generally synchronize by copying it between your Mac and DreamHost. It can contain platform-specific compiled packages and absolute paths:
+> 
+> - macOS packages may not run on DreamHost Linux;
+> - the Python version may differ;
+> - virtual environments encode their location;
+> - native dependencies may need Linux-specific wheels or compilation.
+> 
+> Instead, synchronize a **declaration of dependencies**, then build the remote environment from it.
+> 
+> ### Simple option: `requirements.txt`
+> 
+> On your local machine, while your local environment is activated:
+> 
+> ```bash
+> venv/bin/python -m pip freeze > requirements.txt
+> ```
+> 
+> Review it, then commit it:
+> 
+> ```bash
+> git add requirements.txt
+> git commit -m "Record Python dependencies"
+> git push
+> ```
+> 
+> Your deployment script’s existing line then

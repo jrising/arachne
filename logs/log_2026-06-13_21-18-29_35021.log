@@ -1,0 +1,315 @@
+**user**:
+> How can I extract the latitude and longitude ranges and resolutions from a geotiff? I'm using tiffio.h. Currently I have this, which requires that the latitude and longitude are fed in:
+> ```
+>     static GeographicMap<T>* loadTIFF(DividedRange latitudes, DividedRange longitudes, string filepath) {
+>       TIFF* tiff = TIFFOpen(filepath.c_str(), "r");
+>       if (!tiff) {
+>         std::cerr << "Could not open the file: " << filepath << std::endl;
+>         return NULL;
+>       }
+> 
+>       uint32_t width, height;
+>       TIFFGetField(tiff, TIFFTAG_IMAGEWIDTH, &width);
+>       TIFFGetField(tiff, TIFFTAG_IMAGELENGTH, &height);
+> 
+>        // Needs to be exact because of how we index
+>       if (height != latitudes.count() || width != longitudes.count()) {
+>         cout << "Size Mismatch: " << height << ", " << width << " vs. " << latitudes.count() << ", " << longitudes.count() << endl;
+> 	return NULL;
+>       }
+> 
+>       MatrixGeographicMap<T>* result = new MatrixGeographicMap<T>(latitudes, longitudes);
+>       for (uint32_t row = 0; row < height; row++) {
+>         if (TIFFReadScanline(tiff, result->values.getValues() + width, row) == -1) {
+> 	  std::cerr << "Could not read scanline " << row << std::endl;
+> 	  TIFFClose(tiff);
+> 	  return NULL;
+>         }
+>       }
+> 
+>       TIFFClose(tiff);
+>       return result;
+>     }
+> ```
+**assistant**:
+> You want to pull the georeferencing out of the GeoTIFF instead of passing in `latitudes` and `longitudes` manually. That information is stored in tags layered on top of TIFF: primarily `ModelTiepointTag`, `ModelPixelScaleTag`, and sometimes `ModelTransformationTag`, plus coordinate system info via GeoKeys.
+> 
+> Below is the core idea and then some example code using libtiff + libgeotiff.
+> 
+> ---
+> 
+> ## 1. What you need from the GeoTIFF
+> 
+> From the file you can derive:
+> 
+> - Image size:  
+>   - `width` (`TIFFTAG_IMAGEWIDTH`)  
+>   - `height` (`TIFFTAG_IMAGELENGTH`)
+> - Georeferencing:
+>   - `ModelPixelScaleTag` – `[scaleX, scaleY, scaleZ]`  
+>     - Typically: `scaleX = pixel_width`, `scaleY = pixel_height` (often positive, but y usually *decreases* northward in the pixel grid)
+>   - `ModelTiepointTag` – `[i, j, k, x, y, z, ...]`  
+>     - Gives mapping between pixel coordinates (i,j) and georeferenced coordinates (x,y). Usually the first triplet is enough.
+>   - Optionally: `ModelTransformationTag` – a full 4×4 transform matrix from pixel to world coords.
+> 
+> Then you compute:
+> 
+> For the common/simple case (no transformation matrix, geographic CRS, north-up):
+> 
+> - Pixel → world:
+> 
+>   ```text
+>   x = tiepoint_x + (col - tiepoint_i) * scaleX
+>   y = tiepoint_y + (row - tiepoint_j) * scaleY
+>   ```
+> 
+> - If CRS is geographic (lat/lon):
+>   - `x` = longitude
+>   - `y` = latitude
+> 
+> So you can derive:
+> 
+> - Longitude resolution: `dLon = scaleX`
+> - Latitude resolution: `dLat = scaleY` (but mind the sign)
+> - Lon/lat extent:
+> 
+>   ```text
+>   lon_min, lon_max, lat_min, lat_max
+>   ```
+> 
+> by evaluating coordinates at corners: (0,0), (width,0), (0,height), (width,height).
+> 
+> ---
+> 
+> ## 2. Using libtiff alone vs libgeotiff
+> 
+> With **libtiff only** you can read the GeoTIFF tags, but:
+> 
+> - You must parse the raw GeoTIFF keys and tags yourself.
+> - You must determine whether coordinates are in degrees (EPSG:4326) or some projected CRS.
+> 
+> With **libgeotiff** (recommended), you get convenient helpers to:
+> 
+> - Read the tiepoints/pixel scales/transforms.
+> - Know whether you’re in lat/lon.
+> - Map pixel to geographic coordinates.
+> 
+> Given your use (building `DividedRange` for lat/lon), you almost certainly want libgeotiff.
+> 
+> ---
+> 
+> ## 3. Minimal example with libtiff + libgeotiff
+> 
+> Conceptually, you want something like:
+> 
+> ```c++
+> #include <tiffio.h>
+> #include <geotiffio.h>
+> #include <xtiffio.h>   // if you use the extended interface from libgeotiff
+> 
+> // Helper: loadGeoTransform reads pixel-to-world transform
+> bool loadGeoTransform(TIFF* tiff, double gt[6]) {
+>     // gt convention (GDAL-style):
+>     // gt[0] = top-left x
+>     // gt[1] = w-e pixel resolution
+>     // gt[2] = row rotation (typically 0)
+>     // gt[3] = top-left y
+>     // gt[4] = column rotation (typically 0)
+>     // gt[5] = n-s pixel resolution (typically negative)
+> 
+>     double *tiePoints = nullptr;
+>     double *pixelScale = nullptr;
+>     uint16_t countTiePoints = 0, countPixelScale = 0;
+> 
+>     if (TIFFGetField(tiff, TIFFTAG_GEOTIEPOINTS, &countTiePoints, &tiePoints) &&
+>         TIFFGetField(tiff, TIFFTAG_GEOPIXELSCALE, &countPixelScale, &pixelScale) &&
+>         countTiePoints >= 6 && countPixelScale >= 2) {
+> 
+>         // Assume first tie point is upper-left corner or some reference point
+>         double i = tiePoints[0];
+>         double j = tiePoints[1];
+>         double x = tiePoints[3];
+>         double y = tiePoints[4];
+> 
+>         double scaleX = pixelScale[0];
+>         double scaleY = pixelScale[1];
+> 
+>         // Simple north-up assumption: no rotation
+>         gt[1] = scaleX;
+>         gt[2] = 0.0;
+>         gt[4] = 0.0;
+>         gt[5] = -fabs(scaleY); // y decreases as row increases
+> 
+>         // Compute top-left corner georeferenced coords (for (0,0)):
+>         // x_geo = x + (0 - i)*scaleX
+>         // y_geo = y + (0 - j)*scaleY
+>         gt[0] = x - i * scaleX;
+>         gt[3] = y - j * scaleY;
+> 
+>         return true;
+>     }
+> 
+>     // Fallback: transformation matrix (less common, more complex)
+>     double *trans = nullptr;
+>     uint16_t countTrans = 0;
+>     if (TIFFGetField(tiff, TIFFTAG_GEOTRANSMATRIX, &countTrans, &trans) && countTrans == 16) {
+>         // Not shown here; you’d need to interpret the 4x4 matrix.
+>         // For most common GeoTIFFs you'll have tiepoints+pixelscale instead.
+>         return false;
+>     }
+> 
+>     return false;
+> }
+> ```
+> 
+> Once you have `gt[]`, turning it into lat/lon ranges is easy:
+> 
+> ```c++
+> static GeographicMap<T>* loadTIFF(std::string filepath) {
+>     TIFF* tiff = TIFFOpen(filepath.c_str(), "r");
+>     if (!tiff) {
+>         std::cerr << "Could not open file: " << filepath << std::endl;
+>         return nullptr;
+>     }
+> 
+>     uint32_t width, height;
+>     TIFFGetField(tiff, TIFFTAG_IMAGEWIDTH, &width);
+>     TIFFGetField(tiff, TIFFTAG_IMAGELENGTH, &height);
+> 
+>     double gt[6];
+>     if (!loadGeoTransform(tiff, gt)) {
+>         std::cerr << "No usable geotransform in GeoTIFF" << std::endl;
+>         TIFFClose(tiff);
+>         return nullptr;
+>     }
+> 
+>     // Compute corner coordinates (GDAL-style conventions)
+>     auto geo_x = [&](int col, int row) {
+>         return gt[0] + col * gt[1] + row * gt[2];
+>     };
+>     auto geo_y = [&](int col, int row) {
+>         return gt[3] + col * gt[4] + row * gt[5];
+>     };
+> 
+>     double x0 = geo_x(0, 0);
+>     double y0 = geo_y(0, 0);
+>     double x1 = geo_x(width, 0);
+>     double y1 = geo_y(0, height);
+> 
+>     double lon_min = std::min(x0, x1);
+>     double lon_max = std::max(x0, x1);
+>     double lat_max = std::max(y0, y1);
+>     double lat_min = std::min(y0, y1);
+> 
+>     double dlon = gt[1];
+>     double dlat = gt[5]; // usually negative if origin is top-left
+> 
+>     // Construct your DividedRange objects from these
+>     // You’ll need something like:
+>     //   DividedRange longitudes(lon_min, lon_max, width);
+>     //   DividedRange latitudes(lat_min, lat_max, height);
+>     // depending on your DividedRange interface.
+> 
+>     DividedRange longitudes(lon_min, lon_max, width);
+>     // If DividedRange assumes ascending order:
+>     DividedRange latitudes(lat_min, lat_max, height);
+> 
+>     MatrixGeographicMap<T>* result = new MatrixGeographicMap<T>(latitudes, longitudes);
+> 
+>     // Read data
+>     for (uint32_t row = 0; row < height; row++) {
+>         // Make sure the pointer arithmetic is right; usually:
+>         T* rowPtr = result->values.getValues() + row * width;
+>         if (TIFFReadScanline(tiff, rowPtr, row) == -1) {
+>             std::cerr << "Could not read scanline " << row << std::endl;
+>             TIFFClose(tiff);
+>             delete result;
+>             return nullptr;
+>         }
+>     }
+> 
+>     TIFFClose(tiff);
+>     return result;
+> }
+> ```
+> 
+> Key corrections to your original:
+> 
+> - The call `result->values.getValues() + width` in your loop should almost certainly be `+ row * width`.
+> - The `latitudes` and `longitudes` are constructed automatically from the geotransform.
+> 
+> ---
+> 
+> ## 4. Getting CRS info (is it really lat/lon?)
+> 
+> To confirm that `x`/`y` are actually longitude/latitude, use libgeotiff:
+> 
+> ```c++
+> #include <geotiffio.h>
+> 
+> GTIF* gtif = GTIFNew(tiff);
+> if (!gtif) { /* handle error */ }
+> 
+> // Query projection
+> int modelType = 0;
+> if (GTIFKeyGet(gtif, GTModelTypeGeoKey, &modelType, 0, 1)) {
+>     // ModelTypeGeographic = 2 → geographic lat/long
+>     // ModelTypeProjected  = 1 → projected coordinates (e.g., meters)
+> }
+> 
+> GTIFDefn defn;
+> if (GTIFGetDefn(gtif, &defn)) {
+>     // defn.Model == ModelTypeGeographic etc.
+>     // defn.Citation, defn.GeographicType, etc., if you care.
+> }
+> 
+> GTIFFree(gtif);
+> ```
+> 
+> If `ModelTypeGeographic`, then your `x`/`y` are in degrees (or at least angular).
+> 
+> ---
+> 
+> ## 5. If you want a compact “just give me lat/lon” helper
+> 
+> You can wrap this into a utility:
+> 
+> ```c++
+> struct GeoExtent {
+>     double lon_min, lon_max;
+>     double lat_min, lat_max;
+>     double dlon, dlat;
+>     bool isGeographic;
+> };
+> 
+> bool getGeoExtentFromTIFF(const std::string& filepath, GeoExtent& ext) {
+>     TIFF* tiff = TIFFOpen(filepath.c_str(), "r");
+>     if (!tiff) return false;
+> 
+>     uint32_t width, height;
+>     TIFFGetField(tiff, TIFFTAG_IMAGEWIDTH, &width);
+>     TIFFGetField(tiff, TIFFTAG_IMAGELENGTH, &height);
+> 
+>     double gt[6];
+>     if (!loadGeoTransform(tiff, gt)) {
+>         TIFFClose(tiff);
+>         return false;
+>     }
+> 
+>     double x0 = gt[0];
+>     double y0 = gt[3];
+>     double x1 = gt[0] + width  * gt[1] + height * gt[2];
+>     double y1 = gt[3] + width  * gt[4] + height * gt[5];
+> 
+>     ext.lon_min = std::min(x0, x1);
+>     ext.lon_max = std::max(x0, x1);
+>     ext.lat_min = std::min(y0, y1);
+>     ext.lat_max = std::max(y0, y1);
+>     ext.dlon = gt[1];
+>     ext.dlat = gt[5];
+> 
+>     GTIF* gtif = GTIFNew(tiff);
+>     if (gtif) {
+>         GTIFDefn defn;
+>         if (GTIFGetDefn(gtif, &defn)) {
+>             ext.isGeographic = (defn.Model == ModelType
