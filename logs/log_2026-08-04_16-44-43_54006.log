@@ -1,0 +1,1031 @@
+**user**:
+> I have some code that is meant to browse around to find PDFs of academic papers:
+> ```
+> import os, re, json, requests, io
+> from lib import interaction
+> from pypdf import PdfReader
+> import markdownify
+> from bs4 import BeautifulSoup
+> import asyncio
+> 
+> from dotenv import load_dotenv
+> 
+> load_dotenv(".env")
+> api_key = os.getenv('SEARCH_API_KEY')
+> assert api_key
+> cse_id = "f179deb41d1a64339"
+> 
+> headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+> 
+> async def fetch_url(page, url):
+>     response = await page.goto(url, {'timeout': 30000})
+>     await page.waitForNavigation({'timeout': 10000})
+>     content = await page.content()
+> 
+>     content_type = response.headers.get('content-type', '')
+> 
+>     return content, content_type
+> 
+> def download_url(url, timeout=30, size_limit_mb=20):
+>     size_limit_bytes = size_limit_mb * 1024 * 1024  # Convert MB to bytes
+>     
+>     # Send a HEAD request to get the headers with a timeout
+>     response = requests.head(url, timeout=timeout)
+>     response.raise_for_status()  # Check for HTTP errors
+> 
+>     # Get the content type from headers
+>     content_type = response.headers.get('Content-Type')
+>     content_length = response.headers.get('Content-Length')
+> 
+>     # Check if the content length is provided and convert it to an integer
+>     if content_length is not None:
+>         content_length = int(content_length)
+> 
+>         # Check if the file size exceeds the limit
+>         if content_length > size_limit_bytes:
+>             raise OverflowError()
+> 
+>     response = requests.get(url, stream=True, timeout=timeout, allow_redirects=True)
+>     response.raise_for_status()  # Check for HTTP errors
+>     content = io.BytesIO()
+>     total_downloaded = 0
+> 
+>     for chunk in response.iter_content(chunk_size=8192):
+>         total_downloaded += len(chunk)
+>         content.write(chunk)
+>         
+>         # Abort if the total downloaded size exceeds the limit
+>         if total_downloaded > size_limit_bytes:
+>             raise OverflowError()
+>     content.seek(0)
+>         
+>     return content.getbuffer(), content_type
+>     
+> def google_search(query, num_results=10):
+>     service_url = 'https://www.googleapis.com/customsearch/v1'
+>     params = {
+>         'q': query,
+>         'key': api_key,
+>         'cx': cse_id,
+>         'num': num_results
+>     }
+>     response = requests.get(service_url, params=params, headers=headers)
+>     if response.status_code == 429:
+>         raise RuntimeError("Google search quota exceeded.")
+>     results = response.json()
+>     
+>     info = [{'title': result['title'],
+>              'link': result['link'],
+>              'snippet': result['snippet']}
+>             for result in results.get('items', [])]
+>     return info
+> 
+> async def finder_download(page, url, pathprefix):
+>     ## First, try a direct download
+>     try:
+>         content, content_type = await asyncio.get_event_loop().run_in_executor(None, download_url, url)
+>         if 'text/html' in content_type:
+>             soup = BeautifulSoup(content, 'html.parser')
+>             alltext = soup.get_text()
+>             if len(alltext) < 100:
+>                 raise ValueError("Implausibly small webpage.") # kick over to fetch_url
+>     except OverflowError as ex:
+>         return "too big"
+>     except:
+>         try:
+>             content, content_type = await fetch_url(page, url)
+>         except requests.exceptions.RequestException as e:
+>             return "error"
+>         except Exception as e:
+>             print(str(e))
+>             return "error"
+>         
+>     # Determine content type and process accordingly
+>     if content_type is None:
+>         return "error"
+>     elif 'text/html' in content_type:
+>         with open(pathprefix + '.html', 'w') as fp:
+>             fp.write(content)
+>         return "finder_html"
+>     elif 'application/pdf' in content_type:
+>         with open(pathprefix + '.pdf', 'wb') as fp:
+>             fp.write(content)
+>         return "finder_pdf"
+>     else:
+>         print(content_type)
+>         return "unsupported"
+> 
+> def get_scholar_versions(query):
+>     search_url = f"https://scholar.google.com/scholar?q={query}"
+>     
+>     # Request search page
+>     response1 = requests.get(search_url, headers=headers)
+>     soup = BeautifulSoup(response1.content, 'html.parser')
+>     
+>     # Find the "all N versions" link
+>     link = soup.find('a', string=lambda x: x and 'all' in x.lower() and 'versions' in x.lower())
+>     if not link:
+>         return response1.content, None, []
+>     
+>     # Compose the absolute URL for all versions
+>     all_versions_url = "https://scholar.google.com" + link.get('href')
+>     
+>     # Request the all versions page
+>     response2 = requests.get(all_versions_url, headers=headers)
+>     soup = BeautifulSoup(response2.content, 'html.parser')
+>     
+>     # Extract PDFs from the results
+>     pdf_links = [a['href'] for a in soup.find_all('a', href=True) if 'pdf' in a['href'].lower()]
+>     return response1.content, response2.content, pdf_links
+>     
+> commandprompt = """
+>  - Google search: Perform a google search by writing ```google("google search terms here")```
+>  - Direct URL retrieval: Get a URL by writing ```geturl("full-url-here")```
+> Please include the triple-backticks."""
+> 
+> finalcommandprompt = """
+>  - Direct URL retrieval: Get a URL by writing ```geturl("full-url-here")```
+> Please include the triple-backticks. This is the final attempt, so try to retrieve the PDF by a direct URL."""
+> 
+> ignoredcommandrompt = "No commands available; this was the final attempt."
+> 
+> numattempts = 10
+> 
+> async def finder_pdf(document, browser, targetpath, statuspath):
+>     page = await browser.newPage()  # Create a new page
+>     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36')
+> 
+>     try:
+>         result, link = await finder_pdf_helper(document, page)
+>         try:
+>             os.remove("downloaded.html")
+>         except FileNotFoundError:
+>             pass
+>     
+>         if result == "found":
+>             os.rename("downloaded.pdf", targetpath)
+>         else:
+>             try:
+>                 os.remove("downloaded.pdf")
+>             except FileNotFoundError:
+>                 pass
+> 
+>         return result, link
+>     finally:
+>         try:
+>             await page.close()
+>         except:
+>             pass
+> 
+>     return "unknown", None
+> 
+> def check_pdf(filepath, chat2):
+>     with open(filepath, 'rb') as fp:
+>         reader = PdfReader(fp)
+>         page1 = reader.pages[0].extract_text(extraction_mode="layout", layout_mode_space_vertically=False, layout_mode_strip_rotated=False)
+>         content = "Here is the first page of this PDF formatted as text:\n===\n" + page1 + "\n===\n"
+>         chat3 = interaction.chat_push(chat2, 'user', f"{content}\nIs this the requested document? Specify the answer '[yes]' or '[no]' in brackets.")
+>         action = interaction.get_action(chat3, ['yes', 'no'])
+>         if action == 'yes':
+>             return True
+>     return False
+> 
+> def extract_middle_differences(str1, str2):
+>     # Find common prefix
+>     i = 0
+>     while i < min(len(str1), len(str2)) and str1[i] == str2[i]:
+>         i += 1
+>     common_prefix_length = i
+> 
+>     # Find common suffix
+>     j = 0
+>     while (j < min(len(str1), len(str2)) - common_prefix_length and
+>            str1[-j - 1] == str2[-j - 1]):
+>         j += 1
+>     common_suffix_length = j
+> 
+>     # Extract differing middle parts
+>     middle_part1 = str1[common_prefix_length:len(str1) - common_suffix_length]
+>     middle_part2 = str2[common_prefix_length:len(str2) - common_suffix_length]
+> 
+>     return middle_part1, middle_part2
+> 
+> async def finder_pdf_helper(document, page):
+>     urls_attempted = set()
+>     
+>     # First, try the predefined Google Scholar logic
+>     html1, html2, links = get_scholar_versions(document)
+>     if links:
+>         for link in links:
+>             if link in urls_attempted:
+>                 continue
+>             nextstep = await finder_download(page, link, "downloaded")
+>             urls_attempted.add(link)
+>             if nextstep == 'finder_pdf':
+>                 if check_pdf("downloaded.pdf", interaction.chat_push(interaction.chat_push([], 'user', f'I would like you to find the document `{document}` (or a recent pre-print) on the internet.'),
+>                                                                'assistant', "I have downloaded a candidate document, which may be the one you are looking for.")):
+>                     return "found", link
+> 
+>     markdown1 = markdownify.markdownify(html1, heading_style="ATX")
+> 
+>     if html2:
+>         markdown2 = markdownify.markdownify(html2, heading_style="ATX")
+>         markdown1, markdown2 = extract_middle_differences(markdown1, markdown2)
+> 
+>         try:
+>             markdown1 = markdown1[markdown1.index('###'):]
+>             markdown2 = markdown2[markdown2.index('###'):]
+>         except:
+>             pass
+> 
+>         chat2 = interaction.chat_push([], 'user', f'I would like you to find the document `{document}` (or a recent pre-print) on the internet. I started with a Google Scholar search and got the following:\n===\n{markdown1}\n===\nAnd when I went into the link for multiple versions I got:\n===\n{markdown2}\n===\nPlease continue the search. To do this, please direct me to perform one of the following actions: {commandprompt}')
+>     else:
+>         try:
+>             markdown1 = markdown1[markdown1.index('###'):]
+>         except:
+>             pass
+> 
+>         chat2 = interaction.chat_push([], 'user', f'I would like you to find the document `{document}` (or a recent pre-print) on the internet. I started with a Google Scholar search and got the following:\n===\n{markdown1}\n===\nPlease continue the search. To do this, please direct me to perform one of the following actions: {commandprompt}')
+> 
+>     for attempt in range(numattempts):
+>         command, text = interaction.get_stringcommand(chat2, 3)
+>         if command is None:
+>             return "nocommand", None
+> 
+>         if attempt == numattempts - 1:
+>             nextcommandprompt = ignoredcommandrompt
+>         elif attempt == numattempts - 2:
+>             nextcommandprompt = finalcommandprompt
+>         else:
+>             nextcommandprompt = commandprompt
+>         
+>         if command == 'geturl':
+>             if text in urls_attempted:
+>                 chat2 = interaction.chat_push(interaction.chat_push(chat2, 'assistant', f'```{command}("{text}")```'), 'user', "That URL was already tried." + f' Please try again by performing one of the following actions: {nextcommandprompt}')
+>                 continue
+>             nextstep = await finder_download(page, text, "downloaded")
+>             urls_attempted.add(text)
+>             if nextstep == 'finder_html':
+>                 with open("downloaded.html", "r", encoding="utf-8") as file:
+>                     content = file.read()
+>                 markdown = markdownify.markdownify(content, heading_style="ATX")
+>                 if len(markdown) > 2000:
+>                     markdown = markdown[:2000]
+>                     content = "Here is the first page of this webpage formatted as Markdown:\n===\n" + markdown + "\n===\n"
+>                 else:
+>                     markdown_rest = ""
+>                     content = "Here is the webpage formatted as Markdown:\n===\n" + markdown + "\n===\n"
+>                 chat2 = interaction.chat_push(interaction.chat_push(chat2, 'assistant', f"```geturl({text})```"), 'user', f'{content} Now, you can choose to follow a link or perform another search. Please specify one of the following actions: {nextcommandprompt}')
+>                 continue
+>             elif nextstep == 'finder_pdf':
+>                 if check_pdf("downloaded.pdf", interaction.chat_push(chat2, 'assistant', f'```{command}("{text}")```')):
+>                     return "found", text
+>                 else:
+>                     chat2 = interaction.chat_push(interaction.chat_push(chat2, 'assistant', f'```{command}("{text}")```'), 'user', "The file was downloaded, but turned out to be the wrong PDF." + f' Please try again by performing one of the following actions: {nextcommandprompt}')
+>                     continue
+>             elif nextstep == 'unsupported':
+>                 explained = 'That retrieved a file that was neither an HTML nor PDF file and so is unsupported.'
+>             elif nextstep == 'error':
+>                 explained = 'That request returned an error, perhaps because of a timeout.'
+>             elif nextstep == 'toobig':
+>                 explained = 'That request returned a document that was too big to be processed.'
+>                 
+>             chat2 = interaction.chat_push(interaction.chat_push(chat2, 'assistant', f'```{command}("{text}")```'), 'user', explained + f' Please try again by performing one of the following actions: {nextcommandprompt}')
+>             
+>         if command == 'google':
+>             results = await asyncio.get_event_loop().run_in_executor(None, google_search, text)
+>             if len(results) == 0:
+>                 chat2 = interaction.chat_push(interaction.chat_push(chat2, 'assistant', f"```google({text})```"), 'user', 'I did that google search but it returned no results. Please specify one of the following actions: {nextcommandprompt}')
+>             else:
+>                 restext = "\n\n".join([result['title'] + "\n" + result['link'] + "\n" + result['snippet'] for result in results])
+>                 chat2 = interaction.chat_push(interaction.chat_push(chat2, 'assistant', f"```google({text})```"), 'user', 'Here are the google results:\n===\n' + restext + f'\n===\nNow, you can choose to follow one of those links or perform another search. Please specify one of the following actions: {nextcommandprompt}')
+> 
+>     return "maxattempt", None
+> ```
+> finder_pdf is the main function. I have a few issues:
+> 1. It has a very low success rate. I wonder if I should be doing something different, or augmenting this with something else.
+> 2. I get an error on many pages that "Your browser is outdated".
+**assistant**:
+> The two biggest causes are likely:
+> 
+> 1. **Your browser fallback is broken / timing out on most ordinary pages.**
+> 2. **Your bundled Pyppeteer Chromium is probably genuinely ancient, while your user agent claims Chrome 91—which is itself now ancient.**
+> 
+> More broadly, I would make PDF finding a primarily **metadata/API-driven retrieval problem**, with browser automation only as a last resort.
+> 
+> ## 1. Important bug: `fetch_url()` waits for a *second* navigation
+> 
+> `page.goto()` already waits for navigation. This line then waits for another navigation event that usually never occurs:
+> 
+> ```python
+> await page.waitForNavigation({'timeout': 10000})
+> ```
+> 
+> So a normal successfully loaded page will commonly fail after ten seconds.
+> 
+> Replace `fetch_url` with:
+> 
+> ```python
+> async def fetch_url(page, url):
+>     response = await page.goto(
+>         url,
+>         {
+>             'timeout': 30000,
+>             'waitUntil': 'domcontentloaded',
+>         },
+>     )
+> 
+>     if response is None:
+>         raise RuntimeError(f"No response returned for {url}")
+> 
+>     # Optionally allow JS-rendered content a moment to settle.
+>     await asyncio.sleep(0.5)
+> 
+>     return await page.content(), response.headers.get('content-type', '')
+> ```
+> 
+> If a site needs more rendering, prefer a specific selector:
+> 
+> ```python
+> await page.waitForSelector("article, main, body", {"timeout": 10000})
+> ```
+> 
+> rather than waiting for an unspecified next navigation.
+> 
+> ---
+> 
+> ## 2. The “browser is outdated” error is probably real
+> 
+> Pyppeteer is old and historically downloads a very old Chromium build. A user-agent override does not change:
+> 
+> - JavaScript/browser feature support;
+> - TLS and HTTP behavior;
+> - Client Hints;
+> - browser fingerprint;
+> - Chromium’s actual rendering engine.
+> 
+> Moreover, this UA is now very old:
+> 
+> ```python
+> Chrome/91.0.4472.124
+> ```
+> 
+> ### Recommendation: use Playwright with current Chrome
+> 
+> Playwright is much better maintained than Pyppeteer.
+> 
+> ```bash
+> pip install playwright
+> playwright install chromium
+> ```
+> 
+> Or, ideally, use your locally installed Chrome channel:
+> 
+> ```python
+> from playwright.async_api import async_playwright
+> 
+> async with async_playwright() as p:
+>     browser = await p.chromium.launch(
+>         channel="chrome",  # Uses installed Google Chrome, if available
+>         headless=True,
+>     )
+> 
+>     context = await browser.new_context()
+>     page = await context.new_page()
+> 
+>     response = await page.goto(
+>         url,
+>         wait_until="domcontentloaded",
+>         timeout=30000,
+>     )
+> ```
+> 
+> I would **not set a spoofed user agent by default**. Let the actual browser report its own contemporary UA. If you do set one, it should match the browser reasonably closely.
+> 
+> Some publisher sites will still show an “outdated browser” or anti-bot page, especially with headless browsers. That is a signal to move on to another source—repository, author manuscript, PMC, arXiv, institutional archive—not to make your browser impersonation more elaborate.
+> 
+> ---
+> 
+> ## 3. Avoid `HEAD` before downloading
+> 
+> This is a major source of false failures.
+> 
+> Many academic sites:
+> 
+> - disallow `HEAD` but permit `GET`;
+> - redirect differently for `HEAD`;
+> - omit `Content-Length`;
+> - report a generic content type before following redirects;
+> - use signed URLs that behave oddly across separate requests.
+> 
+> Your code gets the content type from the original `HEAD` response:
+> 
+> ```python
+> response = requests.head(url, timeout=timeout)
+> content_type = response.headers.get('Content-Type')
+> ...
+> response = requests.get(url, stream=True, timeout=timeout, allow_redirects=True)
+> ```
+> 
+> So you can download a PDF but classify it based on the wrong response.
+> 
+> Do a single streamed `GET`, inspect the **final** response headers, and also inspect the actual bytes. Here is a safer replacement.
+> 
+> ```python
+> class DownloadTooLarge(Exception):
+>     pass
+> 
+> 
+> def download_url(url, timeout=30, size_limit_mb=20):
+>     size_limit_bytes = size_limit_mb * 1024 * 1024
+> 
+>     with requests.get(
+>         url,
+>         headers=headers,
+>         stream=True,
+>         timeout=timeout,
+>         allow_redirects=True,
+>     ) as response:
+>         response.raise_for_status()
+> 
+>         content_type = response.headers.get("Content-Type", "").lower()
+>         content_length = response.headers.get("Content-Length")
+> 
+>         if content_length is not None:
+>             try:
+>                 if int(content_length) > size_limit_bytes:
+>                     raise DownloadTooLarge(
+>                         f"Advertised size exceeds {size_limit_mb} MB"
+>                     )
+>             except ValueError:
+>                 pass
+> 
+>         data = bytearray()
+> 
+>         for chunk in response.iter_content(chunk_size=64 * 1024):
+>             if not chunk:
+>                 continue
+> 
+>             data.extend(chunk)
+> 
+>             if len(data) > size_limit_bytes:
+>                 raise DownloadTooLarge(
+>                     f"Downloaded content exceeds {size_limit_mb} MB"
+>                 )
+> 
+>         return bytes(data), content_type, response.url
+> ```
+> 
+> Then classify based on both MIME type and file signature:
+> 
+> ```python
+> def classify_content(data, content_type):
+>     leading = data.lstrip()[:1024].lower()
+> 
+>     if "application/pdf" in content_type or data.lstrip().startswith(b"%PDF-"):
+>         return "pdf"
+> 
+>     if (
+>         "text/html" in content_type
+>         or "application/xhtml" in content_type
+>         or leading.startswith(b"<!doctype html")
+>         or leading.startswith(b"<html")
+>     ):
+>         return "html"
+> 
+>     return "unsupported"
+> ```
+> 
+> This matters because many repositories return PDFs as:
+> 
+> ```text
+> application/octet-stream
+> ```
+> 
+> Conversely, an alleged `.pdf` URL may return an HTML paywall, login page, or bot-block page.
+> 
+> ---
+> 
+> ## 4. `finder_download()` currently has a type mismatch
+> 
+> `download_url()` returns:
+> 
+> ```python
+> content.getbuffer()
+> ```
+> 
+> which is a `memoryview`, but later the HTML branch does:
+> 
+> ```python
+> with open(pathprefix + '.html', 'w') as fp:
+>     fp.write(content)
+> ```
+> 
+> That expects a Python string, not binary data / a memory view.
+> 
+> This probably gets swallowed by your broad exception and causes unnecessary fallback to the browser.
+> 
+> A cleaner version:
+> 
+> ```python
+> async def finder_download(page, url, pathprefix):
+>     try:
+>         data, content_type, final_url = await asyncio.get_running_loop().run_in_executor(
+>             None, download_url, url
+>         )
+> 
+>         kind = classify_content(data, content_type)
+> 
+>         if kind == "pdf":
+>             with open(pathprefix + ".pdf", "wb") as fp:
+>                 fp.write(data)
+>             return "finder_pdf"
+> 
+>         if kind == "html":
+>             html = data.decode("utf-8", errors="replace")
+> 
+>             # Ignore implausibly short HTML responses, except that a short
+>             # bot-block page may still be useful to report.
+>             soup = BeautifulSoup(html, "html.parser")
+>             if len(soup.get_text(" ", strip=True)) < 100:
+>                 raise ValueError("Implausibly small HTML response")
+> 
+>             with open(pathprefix + ".html", "w", encoding="utf-8") as fp:
+>                 fp.write(html)
+>             return "finder_html"
+> 
+>         print(f"Unsupported content type: {content_type}; URL: {final_url}")
+>         return "unsupported"
+> 
+>     except DownloadTooLarge:
+>         return "too_big"
+> 
+>     except (requests.RequestException, ValueError) as exc:
+>         # Browser fallback should be only for plausible HTML/JS pages.
+>         try:
+>             html, content_type = await fetch_url(page, url)
+> 
+>             if "html" not in content_type.lower():
+>                 return "unsupported"
+> 
+>             with open(pathprefix + ".html", "w", encoding="utf-8") as fp:
+>                 fp.write(html)
+> 
+>             return "finder_html"
+> 
+>         except Exception as browser_exc:
+>             print(f"Could not retrieve {url}: {exc}; browser fallback: {browser_exc}")
+>             return "error"
+> ```
+> 
+> And fix this mismatch:
+> 
+> ```python
+> # Current:
+> elif nextstep == 'toobig':
+> 
+> # Should be:
+> elif nextstep == 'too_big':
+> ```
+> 
+> Currently your `"too big"` return value does not match either condition, and `explained` can be unbound.
+> 
+> ---
+> 
+> ## 5. Do not make Google Scholar the primary discovery mechanism
+> 
+> Scholar scraping is brittle, often rate-limited or CAPTCHA-protected, and its HTML layout changes. It should be an optional convenience source, not your core pipeline.
+> 
+> Also, this extraction is too broad:
+> 
+> ```python
+> pdf_links = [
+>     a['href']
+>     for a in soup.find_all('a', href=True)
+>     if 'pdf' in a['href'].lower()
+> ]
+> ```
+> 
+> Many Scholar PDF links do not have “pdf” in the URL. Conversely, irrelevant links may contain it.
+> 
+> If you retain Scholar, target its result-side links and resolve relative URLs:
+> 
+> ```python
+> from urllib.parse import urljoin
+> 
+> pdf_links = [
+>     urljoin("https://scholar.google.com", a["href"])
+>     for a in soup.select(".gs_or_ggsm a[href]")
+> ]
+> ```
+> 
+> But I would prioritize these sources instead.
+> 
+> ### Better discovery sequence
+> 
+> Given a citation, title, DOI, or partial reference:
+> 
+> 1. **Resolve a DOI**
+>    - Crossref title search.
+> 2. **Query OpenAlex**
+>    - `best_oa_location.pdf_url`
+>    - all `locations[].pdf_url`
+> 3. **Query Unpaywall** for a known DOI
+>    - publisher OA PDF;
+>    - repository manuscript;
+>    - accepted manuscript.
+> 4. **Check discipline-specific archives**
+>    - arXiv;
+>    - PubMed Central / Europe PMC;
+>    - SSRN;
+>    - RePEc;
+>    - bioRxiv / medRxiv;
+>    - Zenodo;
+>    - OSF;
+>    - institutional repositories.
+> 5. **Search engine query**
+>    - exact title plus `filetype:pdf`;
+>    - exact title plus author surname;
+>    - DOI plus `pdf`.
+> 6. Visit publisher landing pages only if necessary.
+> 
+> This will generally beat an LLM-directed browsing loop in both success rate and reproducibility.
+> 
+> ---
+> 
+> ## 6. OpenAlex is especially useful for this
+> 
+> For a title query, retrieve a handful of likely works and collect OA PDF locations.
+> 
+> ```python
+> def openalex_pdf_candidates(title, per_page=5):
+>     response = requests.get(
+>         "https://api.openalex.org/works",
+>         params={
+>             "search": title,
+>             "per-page": per_page,
+>         },
+>         headers=headers,
+>         timeout=20,
+>     )
+>     response.raise_for_status()
+> 
+>     candidates = []
+> 
+>     for work in response.json().get("results", []):
+>         locations = []
+> 
+>         if work.get("best_oa_location"):
+>             locations.append(work["best_oa_location"])
+> 
+>         locations.extend(work.get("locations") or [])
+> 
+>         for location in locations:
+>             pdf_url = location.get("pdf_url")
+>             if pdf_url:
+>                 candidates.append({
+>                     "url": pdf_url,
+>                     "doi": work.get("doi"),
+>                     "title": work
+**user**:
+> Where does the `async_playwright` go? Here is the controlling code, where we make the browser:
+> ```
+> import os, io, re, contextlib
+> from datetime import datetime, timedelta
+> import time
+> import pandas as pd
+> import asyncio, platform
+> from contextlib import redirect_stdout
+> from lib import finder
+> from pyppeteer import launch
+> 
+> from config import *
+> 
+> found_any = True
+> 
+> def is_file_older_than_days(filepath, days_old):
+>     """
+>     Checks if a file's last modification time is older than a specified number of days.
+> 
+>     Args:
+>         filepath (str): The path to the file.
+>         days_old (int/float): The age threshold in days.
+> 
+>     Returns:
+>         bool: True if the file is older, False otherwise or if file doesn't exist.
+>     """
+>     if not os.path.exists(filepath):
+>         print(f"Error: File not found at {filepath}")
+>         return False
+> 
+>     # Get the file's last modification time in seconds since the epoch
+>     file_mtime_timestamp = os.path.getmtime(filepath)
+> 
+>     # Calculate the cutoff time (current time minus the age threshold)
+>     cutoff_time_datetime = datetime.now() - timedelta(days=days_old)
+>     
+>     # Convert the file modification timestamp to a datetime object for comparison
+>     file_mtime_datetime = datetime.fromtimestamp(file_mtime_timestamp)
+> 
+>     # Compare the file's time to the cutoff time
+>     if file_mtime_datetime < cutoff_time_datetime:
+>         return True
+>     else:
+>         return False
+> 
+> async def main():
+>     global found_any
+>     found_any = False
+>     
+>     if platform.system() == "Darwin":
+>         asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+> 
+>     count = 0
+>     verdicts = pd.read_csv(verdict_file.replace(".csv", "-further.csv"))
+>     for index, row in verdicts.iterrows():
+>         if row.Priority >= priority_limit:
+>             targetpath = os.path.join(pdfs_dir, re.sub(r'[^\w\.\-]', '_', row.DOI) + '.pdf')
+>             statuspath = targetpath[:-4] + '.txt'
+>             if os.path.exists(statuspath):
+>                 if os.path.getsize(statuspath) == 0:
+>                     os.unlink(statuspath)
+>                 elif not is_file_older_than_days(statuspath, refresh_days):
+>                     # print("Recent attempt.")
+>                     continue
+>             if os.path.exists(targetpath):
+>                 # print("Exists.")
+>                 continue
+>             print(targetpath)
+> 
+>             found_any = True
+>             
+>             print(row.DOI)
+>             count += 1
+>             with open(statuspath, 'w') as fp:
+>                 with contextlib.redirect_stdout(fp):
+>                     ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.3.1 Safari/605.1.15"
+> 
+>                     ## browser = await launch(headless=True, args=['--no-sandbox', f'--user-agent={ua}'])
+>                     browser = await launch(headless=False, args=['--no-sandbox', f'--user-agent={ua}'])
+>                     try:
+>                         result, link = await finder.finder_pdf(row.DOI, browser, targetpath, statuspath)
+>                         print(result)
+>                         if link is not None:
+>                             print(link)
+>                     finally:
+>                         try:
+>                             await browser.close()
+>                         except Exception as e:
+>                             print(f"Error closing browser: {e}")
+> 
+>             print([row.DOI, result])
+> 
+>     return count
+> 
+> if __name__ == '__main__':
+>     count = finder_count
+>     while count > 0 and found_any:
+>         try:
+>             count -= asyncio.run(main())
+>         except RuntimeError as ex:
+>             print(ex)
+>             break
+>         except Exception as ex:
+>             print(ex)
+>             pass
+>         count -= 1
+> ```
+**assistant**:
+> `async_playwright()` replaces the role currently played by Pyppeteer’s `launch()`. Put it in `main()`, surrounding the batch of documents, and create **one browser/context for the whole batch** rather than launching a new browser for every DOI.
+> 
+> Playwright is not API-compatible with Pyppeteer, so you should pass a Playwright **browser context** to `finder_pdf`, rather than a Pyppeteer browser.
+> 
+> ## 1. Replace the import
+> 
+> ```python
+> # Remove:
+> # from pyppeteer import launch
+> 
+> from playwright.async_api import async_playwright
+> ```
+> 
+> Install once:
+> 
+> ```bash
+> pip install playwright
+> playwright install chromium
+> ```
+> 
+> If you have normal Google Chrome installed and want to use it instead of Playwright's bundled Chromium, use `channel="chrome"` below.
+> 
+> ---
+> 
+> ## 2. Create Playwright/browser/context in `main()`
+> 
+> Here is the relevant structure of `main()` rewritten:
+> 
+> ```python
+> async def main():
+>     global found_any
+>     found_any = False
+> 
+>     count = 0
+>     verdicts = pd.read_csv(verdict_file.replace(".csv", "-further.csv"))
+> 
+>     # Do not spoof an old Safari or Chrome version. Let current Chrome identify itself.
+>     async with async_playwright() as p:
+>         browser = await p.chromium.launch(
+>             channel="chrome",   # Remove this line if Chrome is not installed.
+>             headless=False,     # Set True once debugging is done.
+>             args=["--no-sandbox"],
+>         )
+> 
+>         # A context is an isolated browser session. Set headers / UA / cookies here.
+>         context = await browser.new_context(
+>             viewport={"width": 1440, "height": 1000},
+>             accept_downloads=True,
+>         )
+> 
+>         try:
+>             for index, row in verdicts.iterrows():
+>                 if row.Priority < priority_limit:
+>                     continue
+> 
+>                 targetpath = os.path.join(
+>                     pdfs_dir,
+>                     re.sub(r"[^\w.\-]", "_", row.DOI) + ".pdf",
+>                 )
+>                 statuspath = targetpath[:-4] + ".txt"
+> 
+>                 if os.path.exists(statuspath):
+>                     if os.path.getsize(statuspath) == 0:
+>                         os.unlink(statuspath)
+>                     elif not is_file_older_than_days(statuspath, refresh_days):
+>                         continue
+> 
+>                 if os.path.exists(targetpath):
+>                     continue
+> 
+>                 print(targetpath)
+>                 found_any = True
+>                 print(row.DOI)
+>                 count += 1
+> 
+>                 with open(statuspath, "w", encoding="utf-8") as fp:
+>                     with contextlib.redirect_stdout(fp):
+>                         try:
+>                             result, link = await finder.finder_pdf(
+>                                 row.DOI,
+>                                 context,       # Pass the Playwright context
+>                                 targetpath,
+>                                 statuspath,
+>                             )
+>                             print(result)
+>                             if link is not None:
+>                                 print(link)
+> 
+>                         except Exception as e:
+>                             print(f"Finder error: {type(e).__name__}: {e}")
+>                             result, link = "error", None
+> 
+>                 print([row.DOI, result])
+> 
+>         finally:
+>             await context.close()
+>             await browser.close()
+> 
+>     return count
+> ```
+> 
+> You can remove this Pyppeteer-specific macOS workaround:
+> 
+> ```python
+> if platform.system() == "Darwin":
+>     asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+> ```
+> 
+> It was relevant to Pyppeteer’s event-loop behavior, but should not be needed for Playwright.
+> 
+> ---
+> 
+> ## 3. Change `finder_pdf` to receive a context
+> 
+> Currently it does this:
+> 
+> ```python
+> async def finder_pdf(document, browser, targetpath, statuspath):
+>     page = await browser.newPage()
+>     await page.setUserAgent(...)
+> ```
+> 
+> Change it to:
+> 
+> ```python
+> async def finder_pdf(document, context, targetpath, statuspath):
+>     page = await context.new_page()
+> 
+>     try:
+>         result, link = await finder_pdf_helper(document, page)
+> 
+>         try:
+>             os.remove("downloaded.html")
+>         except FileNotFoundError:
+>             pass
+> 
+>         if result == "found":
+>             os.rename("downloaded.pdf", targetpath)
+>         else:
+>             try:
+>                 os.remove("downloaded.pdf")
+>             except FileNotFoundError:
+>                 pass
+> 
+>         return result, link
+> 
+>     finally:
+>         try:
+>             await page.close()
+>         except Exception:
+>             pass
+> ```
+> 
+> Do **not** set the user agent on the page. With Playwright, that belongs on the context:
+> 
+> ```python
+> context = await browser.new_context(user_agent="...")
+> ```
+> 
+> But I recommend omitting it altogether. If you use `channel="chrome"`, Playwright will report the real, current Chrome UA. Your existing Safari UA is especially undesirable because it claims Safari while actually running Chromium.
+> 
+> ---
+> 
+> ## 4. Update `fetch_url` to Playwright syntax
+> 
+> Your present Pyppeteer version has the extra-navigation bug discussed before. Use this Playwright version:
+> 
+> ```python
+> async def fetch_url(page, url):
+>     response = await page.goto(
+>         url,
+>         wait_until="domcontentloaded",
+>         timeout=30_000,
+>     )
+> 
+>     if response is None:
+>         raise RuntimeError(f"No response returned for {url}")
+> 
+>     # Optional: helps with lightly JavaScript-rendered pages.
+>     await page.wait_for_timeout(500)
+> 
+>     content = await page.content()
+>     content_type = response.headers.get("content-type", "")
+> 
+>     return content, content_type
+> ```
+> 
+> Key translation points:
+> 
+> | Pyppeteer | Playwright |
+> |---|---|
+> | `browser.newPage()` | `context.new_page()` |
+> | `page.setUserAgent(...)` | `browser.new_context(user_agent=...)` |
+> | `page.goto(url, {'timeout': 30000})` | `page.goto(url, timeout=30000)` |
+> | `page.waitForNavigation(...)` | Normally do not call it after `goto`; use `wait_until=` |
+> | `page.waitForSelector(...)` | `page.wait_for_selector(...)` |
+> | `page.close()` | `page.close()` |
+> 
+> ---
+> 
+> ## 5. A useful fallback if Chrome is unavailable
+> 
+> If this fails:
+> 
+> ```python
+> browser = await p.chromium.launch(channel="chrome", ...)
+> ```
+> 
+> because Chrome is not installed or Playwright cannot find it, use Playwright’s managed Chromium:
+> 
+> ```python
+> browser = await p.chromium.launch(
+>     headless=False,
+>     args=["--no-sandbox"],
+> )
+> ```
+> 
+> For debugging the “outdated browser” failures, I would first use:
+> 
+> ```python
+> headless=False
+> ```
+> 
+> You can visually see whether the site is serving:
+> 
+> - a browser-version warning;
+> - a CAPTCHA;
+> - a Cloudflare / bot-check interstitial;
+> - a consent page;
+> - a university proxy/login page;
+> - a normal article landing page.
+> 
+> Once the direct-download / metadata APIs do most of the work, switch to `headless=True` for unattended runs.

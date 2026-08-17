@@ -1,0 +1,502 @@
+**user**:
+> I have started a plan to build an abstraction around model and tool selection in my AI system. Here is the basic structure:
+> ## Purpose
+> 
+> `Planner` is a simplified, chat-first abstraction over multiple LLM services/models and tools.
+> 
+> Given a dialogue, it selects an **execution plan**—a model and, where useful, configured tools—to maximize expected *trustworthy user utility*, balancing:
+> 
+> - likelihood of a positive user outcome;
+> - independent quality/reliability expectations;
+> - dollar cost;
+> - latency;
+> - uncertainty and occasional exploration.
+> 
+> The public API remains synchronous and simple. Async work is internal and accessed through polling.
+> 
+> ---
+> 
+> ## 1. Public API
+> 
+> ### Registration
+> 
+> Models and tools are registered once in a shared registry.
+> 
+> ```python
+> Planner.register_model(
+>     adapter,
+>     model_id="gemini-2.5-flash",
+>     cost_per_million_tokens=2.5,
+>     quality_prior=0.70,
+> )
+> ```
+> 
+> A registered model adapter is expected to provide:
+> 
+> ```python
+> adapter.chat_response(messages, max_tokens=None) -&gt; str
+> adapter.stream_response(messages, max_tokens=None) -&gt; Iterator[str]
+> adapter.allowed(tokens) -&gt; bool
+> ```
+> 
+> `allowed(tokens)` supports context-window, quota, provider-health, and other availability constraints.
+> 
+> Tools are registered with a human/model-readable description, callable, and optional configurable parameters:
+> 
+> ```python
+> Planner.register_tool(
+>     name="scholar_search",
+>     description=(
+>         "Perform a Google Scholar search and retrieve relevant review PDFs "
+>         "for information needed to answer the prompt."
+>     ),
+>     fn=scholar_search,
+>     config={
+>         "defaults": {"max_results": 5, "reviews_only": True},
+>         "options": {
+>             "max_results": [3, 5, 10],
+>             "reviews_only": [True, False],
+>             "year_from": [None, 2015, 2020],
+>         },
+>     },
+>     quality_prior=0.85,
+>     cost_estimate=0.02,
+> )
+> 
+> Planner.register_tool(
+>     name="image_generation",
+>     description="Create an image based on a prompt.",
+>     fn=lambda prompt, config: create_image(prompt, **config),
+>     config=ToolConfig(defaults={"size": "1024x1024"}),
+>     quality_prior=0.80,
+>     cost_estimate=0.04,
+> )
+> ```
+> 
+> Tool configuration is a first-class decision variable. For memory retrieval, this includes collections, filters, $k$, score threshold, reranking, token budget, and summarization strategy.
+> 
+> ### Conversation-level interface
+> 
+> ```python
+> planner = Planner(conversation_id="...")
+> ```
+> 
+> ```python
+> response = planner.chat_response(messages, max_tokens=None)
+> ```
+> 
+> ```python
+> stream = planner.stream_response(messages, max_tokens=None)
+> for chunk in stream:
+>     ...
+> ```
+> 
+> ```python
+> planner.vote_up(response_id)
+> planner.vote_down(response_id)
+> ```
+> 
+> Responses:
+> 
+> ```python
+> @dataclass
+> class Response:
+>     id: str
+>     text: str
+>     model: str | None
+> 
+> @dataclass
+> class StreamResponse:
+>     id: str
+>     chunks: Iterator[str]
+>     model: str | None
+> ```
+> 
+> The response ID maps feedback to the actual selected execution plan, rather than relying on a mutable `last_responder`.
+> 
+> ### Forward-compatible async API
+> 
+> All top-level calls remain blocking/synchronous. No `await`, `async with`, or async-infected application code is required.
+> 
+> ```python
+> planner.poll() -&gt; list
+> planner.ongoing() -&gt; list
+> planner.async_status() -&gt; dict
+> ```
+> 
+> - `poll()` returns newly completed user-deliverable async updates.
+> - `ongoing()` returns lightweight active-work records, e.g. ID, description, status, elapsed time.
+> - `async_status()` returns summary counts/status for UI display.
+> - In the first minimal implementation these can return `[]`, `[]`, and `{"count": 0, "operations": []}`.
+> 
+> Later, internal workers may perform tool calls, verification, long research, image generation, monitoring, etc. Completed results are persisted to conversation state and made available through `poll()`.
+> 
+> ---
+> 
+> ## 2. Execution Plans / Responders
+> 
+> The planner should select an entire **execution plan**, not merely a model.
+> 
+> Initially, a `Responder` can remain the practical unit of selection:
+> 
+> ```python
+> responder.chat_response(messages, max_tokens=None) -&gt; str
+> responder.stream_response(messages, max_tokens=None) -&gt; Iterator[str]
+> responder.allowed(tokens) -&gt; bool
+> responder.cost(prompt_tokens, completion_tokens) -&gt; float
+> ```
+> 
+> Over time, a responder represents a complete plan such as:
+> 
+> - `gpt-5-mini`, direct response;
+> - Gemini Flash plus personal-memory retrieval;
+> - OpenAI model plus web search and citation checking;
+> - code-focused model plus execution/testing;
+> - draft model plus independent reviewer;
+> - model plus a specific configured tool setting.
+> 
+> This makes model choice, tool choice, and tool parameters jointly selectable and learnable.
+> 
+> To avoid a combinatorial explosion, plans should initially come from a limited set of explicit templates/families rather than arbitrary model-tool combinations.
+> 
+> ---
+> Now, you previously helped me build a wrapper on a simple tool I build, called BayesSelector, which would implement this API in a simple way, without getting into the higher-level intelligence. Here's that wrapper:
+> ```
+> import uuid
+> from dataclasses import dataclass
+> 
+> @dataclass
+> class Response:
+>     id: str
+>     text: str
+>     model: str | None = None
+> 
+> @dataclass
+> class StreamResponse:
+>     id: str
+>     chunks: object          # Iterator[str]
+>     model: str | None = None
+> 
+>     def __iter__(self):
+>         return iter(self.chunks)
+> 
+> 
+> class Planner:
+>     def __init__(self, conversation_id, selector):
+>         self.conversation_id = conversation_id
+>         self.selector = selector
+>         self.response_responders = {}
+> 
+>     def stream_response(self, messages, max_tokens=None):
+>         chunks = self.selector.stream_response(messages, max_tokens=max_tokens)
+> 
+>         response_id = str(uuid.uuid4())
+>         responder = self.selector.last_responder
+>         self.response_responders[response_id] = responder
+> 
+>         return StreamResponse(
+>             id=response_id,
+>             chunks=chunks,
+>             model=str(responder),
+>         )
+> 
+>     def vote_up(self, response_id):
+>         responder = self.response_responders.get(response_id)
+>         if responder is not None:
+>             self.selector.successes[responder] += 1
+> 
+>     def vote_down(self, response_id):
+>         responder = self.response_responders.get(response_id)
+>         if responder is not None:
+>             self.selector.failures[responder] += 1
+> 
+>     # Forward-compatible async API: no background tasks in v1.
+>     def poll(self):
+>         return []
+> 
+>     def ongoing(self):
+>         return []
+> 
+>     def async_status(self):
+>         return {
+>             "count": 0,
+>             "operations": [],
+>         }
+> ```
+> 
+> Now, I want to go one step further. Here is my current flask code for providing the responses:
+> ```
+> @app.route('/completion', methods=['GET', 'POST'])
+> def completion():
+>     if request.method == "POST":
+>         return Response(completion_api(), mimetype='text/event-stream')
+>     else:
+>         return Response(None, mimetype='text/event-stream')
+>         
+> def completion_api(custom_system=None, custom_model=None, custom_context=""):
+>     global break_streaming
+>     data = request.form
+> 
+>     print("Collecting conversation...")
+> 
+>     soup = BeautifulSoup(data['past_messages'], 'html.parser')
+>     past_messages = []
+>     for div in soup.find_all('div'):
+>         if div['class'][0] == 'usermessage':
+>             past_messages.append({"role": "user", "content": div.text.strip()})
+>         elif div['class'][0] == 'appmessage':
+>             past_messages.append({"role": "assistant", "content": div.text.strip()})
+>     ## Drop the last message from the user (added later)
+>     if past_messages[-1]['role'] == 'user':
+>         past_messages = past_messages[:-1]
+> 
+>     if custom_model is None:
+>         custom_model = data.get('model', None)
+>         
+>     myuser_id = user_id
+>     if past_messages:
+>         input_text = data['input_text']
+>     else:
+>         if data.get('preamble', 'none') == 'none':
+>             preamble = ""
+>         else:
+>             if data.get('context', '') != '' and os.path.exists('prompts/' + data['preamble'] + '-context.md'):
+>                 preamble = open('prompts/' + data['preamble'] + '-context.md', 'r').read()
+>                 preamble = preamble.replace("[CONTEXT]", data.get('context', ''))
+>             elif os.path.exists('prompts/' + data['preamble'] + '.md'):
+>                 preamble = open('prompts/' + data['preamble'] + '.md', 'r').read()
+>             else:
+>                 myuser_id = data['preamble']
+>                 print(f"Loading memory {myuser_id}")
+>                 preamble = ""
+>                 
+>         input_text = preamble + data['input_text']
+> 
+>     if custom_context:
+>         history_text = custom_context
+>     else:
+>         print("Loading LTM...")
+>         ltm = memory.default.create_long_term()
+>         print("Loading STM...")
+>         stm = memory.integration_short_term.build_memory_block(ltm, user_id=myuser_id,
+>                                                                input_text=input_text, past_messages=past_messages)
+>         histchoice = random.choice(["history", "gemini", "none"])
+>         if histchoice == 'history':
+>             print("Memory: History List")
+>             history_text = data.get('history', '')
+>             if history_text:
+>                 history_text = history_text.replace("\n\n", "\n").replace("\n\n", "\n")
+>                 history_text = stm + "\n\nBelow are selected log entries of past conversations. They may have no bearing on the chat.\n" + history_text
+>         elif histchoice == 'gemini':
+>             print("Memory: Gemini Helper")
+>             results = get_logs_raw(input_text)
+>             history_text = gemini.single_prompt("The following query has been submitted to a super-intelligent AI assistant named Arachne, which you support as a memory system:\n===\n" + input_text + (("\n===\nHere is the previous response from Arachne:\n===\n" + past_messages[-1]['content']) if len(past_messages) > 0 else "") + "\n===\nHere are outputs from an automated memory system:\n===\n" + stm + "\n===\nAnd the following past discussion synopses have been retrieved, which may relate to this query:\n===\n" + "\n===\n".join([result['path'][9:19] + ' ' + result['path'][20:28].replace('-', ':') + ': ' + result['content'] for result in results]) + "\n===\nPlease excerpt relevant memory items and summarize any history entries that are relevant to the query.")
+>         else:
+>             print("Memory: Short-term Only")
+>             history_text = stm
+> 
+>     return stream(input_text, past_messages, data['log_filename'], history_text,
+>                   custom_system=custom_system, custom_model=custom_model, custom_userid=(myuser_id if myuser_id != user_id else None))
+> 
+> def stream(input_text, past_messages, log_filename, history_text="",
+>            custom_system=None, custom_model=None, on_stream_end=None, custom_userid=None):
+>     global break_streaming
+>     break_streaming = False
+>     print(input_text)
+> 
+>     print(f"Memory: {custom_userid}")
+>     
+>     messages = create_chat(input_text, past_messages, history_text=history_text, custom_system=custom_system)
+>     
+>     print(len(messages))
+>     if len(messages) < 4:
+>         if custom_model == 'cheap':
+>             model = 'gpt-5-nano'
+>         elif custom_model:
+>             model = custom_model
+>         else:
+>             chatlen = chat_tokens(messages)
+>             model = 'gpt-5-nano'
+> 
+>         fillin_training_end(messages, model)
+>         print(model)
+>         completion = client.chat.completions.create(model=model, messages=messages,
+>                                                     stream=True, max_completion_tokens=3000,
+>                                                     temperature=1, verbosity="low")
+>     else:
+>         if not custom_model or custom_model == 'cheap':
+>             model = 'gpt-5-nano'
+>         else:
+>             model = custom_model
+> 
+>         if custom_model:
+>             fillin_training_end(messages, model)
+>             completion = client.chat.completions.create(model=model, messages=messages,
+>                                                         stream=True, max_completion_tokens=2500, temperature=1, verbosity="low")
+>         else:
+>             try:
+>                 fillin_training_end(messages, model)
+>                 completion = client.chat.completions.create(model=model, messages=messages,
+>                                                             stream=True, max_completion_tokens=2500, temperature=1, verbosity="low")
+>             except openai.error.InvalidRequestError as ex:
+>                 if model == 'gpt-5.6-luna':
+>                     raise ex
+>                 fillin_training_end(messages, 'gpt-5.6-luna')
+>                 completion = client.chat.completions.create(model='gpt-5.6-luna', messages=messages,
+>                                                             stream=True, max_completion_tokens=2500, temperature=1, verbosity="low")
+> 
+>     response = ""
+>     for line in completion:
+>         if line.choices[0].delta.content:
+>             token = line.choices[0].delta.content
+>             response += token
+>             yield token
+>         if break_streaming:
+>             break
+>     messages.append({"role": "assistant", "content": response})
+>         
+>     ## Write all out to logs
+>     if log_filename:
+>         if custom_userid:
+>             chatlog.save_log(os.path.join("logs", log_filename), [{"role": "memory", "content": custom_userid}] + messages)
+>         else:
+>             chatlog.save_log(os.path.join("logs", log_filename), messages)
+> 
+>     if on_stream_end:
+>         on_stream_end(response)
+> ```
+> You'll see other arguments to completion(...) and to stream(...), because these two are called from other points. But this is the main flow.
+> 
+> Now, I want to include the various history options (LTM-STM and the random choice) as "tools" within this framework. At this point, I want to do this in a simple way, so:
+>  - register the tools, according to the real API.
+>  - but then, inside the dummy Planner, just implement the same "always use LTM-STM, then randomly choose one of the three history options" that I currently have.
+> 
+> Can you provide first the code that creates these tools and registers them to the Planner, along the lines of the API? We might need to extend the API slightly to allow this kind of "pre-response tool", but I'm not sure. After I'm happy with that, I'm going to ask you to offer edits to the flask code to use the new Planner object, and updates to the Planner object code to implement the simple history approach.
+**assistant**:
+> Use one configurable **pre-response memory tool** rather than three separate tools: the strategy is the selectable configuration.
+> 
+> Minimal API extension: add a `stage` field and standardize pre-response tools as `fn(context, config) -> str`.
+> 
+> ```python
+> from dataclasses import dataclass
+> from typing import Any
+> 
+> @dataclass
+> class PreResponseContext:
+>     input_text: str
+>     past_messages: list[dict]
+>     user_id_for_memory: str
+>     history_list_raw_data: str = ""
+> 
+> 
+> # Minimal Planner.register_tool extension:
+> #
+> # def register_tool(cls, name, description, fn, config=None,
+> #                   quality_prior=None, cost_estimate=None,
+> #                   stage="response"):
+> #     ...
+> #     cls._tool_registry[name] = {
+> #         "fn": fn,
+> #         "description": description,
+> #         "config": config_obj,
+> #         "quality_prior": quality_prior,
+> #         "cost_estimate": cost_estimate,
+> #         "stage": stage,
+> #     }
+> 
+> 
+> def retrieve_memory_context(
+>     context: PreResponseContext,
+>     config: dict[str, Any],
+> ) -> str:
+>     """Build the history_text supplied to create_chat()."""
+>     strategy = config.get("strategy", "short_term_only")
+> 
+>     ltm = memory.default.create_long_term()
+>     stm = memory.integration_short_term.build_memory_block(
+>         ltm,
+>         user_id=context.user_id_for_memory,
+>         input_text=context.input_text,
+>         past_messages=context.past_messages,
+>     )
+> 
+>     if strategy == "short_term_only":
+>         return stm
+> 
+>     if strategy == "history_list":
+>         history = context.history_list_raw_data
+>         if not history:
+>             return stm
+> 
+>         history = history.replace("\n\n", "\n").replace("\n\n", "\n")
+>         return (
+>             stm
+>             + "\n\nBelow are selected log entries of past conversations. "
+>               "They may have no bearing on the chat.\n"
+>             + history
+>         )
+> 
+>     if strategy == "gemini_helper":
+>         results = get_logs_raw(context.input_text)
+> 
+>         previous_response = ""
+>         if context.past_messages:
+>             previous_response = (
+>                 "\n===\nHere is the previous response from Arachne:\n===\n"
+>                 + context.past_messages[-1]["content"]
+>             )
+> 
+>         logs_summary = "\n===\n".join(
+>             result["path"][9:19]
+>             + " "
+>             + result["path"][20:28].replace("-", ":")
+>             + ": "
+>             + result["content"]
+>             for result in results
+>         )
+> 
+>         prompt = (
+>             "The following query has been submitted to a super-intelligent "
+>             "AI assistant named Arachne, which you support as a memory system:\n===\n"
+>             + context.input_text
+>             + previous_response
+>             + "\n===\nHere are outputs from an automated memory system:\n===\n"
+>             + stm
+>             + "\n===\nAnd the following past discussion synopses have been "
+>               "retrieved, which may relate to this query:\n===\n"
+>             + logs_summary
+>             + "\n===\nPlease excerpt relevant memory items and summarize any "
+>               "history entries that are relevant to the query."
+>         )
+>         return gemini.single_prompt(prompt)
+> 
+>     raise ValueError(f"Unknown memory strategy: {strategy}")
+> 
+> 
+> Planner.register_tool(
+>     name="memory_retrieval",
+>     description=(
+>         "Construct conversational memory context before drafting a response. "
+>         "Always builds long-term/short-term memory, then optionally incorporates "
+>         "selected history entries or uses Gemini to synthesize retrieved logs."
+>     ),
+>     fn=retrieve_memory_context,
+>     config={
+>         "defaults": {
+>             "strategy": "short_term_only",
+>         },
+>         "options": {
+>             "strategy": [
+>                 "short_term_only",
+>                 "history_list",
+>                 "gemini_helper",
+>             ],
+>         },
+>     },
+>     quality_prior=0.90,
+>     cost_estimate=0.01,  # Conservative average; Gemini strategy is costlier.
+>     stage="pre_response",
+> )
+> ```
+> 
+> `PreResponseContext` is execution-only input supplied by Flask/Planner, not a model-visible tool argument. The eventual dummy planner can randomly select one `strategy`, invoke this registered tool, and pass its returned text as `history_text` to `create_chat()`.

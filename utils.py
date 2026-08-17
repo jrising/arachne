@@ -1,9 +1,20 @@
 import os
 from datetime import datetime
 import tiktoken
+from whoosh.index import open_dir
+from whoosh import qparser
 
 def get_default_system_message():
-    return "You are a helpful, super-intelligent AI assistant, called \"Arachne\" (she/her), for James Rising, an interdisciplinary modeler and father of two boys. You support James in pursuing global sustainability and a vibrant, enlightened life. You are creative, knowledgeable, and friendly, and not afraid to express opinions based on your technophilic, humanist good will for James and the future.\n\nAnswer as directly as possible, or ask for clarification. Your answer will be rendered as Markdown. Most recent training data: TRAINING_END; Current time: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    return "You are a helpful, super-intelligent AI assistant, called \"Arachne\" (she/her), for James Rising, an interdisciplinary modeler and father of two boys. You support James in pursuing global sustainability and a vibrant, enlightened life. You are creative, knowledgeable, and friendly, and not afraid to express opinions based on your technophilic, humanist good will for James and the future. Most recent training data: TRAINING_END; Current time: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+def get_default_response_policy():
+    return """Response policy:
+Answer the user's question directly or ask for clarification.
+Default to <= 350 words and <= 8 bullets unless the user explicitly asks for detail.
+Avoid repetition and exhaustive edge cases.
+End with a complete sentence; do not promise a continuation.
+
+Your answer will be rendered as Markdown, with MathJax for LaTeX (use $...$ and \[...\])."""
 
 def get_log_filename(subdir=None):
     # Get current date and time without milliseconds
@@ -30,6 +41,8 @@ def create_chat(input_text, past_messages, history_text="", custom_system=None):
 
     if history_text:
         system_message += "\n\n" + history_text
+
+    system_message += "\n\n" + get_default_response_policy()
     
     messages = [{"role": "system", "content": system_message}]
 
@@ -59,7 +72,7 @@ def chat_tokens(messages):
 
 training_end = {'gpt-4o': '2023-10', 'gpt-4o-mini': '2023-10', 'gpt-4-turbo-preview': '2023-04', 'gpt-4': '2021-09',
                 'gpt-3.5-turbo-0125': '2021-09', 'gpt-3.5-turbo': '2021-09', 'gpt-5.6-terra': "2026-02",
-                'gpt-5.6-luna': '2026-02', 'gpt-5-nano': '2025-08'}
+                'gpt-5.6-luna': '2026-02', 'gpt-5-nano': '2025-08', '': '2026-02'}
 
 def fillin_training_end(messages, model):
     messages[0]['content'] = messages[0]['content'].replace("TRAINING_END", training_end.get(model, '2021-09'))
@@ -82,3 +95,29 @@ def send_batch_file(client, filepath, metadata={}):
 
 def check_batch_results(client, id):
     content = client.files.content(id)
+
+def get_logs_raw(query=None):
+    if query:
+        ix = open_dir("database/whoosh")
+        with ix.searcher() as searcher:
+            og = qparser.OrGroup.factory(0.9)
+            qp = qparser.QueryParser("content", ix.schema, group=og)
+            qp.add_plugin(qparser.FuzzyTermPlugin())
+            parsed = qp.parse(query)
+            results = searcher.search(parsed, limit=10)
+
+            allres = []
+            for result in results:
+                with open(os.path.join("database", result['path'])) as fp:
+                    allres.append(dict(path=result['path'], line=result['line'], content=fp.read()))
+
+            return allres
+    else:
+        ## Get the last 10 lines from running.log
+        size = os.path.getsize("database/logs/running.log")
+        with open("database/logs/running.log", 'rb') as fp:
+            if size > 2048:
+                fp.seek(-2048, 2)
+            lines = fp.readlines()[1:][-10:]
+
+        return [dict(path='running.log', line=line.decode(), content=line) for line in lines]

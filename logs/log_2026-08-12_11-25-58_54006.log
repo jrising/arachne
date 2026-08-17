@@ -1,0 +1,1851 @@
+**user**:
+> At this point, my AI system has the ability to use multiple services (OpenAI, Gemini, XAI), and multiple models for each. Each model has different things it's good at, different cost, and different latency. Furthermore, I've built a bunch of tools, which can help with specialized tasks, and services like OpenAI provide tools, such as web search, which can improve the results.
+> 
+> Now, I'd like to provide an abstraction around all of this, and I would like your help in building it. Chat dialogues are the main input, and thumbs-up-down on the results are the main feedback. The purpose of the abstraction is to select specific models and tools to respond with.  It's goal (roughly) should be to produce a response that is most likely to get a thumbs-up, for minimum cost and minimum latency.
+> 
+> Note that I have a memory and log-retrieval system that would now be considered some of those tools, but they are themselves configurable. We need to think about the abstraction revising the parameters/configuration of those (and other) tools.
+> 
+> I'm also worried though about the AI system training to the test, rather than producing the truly best response. I'm not sure though that there's any way to handle that. But it strikes me as an issue because XAI might give the least cost for the highest rate of AI hallucination. So maybe we need to also consider metrics about how good these models are, and how applicable the tools are to various tasks, that do not just come from the feedback.
+> 
+> I would also like to keep the core of the abstraction quite general. So, I might want to reuse the core in a non-chat environment, and where thumbs-up-down are not the only form of feedback. But I will mostly be engaging with it through chat, so I want that streamlined.
+> 
+> How should we proceed?
+**assistant**:
+> Build this as a **policy layer for deliberative routing and configuration**, not merely a model router.
+> 
+> Its job is:
+> 
+> > Given a task context, candidate models, tools, and execution budgets, choose an execution plan that maximizes expected *trustworthy task utility*, subject to cost and latency constraints; then learn from feedback and evaluation.
+> 
+> That framing keeps it reusable beyond chat and thumbs.
+> 
+> ---
+> 
+> ## 1. Separate the concepts that are easy to conflate
+> 
+> A thumbs-up is useful, but it is not the same thing as response quality. Your system should explicitly keep these quantities separate.
+> 
+> For an execution plan $p$—e.g., “Gemini Flash + retrieve 8 memory items + no web”, or “OpenAI reasoning model + web search + citation verifier”—estimate:
+> 
+> | Quantity | Meaning | Main evidence |
+> |---|---|---|
+> | **Preference / satisfaction** | Will James (or another user) like this answer? | Thumbs, edits, follow-up behavior |
+> | **Task quality** | Is the response correct, complete, useful, and well reasoned? | Rubrics, tests, judge models, trusted-source checks, human audits |
+> | **Reliability / safety** | How likely is it to make unsupported claims or fail badly? | Calibration tests, factuality checks, outcome audits |
+> | **Cost** | Expected marginal dollar/token/tool cost | Observed logs |
+> | **Latency** | Expected response time, including tool calls | Observed logs |
+> | **Uncertainty** | How poorly do we know the above for this context? | Data coverage, model confidence, evaluation disagreement |
+> 
+> Then your policy can optimize a utility such as:
+> 
+> \[
+> U(p \mid x)
+> =
+> w_s \hat S(p,x)
+> +
+> w_q \hat Q(p,x)
+> -
+> w_c \hat C(p,x)
+> -
+> w_l \hat L(p,x)
+> -
+> w_r \hat R(p,x)
+> +
+> w_u \hat U_{\mathrm{info}}(p,x)
+> \]
+> 
+> where:
+> 
+> - $x$ is the task/context,
+> - $\hat S$ is predicted user satisfaction,
+> - $\hat Q$ is independent estimated quality,
+> - $\hat R$ is expected failure risk,
+> - and $\hat U_{\mathrm{info}}$ rewards selective exploration where uncertainty is high.
+> 
+> The key is that **thumb feedback updates $\hat S$ strongly, but should not be allowed to wholly define $\hat Q$ or $\hat R$**.
+> 
+> That is the basic defense against “cheap, fluent hallucination wins the thumbs metric.”
+> 
+> ---
+> 
+> ## 2. Make the unit of selection an *execution plan*
+> 
+> Do not select only a model. Select a structured plan.
+> 
+> ```python
+> @dataclass
+> class ExecutionPlan:
+>     primary_model: ModelRef
+>     deliberation_model: ModelRef | None = None
+>     tools: list[ToolInvocation] = field(default_factory=list)
+>     response_mode: str = "direct"  # direct, research, code, critique, etc.
+>     verification: VerificationPolicy = VerificationPolicy.none()
+>     budgets: Budgets = Budgets(
+>         max_cost_usd=0.05,
+>         max_latency_s=8,
+>         max_tool_calls=4,
+>     )
+> ```
+> 
+> For example:
+> 
+> ```python
+> ExecutionPlan(
+>     primary_model="openai:gpt-5-mini",
+>     tools=[
+>         ToolInvocation(
+>             name="memory.retrieve",
+>             config={
+>                 "collections": ["preferences", "project_state"],
+>                 "top_k": 6,
+>                 "reranker": "cross_encoder_v2",
+>                 "min_score": 0.58,
+>             },
+>         )
+>     ],
+>     verification=VerificationPolicy(
+>         mode="claim_check_if_external_facts",
+>         threshold=0.65,
+>     ),
+> )
+> ```
+> 
+> This matters because tool *configuration* is part of the policy:
+> 
+> - retrieval collections and filters;
+> - $k$, score thresholds, reranker, token budget;
+> - whether memory is injected directly, summarized, or cited internally;
+> - web-search query count and source-quality filter;
+> - code execution timeout and test strategy;
+> - which model drafts, critiques, synthesizes, or verifies;
+> - whether a second pass is warranted.
+> 
+> A model can be excellent but harmed by irrelevant memory; a modest model can be made strong on a narrow task by retrieval and verification. The policy should learn this at the plan level.
+> 
+> ---
+> 
+> ## 3. Define general interfaces so chat is just one adapter
+> 
+> Use a domain-neutral core whose inputs and outputs are structured.
+> 
+> ```python
+> @dataclass
+> class Task:
+>     task_id: str
+>     input: Any                      # chat turn, document, API payload, etc.
+>     modality: str                   # "chat", "batch", "agent_step", ...
+>     context: Context
+>     constraints: Constraints
+>     objective: ObjectiveSpec
+> 
+> @dataclass
+> class Context:
+>     conversation_summary: str | None
+>     user_profile_refs: list[str]
+>     task_features: dict[str, Any]
+>     available_tools: list[ToolRef]
+>     environment: dict[str, Any]
+> 
+> @dataclass
+> class Outcome:
+>     task_id: str
+>     plan: ExecutionPlan
+>     output: Any
+>     traces: ExecutionTrace
+>     measurements: Measurements
+>     feedback: list[FeedbackEvent]
+> ```
+> 
+> And make feedback extensible:
+> 
+> ```python
+> @dataclass
+> class FeedbackEvent:
+>     source: str             # user, evaluator, unit_test, production_metric...
+>     signal_type: str        # thumbs, rating, correction, success, latency...
+>     value: float | str | bool
+>     confidence: float
+>     metadata: dict
+> ```
+> 
+> A chat thumbs-up becomes one event:
+> 
+> ```python
+> FeedbackEvent(
+>     source="user",
+>     signal_type="thumb",
+>     value=True,
+>     confidence=1.0,
+>     metadata={"turn_id": "..."}
+> )
+> ```
+> 
+> But so can:
+> 
+> - “the user copied this answer into their codebase”;
+> - a test suite pass rate;
+> - whether a generated citation resolves;
+> - whether the user later corrected a factual claim;
+> - expert review;
+> - downstream workflow success;
+> - an evaluator score using a task-specific rubric.
+> 
+> This supports chat first, without making chat feedback a hard architectural constraint.
+> 
+> ---
+> 
+> ## 4. Use a layered decision architecture
+> 
+> I would not start with one giant learned router. Begin with four separable components.
+> 
+> ### A. Task understanding / feature extraction
+> 
+> Infer features such as:
+> 
+> - task family: coding, factual research, creative writing, planning, personal continuity, numerical analysis, etc.;
+> - stakes: low / medium / high;
+> - freshness requirement;
+> - factuality requirement;
+> - need for private context or memory;
+> - whether exactness, citations, or tool execution is needed;
+> - input/output size;
+> - user urgency and budget preference;
+> - ambiguity / likely value of asking a clarifying question.
+> 
+> These features may initially be deterministic rules plus a lightweight classifier. Log them all.
+> 
+> ### B. Candidate-plan generator
+> 
+> Generate a small, diverse set of feasible plans rather than considering the full combinatorial model $\times$ tool configuration space.
+> 
+> Example candidate set:
+> 
+> 1. **Fast direct**: low-cost model, no tools.
+> 2. **Contextual direct**: low-cost model + tightly scoped memory retrieval.
+> 3. **Research**: capable model + web + citation verification.
+> 4. **Code**: code-oriented model + sandbox + tests.
+> 5. **High-assurance**: draft + independent critique/verification.
+> 6. **Clarify first**: ask one focused question.
+> 
+> Use templates / plan families at first. This both makes debugging tractable and stops the learner discovering bizarre expensive pipelines.
+> 
+> ### C. Quality, cost, latency, and risk estimators
+> 
+> Each plan gets predictions conditioned on task features.
+> 
+> Initially these can be simple:
+> 
+> - rolling empirical statistics by task family;
+> - vendor/model benchmarks;
+> - manually maintained priors;
+> - observed cost and latency distributions;
+> - rule-based penalties, e.g. no-web plan on freshness-sensitive question;
+> - tool applicability priors.
+> 
+> Over time, replace or augment them with learned models:
+> 
+> \[
+> \hat Q = f_Q(x, p), \qquad
+> \hat S = f_S(x,p), \qquad
+> \hat C = f_C(x,p), \qquad
+> \hat L = f_L(x,p), \qquad
+> \hat R = f_R(x,p).
+> \]
+> 
+> Crucially, these should return **distributions or intervals**, not just point estimates. Route cautiously when uncertainty is high.
+> 
+> ### D. Constrained policy / selector
+> 
+> Choose the plan maximizing utility, but enforce hard constraints before utility optimization:
+> 
+> ```python
+> feasible = [
+>     p for p in candidates
+>     if p.expected_cost_p95 <= task.constraints.max_cost
+>     and p.expected_latency_p95 <= task.constraints.max_latency
+>     and p.risk_upper_bound <= task.constraints.max_risk
+> ]
+> chosen = max(feasible, key=lambda p: policy.utility(task, p))
+> ```
+> 
+> For high-stakes tasks, do not let a cheap expected score override reliability:
+> 
+> \[
+> \Pr(\mathrm{material\ failure} \mid x,p) < \epsilon
+> \]
+> 
+> or require appropriate verification by policy.
+> 
+> This is much better than pricing risk as a soft term alone.
+> 
+> ---
+> 
+> ## 5. Treat model/tool capability as a prior, continuously calibrated
+> 
+> Your concern about xAI is exactly right. Pure user feedback has selection bias and rewards surface fluency. It also may not reveal errors until much later.
+> 
+> Maintain a **capability registry** that records evidence independently of user thumbs:
+> 
+> ```yaml
+> capability_profile:
+>   provider: xai
+>   model: grok-...
+>   version: ...
+>   task_family: factual_research
+>   quality_prior:
+>     mean: 0.68
+>     uncertainty: 0.10
+>   factuality:
+>     hallucination_rate_estimate: 0.12
+>     benchmark_source: internal_audit_2026q3
+>   strengths:
+>     - informal synthesis
+>     - fast ideation
+>   weaknesses:
+>     - source-grounded factual claims
+>   recommended_requirements:
+>     - web_grounding
+>     - citation_verification
+> ```
+> 
+> Sources for the profile:
+> 
+> 1. **Offline evaluation suite** built from your actual work.
+> 2. Public benchmarks, treated cautiously.
+> 3. Vendor claims, treated more cautiously.
+> 4. Production outcomes, corrected for selection bias.
+> 5. Periodic human audit, especially on high-impact task types.
+> 
+> Your offline suite should be small at first but intentionally representative of your real use:
+> 
+> - R/Python coding and debugging;
+> - climate/IAM analysis and source interpretation;
+> - structured report/table production;
+> - planning and decision analysis;
+> - memory-grounded personal/project continuity;
+> - creative family/D&D tasks;
+> - web-fresh factual research;
+> - adversarial cases where attractive hallucinations are tempting.
+> 
+> For each task, write a rubric, expected properties, and—where possible—objective tests. Version the suite. Run it when you add or change models, prompts, tools, retrieval configurations, or policy logic.
+> 
+> This becomes the system’s epistemic backbone.
+> 
+> ---
+> 
+> ## 6. Learn from feedback with contextual bandits, but only after a strong baseline
+> 
+> The natural online-learning formulation is a **constrained contextual bandit**:
+> 
+> - context: task and user/context features $x$;
+> - action: an execution plan $p$;
+> - reward: a composite, delayed, noisy outcome;
+> - constraints: cost, latency, reliability.
+> 
+> But do **not** jump immediately to fully online reinforcement learning. Start with a transparent policy and logging. Then use bandit-style learning to tune choices within safe plan families.
+> 
+> A practical progression:
+> 
+> ### Phase 1 — Rules + measurement
+> 
+> Hand-write initial routing policies:
+> 
+> - use memory retrieval for requests involving prior decisions, user preferences, projects, or continuation;
+> - use web only where freshness/external verification matters;
+> - use code
+**user**:
+> Can we also roll into this asynchronous operations? I can see multiple uses for this:
+>  - Waiting on tool results (and by extension, kicking off tool result actions that we know we have to wait for).
+>  - If we're going to use a utility-based approach, wouldn't it be nice to have actual forward-looking evaluation-under-uncertainty, where we predict where the conversation will go, and choose the execution path based on it?
+> 
+> The second one is probably too much for now, but it would be nice to allow for this moving forward.
+> 
+> I think the async system should also be able to drop results into the when they're done, rather than just waiting until the next use prompt.
+**assistant**:
+> Yes. I would make asynchrony a first-class part of the abstraction—not an implementation detail of tool calls.
+> 
+> The core should select not just an `ExecutionPlan`, but a **possibly continuing plan**: a graph of work that can yield an immediate response, await dependencies, update durable state, and optionally generate later user-visible follow-ups.
+> 
+> That supports both:
+> 
+> 1. **Parallel/deferred tool work**: retrieval, web, code, long-running jobs, scheduled monitoring.
+> 2. **Value-of-information planning**: decide whether it is worth doing work now because it is likely to improve this or likely future turns.
+> 
+> The second can remain mostly dormant initially, but the data model should support it from day one.
+> 
+> ---
+> 
+> # 1. Add a durable asynchronous work layer
+> 
+> Distinguish these concepts:
+> 
+> | Concept | Meaning |
+> |---|---|
+> | **Plan** | The intended workflow selected by the policy |
+> | **Operation** | An individual executable unit: tool call, model call, evaluator, job |
+> | **Artifact** | Durable output of an operation: retrieved records, source bundle, code result, model draft |
+> | **Dependency** | An operation/artifact another operation needs |
+> | **Continuation** | Work triggered once dependencies resolve |
+> | **Subscription / watch** | A rule that reacts to future events or artifact completion |
+> | **Conversation state** | The durable, versioned state the next turn—or a later async update—can use |
+> 
+> A tool call should not fundamentally return “text.” It should create an operation and eventually produce typed artifacts.
+> 
+> ```python
+> @dataclass
+> class Operation:
+>     operation_id: str
+>     task_id: str
+>     conversation_id: str | None
+> 
+>     kind: str                         # "tool", "model", "evaluation", "workflow"
+>     spec: dict                        # tool/model + arguments + configuration
+>     state: Literal[
+>         "queued", "running", "succeeded",
+>         "failed", "cancelled", "expired"
+>     ]
+> 
+>     depends_on: list[str]             # artifact or operation IDs
+>     idempotency_key: str | None
+>     priority: int
+>     deadline_at: datetime | None
+>     budget: BudgetReservation
+> 
+>     visibility: Literal[
+>         "internal",                  # never displayed directly
+>         "context_only",              # updates usable state
+>         "notify_user",               # may create a visible update
+>         "approval_required",         # user must authorize follow-on action
+>     ]
+> 
+>     created_at: datetime
+> ```
+> 
+> ```python
+> @dataclass
+> class Artifact:
+>     artifact_id: str
+>     operation_id: str
+>     kind: str                         # search_results, memory_hits, code_output...
+>     content_ref: str                  # object store / DB reference
+>     summary: str | None
+>     provenance: Provenance
+>     quality: QualityMetadata
+>     expires_at: datetime | None
+> ```
+> 
+> This allows everything—retrieval, web search, an expensive simulation, model critique, and an offline evaluator—to be handled uniformly.
+> 
+> ---
+> 
+> # 2. Represent execution as a DAG, not a serial tool loop
+> 
+> The policy should construct a small **workflow DAG**.
+> 
+> For example, a fresh factual research question might become:
+> 
+> ```text
+>                  ┌─────────────────┐
+>                  │ memory.retrieve │
+>                  └────────┬────────┘
+>                           │
+> User turn ───────┬────────┴────────┐
+>                  │                 │
+>            ┌─────▼─────┐     ┌─────▼─────┐
+>            │ web.search│     │ task.class │
+>            └─────┬─────┘     └───────────┘
+>                  │
+>            ┌─────▼──────────┐
+>            │ source.extract │
+>            └─────┬──────────┘
+>                  │
+>         ┌────────▼────────┐
+>         │ answer.synthesis │
+>         └────────┬────────┘
+>                  │
+>         ┌────────▼─────────┐
+>         │ claim verification│
+>         └────────┬─────────┘
+>                  │
+>               response
+> ```
+> 
+> Independent operations begin immediately and concurrently. Dependent work begins when its required artifacts are ready.
+> 
+> This avoids an expensive pattern where a model sequentially decides:
+> 
+> 1. retrieve memory;
+> 2. wait;
+> 3. web search;
+> 4. wait;
+> 5. inspect sources;
+> 6. wait;
+> 7. write answer.
+> 
+> Instead, the planner can know in advance that retrieval and search are likely necessary and launch them in parallel.
+> 
+> ## A useful operation API
+> 
+> At the orchestration level, operations should be future-like:
+> 
+> ```python
+> memory_future = ops.submit(
+>     "memory.retrieve",
+>     query=task.query,
+>     config={"top_k": 8, "collections": ["projects", "preferences"]},
+> )
+> 
+> web_future = ops.submit(
+>     "web.search",
+>     query=task.query,
+>     config={"max_results": 6, "trusted_sources_only": True},
+> )
+> 
+> answer_future = ops.submit(
+>     "model.generate",
+>     model="openai:gpt-...",
+>     inputs={
+>         "task": task,
+>         "memory": memory_future,
+>         "sources": web_future,
+>     },
+>     depends_on=[memory_future, web_future],
+> )
+> ```
+> 
+> The important point is that a dependent operation refers to artifacts/futures rather than forcing the calling code to block.
+> 
+> Underneath, this can use your preferred pattern of mapping requests to promises and resolving them via `Promise.all()` when *that particular operation* requires all of them. But the system-level abstraction should be an event-driven job/workflow system, not merely a collection of in-process promises.
+> 
+> ---
+> 
+> # 3. Support three response strategies: wait, provisional, and deferred
+> 
+> For a chat interaction, the policy should be able to choose among three patterns.
+> 
+> ## A. Wait for the complete answer
+> 
+> Use when the expected wait is short and results are essential.
+> 
+> ```text
+> User asks → run required operations concurrently → synthesize → respond once
+> ```
+> 
+> Appropriate for normal retrieval, short code execution, and fast web lookups.
+> 
+> ## B. Give a provisional answer, then improve it
+> 
+> Use when the system can offer something genuinely helpful now but a slow operation is likely to add value.
+> 
+> ```text
+> User asks
+>   → launch slow research / computation
+>   → return: “My initial view is X. I’m checking Y and Z.”
+>   → publish update if the results materially change or strengthen the answer
+> ```
+> 
+> This needs strong product discipline: do not create noisy “I found something!” follow-ups. The initial response must be clearly labelled as preliminary if material facts remain unresolved.
+> 
+> ## C. Acknowledge and defer
+> 
+> Use when doing the work before answering would exceed the latency budget and a partial answer would be misleading.
+> 
+> ```text
+> “I’ll investigate this and report back.”
+> ```
+> 
+> Then persist the work and deliver a later result.
+> 
+> This is especially appropriate for long-running computations, document ingestion, periodic searches, multi-model audits, or anything that should continue even if the browser/client disconnects.
+> 
+> ---
+> 
+> # 4. “Drop results in” should mean state updates first, visible messages second
+> 
+> I think your instinct is right: completed async work should not have to wait uselessly for the next user prompt.
+> 
+> But there are two distinct destinations:
+> 
+> 1. **The system’s durable conversation/workspace state**
+> 2. **The user-visible chat stream**
+> 
+> Every completed operation should be eligible to update the first. Only some should update the second.
+> 
+> ## A. Durable state injection
+> 
+> When an operation completes, write a versioned state patch:
+> 
+> ```python
+> @dataclass
+> class StatePatch:
+>     scope: Literal["turn", "conversation", "project", "user_memory"]
+>     target_id: str
+>     patch: list[JsonPatchOp]
+>     provenance: Provenance
+>     confidence: float
+>     write_policy: Literal["append", "replace", "propose_for_review"]
+> ```
+> 
+> For example, a retrieval process might add:
+> 
+> ```json
+> {
+>   "scope": "conversation",
+>   "patch": [
+>     {
+>       "op": "add",
+>       "path": "/working_artifacts/research/2026-08-12/sources",
+>       "value": {
+>         "artifact_id": "art_123",
+>         "summary": "Five primary sources on ...",
+>         "status": "ready"
+>       }
+>     }
+>   ]
+> }
+> ```
+> 
+> The next model invocation automatically sees relevant ready artifacts through the context assembler.
+> 
+> This is what I would mean by “drop results into the conversation”: **put them into an explicit state/artifact layer associated with the conversation**, not silently splice arbitrary new text into the immutable transcript.
+> 
+> Why avoid transcript mutation?
+> 
+> - It destroys a clean audit trail.
+> - It can confuse models about who said what and when.
+> - It makes stale results look current.
+> - It creates prompt-injection and provenance problems.
+> - It can overwrite or conflict with newer user intent.
+> 
+> Instead, preserve an append-only event history and construct the model’s context from:
+> 
+> ```text
+> - canonical user/assistant transcript
+> - current task state
+> - eligible completed artifacts
+> - active plans / outstanding operations
+> - selected durable memories
+> ```
+> 
+> ## B. User-visible asynchronous updates
+> 
+> A result can create a visible assistant follow-up only under an explicit **delivery policy**.
+> 
+> ```python
+> @dataclass
+> class DeliveryPolicy:
+>     mode: Literal[
+>         "never",
+>         "on_material_result",
+>         "on_completion",
+>         "on_user_request",
+>         "digest"
+>     ]
+>     materiality_threshold: float
+>     quiet_hours: TimeWindow | None
+>     require_user_opt_in: bool
+>     max_updates_per_conversation: int
+> ```
+> 
+> For example:
+> 
+> - **Never**: background retrieval that merely prepares later context.
+> - **On material result**: a fact-check contradicts a preliminary answer.
+> - **On completion**: user explicitly asked “research this and get back to me.”
+> - **Digest**: a recurring watch/search sends one consolidated update daily or weekly.
+> - **On user request**: work completes silently, but is ready the moment the user asks.
+> 
+> A visible update should be an ordinary new assistant message with an explicit relationship to the originating turn:
+> 
+> ```python
+> @dataclass
+> class AsyncAssistantMessage:
+>     reply_to_turn_id: str
+>     operation_ids: list[str]
+>     artifact_ids: list[str]
+>     message: str
+>     reason_for_delivery: str
+>     provisional_answer_superseded: bool
+> ```
+> 
+> For example:
+> 
+> > **Update to my earlier answer:** I checked the primary sources, and one point needs correction: …  
+> > The rest of the recommendation still stands.
+> 
+> That is much safer and more legible than silently rewriting the earlier response.
+> 
+> ---
+> 
+> # 5. Add an event bus and a state reducer
+> 
+> Architecturally, I would introduce an append-only event log plus workers.
+> 
+> ```text
+> Chat/API/UI
+>     │
+>     ▼
+> Task creation ──► Policy/planner ──► Workflow DAG
+>     │                                      │
+>     ▼                                      ▼
+> Event log ◄──────── operation workers / tool adapters
+>     │
+>     ├── State reducer ──► conversation/project/user state
+>     ├── Context indexer ─► artifacts available to future model calls
+>     ├── Continuation scheduler
+>     ├── Delivery service ─► chat websocket / notification / email
+>     └── Learning logger ─► policy-training dataset
+> ```
+> 
+> Representative events:
+> 
+> ```text
+> task.created
+> plan.selected
+> operation.queued
+> operation.started
+> operation.completed
+> operation.failed
+> artifact.created
+> state.patch.proposed
+> state.patch.applied
+> continuation.triggered
+> message.delivered
+**user**:
+> I think you got cut-off, but let's get started. Can you begin by providing the "API" for this new abstraction, for the context of a chat? Keep it as simple as possible. Include also the model and tool configuration API, so I can make sure that's in good shape, and then we'll dig into the implementation.
+**assistant**:
+> Below is a compact API for a chat-oriented system with asynchronous operations, durable artifacts/state, configurable models/tools, and a policy that selects plans. It is intentionally general enough to reuse outside chat.
+> 
+> ```python
+> from dataclasses import dataclass, field
+> from datetime import datetime
+> from typing import Any, Literal, Protocol
+> ```
+> 
+> # 1. Chat task and outcome
+> 
+> A chat turn creates a `Task`. The policy chooses an `ExecutionPlan`; execution produces a response plus durable artifacts and measurements.
+> 
+> ```python
+> @dataclass
+> class ChatTask:
+>     task_id: str
+>     conversation_id: str
+>     turn_id: str
+> 
+>     user_message: str
+>     conversation_context: dict[str, Any] = field(default_factory=dict)
+> 
+>     # Product constraints, possibly supplied by user/UI/defaults.
+>     max_cost_usd: float | None = None
+>     max_latency_s: float | None = None
+>     requires_fresh_information: bool = False
+>     requires_high_assurance: bool = False
+> 
+>     created_at: datetime | None = None
+> ```
+> 
+> ```python
+> @dataclass
+> class ChatResponse:
+>     message: str
+>     artifact_ids: list[str] = field(default_factory=list)
+>     operation_ids: list[str] = field(default_factory=list)
+> 
+>     # Makes an initial response's status legible to the user/UI.
+>     status: Literal["final", "provisional"] = "final"
+> ```
+> 
+> ```python
+> @dataclass
+> class FeedbackEvent:
+>     task_id: str
+>     source: Literal["user", "evaluator", "test", "system"]
+>     kind: str                         # "thumb", "rating", "correction", "citation_check", ...
+>     value: Any                        # True/False, numeric score, structured result
+>     metadata: dict[str, Any] = field(default_factory=dict)
+>     created_at: datetime | None = None
+> ```
+> 
+> A thumbs-up is simply:
+> 
+> ```python
+> FeedbackEvent(
+>     task_id="task_123",
+>     source="user",
+>     kind="thumb",
+>     value=True,
+> )
+> ```
+> 
+> ---
+> 
+> # 2. Plans: what the policy selects
+> 
+> The policy selects a plan—not just a model. A plan can specify models, tool configurations, verification, budgets, and follow-up behavior.
+> 
+> ```python
+> @dataclass
+> class ToolCall:
+>     tool_name: str
+>     arguments: dict[str, Any]
+>     call_config: dict[str, Any] = field(default_factory=dict)
+> ```
+> 
+> ```python
+> @dataclass
+> class VerificationPolicy:
+>     mode: Literal[
+>         "none",
+>         "self_check",
+>         "claim_check",
+>         "independent_review",
+>     ] = "none"
+> 
+>     # May be a model ID or a configured evaluator name.
+>     reviewer: str | None = None
+> ```
+> 
+> ```python
+> @dataclass
+> class DeliveryPolicy:
+>     mode: Literal[
+>         "never",               # Store result, but do not message user.
+>         "on_material_result",  # Notify only if it changes/adds meaningful value.
+>         "on_completion",       # Notify whenever this work finishes.
+>         "on_user_request",     # Store silently until user asks.
+>         "digest",              # Bundle updates later.
+>     ] = "never"
+> 
+>     max_updates: int = 1
+>     materiality_threshold: float = 0.5
+> ```
+> 
+> ```python
+> @dataclass
+> class ExecutionPlan:
+>     plan_id: str
+>     task_id: str
+> 
+>     primary_model: str
+>     initial_tools: list[ToolCall] = field(default_factory=list)
+> 
+>     verification: VerificationPolicy = field(default_factory=VerificationPolicy)
+>     delivery: DeliveryPolicy = field(default_factory=DeliveryPolicy)
+> 
+>     max_cost_usd: float | None = None
+>     max_latency_s: float | None = None
+> 
+>     # Whether the planner should wait for required operations before replying.
+>     response_strategy: Literal[
+>         "wait",
+>         "provisional_then_continue",
+>         "defer",
+>     ] = "wait"
+> 
+>     rationale: str | None = None       # Logged for observability/debugging.
+> ```
+> 
+> Examples:
+> 
+> ```python
+> # Cheap direct answer.
+> ExecutionPlan(
+>     plan_id="...",
+>     task_id="...",
+>     primary_model="openai:gpt-5-mini",
+> )
+> ```
+> 
+> ```python
+> # Personalized answer using configured memory retrieval.
+> ExecutionPlan(
+>     plan_id="...",
+>     task_id="...",
+>     primary_model="gemini:flash",
+>     initial_tools=[
+>         ToolCall(
+>             tool_name="memory.retrieve",
+>             arguments={"query": "How should I prioritize my current projects?"},
+>             call_config={
+>                 "collections": ["projects", "preferences"],
+>                 "top_k": 8,
+>                 "min_score": 0.60,
+>                 "reranker": "cross_encoder_v2",
+>             },
+>         ),
+>     ],
+> )
+> ```
+> 
+> ```python
+> # Fresh/high-assurance factual answer.
+> ExecutionPlan(
+>     plan_id="...",
+>     task_id="...",
+>     primary_model="openai:gpt-5",
+>     initial_tools=[
+>         ToolCall(
+>             tool_name="openai.web_search",
+>             arguments={"query": "..."},
+>             call_config={"max_results": 8, "trusted_sources_only": True},
+>         ),
+>     ],
+>     verification=VerificationPolicy(
+>         mode="claim_check",
+>         reviewer="openai:gpt-5-mini",
+>     ),
+> )
+> ```
+> 
+> ---
+> 
+> # 3. Durable asynchronous work: operations and artifacts
+> 
+> An `Operation` is a unit of executable work. It may be a tool invocation, model call, evaluator, or workflow. Its output is represented by one or more durable `Artifact`s.
+> 
+> ```python
+> @dataclass
+> class BudgetReservation:
+>     max_cost_usd: float | None = None
+>     max_tokens: int | None = None
+>     max_latency_s: float | None = None
+> ```
+> 
+> ```python
+> @dataclass
+> class Operation:
+>     operation_id: str
+>     task_id: str
+>     conversation_id: str | None
+> 
+>     kind: Literal[
+>         "tool",
+>         "model",
+>         "evaluation",
+>         "workflow",
+>         "human_review",
+>     ]
+>     spec: dict[str, Any]
+> 
+>     state: Literal[
+>         "queued",
+>         "running",
+>         "succeeded",
+>         "failed",
+>         "cancelled",
+>         "expired",
+>     ] = "queued"
+> 
+>     # IDs of operations or artifacts which must resolve first.
+>     depends_on: list[str] = field(default_factory=list)
+> 
+>     idempotency_key: str | None = None
+>     priority: int = 0
+>     deadline_at: datetime | None = None
+>     budget: BudgetReservation | None = None
+> 
+>     visibility: Literal[
+>         "internal",            # No context or user-visible effect by default.
+>         "context_only",        # Result becomes available to future model calls.
+>         "notify_user",        # May produce an async user update.
+>         "approval_required",  # Cannot take follow-on action without approval.
+>     ] = "context_only"
+> 
+>     created_at: datetime | None = None
+>     started_at: datetime | None = None
+>     completed_at: datetime | None = None
+>     error: str | None = None
+> ```
+> 
+> ```python
+> @dataclass
+> class Provenance:
+>     source: str                        # model ID, tool name, URI, user, etc.
+>     created_at: datetime
+>     parent_artifact_ids: list[str] = field(default_factory=list)
+>     metadata: dict[str, Any] = field(default_factory=dict)
+> ```
+> 
+> ```python
+> @dataclass
+> class QualityMetadata:
+>     confidence: float | None = None
+>     evaluator_scores: dict[str, float] = field(default_factory=dict)
+>     is_stale: bool = False
+> ```
+> 
+> ```python
+> @dataclass
+> class Artifact:
+>     artifact_id: str
+>     operation_id: str
+> 
+>     kind: str                          # "search_results", "memory_hits", "model_response", ...
+>     content_ref: str                   # Object-store or database reference.
+>     summary: str | None = None
+> 
+>     provenance: Provenance | None = None
+>     quality: QualityMetadata | None = None
+>     expires_at: datetime | None = None
+> ```
+> 
+> An operation can expose a future reference before it finishes:
+> 
+> ```python
+> @dataclass(frozen=True)
+> class OperationFuture:
+>     operation_id: str
+> ```
+> 
+> ---
+> 
+> # 4. Execution API
+> 
+> This is the API used by the policy/planner to create an asynchronous workflow.
+> 
+> ```python
+> class OpsAPI(Protocol):
+>     def submit(
+>         self,
+>         *,
+>         task_id: str,
+>         conversation_id: str | None,
+>         kind: Literal["tool", "model", "evaluation", "workflow", "human_review"],
+>         spec: dict[str, Any],
+>         depends_on: list[str | OperationFuture] | None = None,
+>         visibility: Literal[
+>             "internal",
+>             "context_only",
+>             "notify_user",
+>             "approval_required",
+>         ] = "context_only",
+>         priority: int = 0,
+>         deadline_at: datetime | None = None,
+>         budget: BudgetReservation | None = None,
+>         idempotency_key: str | None = None,
+>     ) -> OperationFuture:
+>         """Queue work and return a durable reference immediately."""
+>         ...
+> 
+>     def await_artifacts(
+>         self,
+>         futures: list[OperationFuture],
+>         *,
+>         timeout_s: float | None = None,
+>     ) -> dict[str, Artifact]:
+>         """Wait for successful primary artifacts of the given operations."""
+>         ...
+> 
+>     def get_operation(self, operation_id: str) -> Operation:
+>         ...
+> 
+>     def get_artifact(self, artifact_id: str) -> Artifact:
+>         ...
+> 
+>     def cancel(self, operation_id: str) -> None:
+>         ...
+> ```
+> 
+> Example: concurrent retrieval and web research, followed by synthesis.
+> 
+> ```python
+> memory = ops.submit(
+>     task_id=task.task_id,
+>     conversation_id=task.conversation_id,
+>     kind="tool",
+>     spec={
+>         "tool_name": "memory.retrieve",
+>         "arguments": {"query": task.user_message},
+>         "call_config": {"top_k": 6, "collections": ["projects", "preferences"]},
+>     },
+> )
+> 
+> web = ops.submit(
+>     task_id=task.task_id,
+>     conversation_id=task.conversation_id,
+>     kind="tool",
+>     spec={
+>         "tool_name": "openai.web_search",
+>         "arguments": {"query": task.user_message},
+>         "call_config": {"max_results": 6},
+>     },
+> )
+> 
+> answer = ops.submit(
+>     task_id=task.task_id,
+>     conversation_id=task.conversation_id,
+>     kind="model",
+>     depends_on=[memory, web],
+>     spec={
+>         "model_id": "openai:gpt-5",
+>         "inputs": {
+>             "task": task.user_message,
+>             "memory_operation": memory.operation_id,
+>             "web_operation": web.operation_id,
+>         },
+>     },
+> )
+> ```
+> 
+> The synthesis operation does not begin until its dependencies succeed, but the retrieval and search operations can execute in parallel.
+> 
+> ---
+> 
+> # 5. Durable conversation and workspace state
+> 
+> Do not mutate the canonical chat transcript when async work finishes. Store completed work in explicit, versioned state; the context builder can include relevant state in the next model invocation.
+> 
+> ```python
+> @dataclass
+> class StatePatch:
+>     scope: Literal[
+>         "turn",
+>         "conversation",
+>         "project",
+>         "user_memory",
+>     ]
+>     target_id: str
+> 
+>     # RFC 6902 JSON Patch operations.
+>     patch: list[dict[str, Any]]
+> 
+>     provenance: Provenance
+>     confidence: float = 1.0
+**user**:
+> I think this is way too much. The top-level API should abstract away from all this stuff. For example,
+> ```
+> Planner.register_model(chatwrap.gemini, "gemini-2.5-flash", 2.5, 0.7) # 2.5 is cost / million tokens; 0.7 is its prior quality score; latency would be observed; object passed to register_model assumed to have a stream_response function.
+> Planner.register_model(chatwrap.openaigpt, 'gpt-5.4-nano', 0.5, 1.0)
+> 
+> Planner.register_tool("perform a google scholar search and retrieve review PDFs for information relevant to a prompt", lambda prompt: ...)
+> Planner.register_tool("create an image, based on a prompt", lambda prompt: ...)
+> 
+> planner = Planner(conversation_id)
+> completion = planner.chat_response(messages)
+> ...
+> async_completion = planner.poll()
+> if async_completion:
+>     ...
+> ...
+> planner.vote_up(response_id)
+> ```
+> (I'm having async material polled, since the interface is a webpage and I'm not too familiar with push sockets.)
+**assistant**:
+> Yes—this is the right top-level shape. Keep the public API as a **small chat facade**; hide plans, operations, artifacts, and routing internals behind it.
+> 
+> I’d make registration global/shared, and `Planner(conversation_id)` a lightweight per-conversation handle.
+> 
+> ```python
+> from planner import Planner, ToolConfig
+> 
+> # model_adapter must provide:
+> # async stream_response(messages, *, tools=None, config=None) -> AsyncIterator[str]
+> Planner.register_model(
+>     chatwrap.gemini,
+>     model_id="gemini-2.5-flash",
+>     cost_per_million_tokens=2.5,
+>     quality_prior=0.70,
+> )
+> 
+> Planner.register_model(
+>     chatwrap.openaigpt,
+>     model_id="gpt-5.4-nano",
+>     cost_per_million_tokens=0.5,
+>     quality_prior=1.00,
+> )
+> ```
+> 
+> Tools have a natural-language description for planning, a callable, and optional configurable parameters. The planner learns both *whether* to use a tool and appropriate configuration settings.
+> 
+> ```python
+> Planner.register_tool(
+>     name="scholar_search",
+>     description=(
+>         "Perform a Google Scholar search and retrieve relevant review PDFs "
+>         "for information needed to answer the prompt."
+>     ),
+>     fn=lambda prompt, config: scholar_search(prompt, **config),
+>     config=ToolConfig(
+>         defaults={"max_results": 5, "reviews_only": True},
+>         options={
+>             "max_results": [3, 5, 10],
+>             "reviews_only": [True, False],
+>             "year_from": [None, 2015, 2020],
+>         },
+>     ),
+>     quality_prior=0.85,
+>     cost_estimate=0.02,
+> )
+> 
+> Planner.register_tool(
+>     name="image_generation",
+>     description="Create an image based on a prompt.",
+>     fn=lambda prompt, config: create_image(prompt, **config),
+>     config=ToolConfig(defaults={"size": "1024x1024"}),
+>     quality_prior=0.80,
+>     cost_estimate=0.04,
+> )
+> ```
+> 
+> Then the chat API can stay very small:
+> 
+> ```python
+> planner = Planner(conversation_id="conv_123")
+> 
+> response = await planner.chat_response(
+>     messages,
+>     max_cost_usd=0.10,
+>     max_latency_s=8,
+> )
+> 
+> print(response.id)
+> print(response.text)
+> print(response.status)  # "final" or "provisional"
+> ```
+> 
+> `chat_response()` returns the best answer available within the latency budget. If it has started useful background work—slow research, verification, image generation, etc.—it may return a `provisional` response.
+> 
+> Polling returns completed asynchronous updates, if any:
+> 
+> ```python
+> updates = await planner.poll()
+> 
+> for update in updates:
+>     print(update.id)
+>     print(update.text)
+>     print(update.reply_to_response_id)
+>     print(update.kind)       # "research_update", "correction", "image", ...
+>     print(update.artifacts)  # optional URLs/attachments/structured outputs
+> ```
+> 
+> For the webpage, poll every few seconds while the conversation is open. Completed work is persisted against `conversation_id`, so a reload or later visit does not lose it.
+> 
+> Feedback remains equally simple:
+> 
+> ```python
+> planner.vote_up(response.id)
+> planner.vote_down(response.id, reason="incorrect")
+> 
+> # Optional richer signals later:
+> planner.feedback(
+>     response.id,
+>     kind="correction",
+>     value="The cited paper was not actually a review article.",
+> )
+> ```
+> 
+> The one additional method I would include immediately is inspection/debugging:
+> 
+> ```python
+> planner.explain(response.id)
+> # {
+> #   "model": "gemini-2.5-flash",
+> #   "tools": [{"name": "scholar_search", "config": {"max_results": 5}}],
+> #   "estimated_cost_usd": 0.031,
+> #   "estimated_latency_s": 4.2,
+> #   "reason": "fresh, source-sensitive research question"
+> # }
+> ```
+> 
+> Internally, `chat_response()` chooses and launches a plan; `poll()` merely retrieves newly completed, user-deliverable results. That keeps the interface simple while leaving room for sophisticated asynchronous planning later.
+**user**:
+> Great, I think we're on the same page.
+> 
+> I'm not sure if I should use "await" at this level. Don't I then have to use `async with` and all of my code gets infected with async stuff? Why not just make `planner.chat_response` blocking, and handle async stuff internally?
+> 
+> Oh, I think I also need a call to find out how many async processes on ongoing, and maybe something about them.
+> 
+> And I don't think I want to think of latency as a hard budget. More latency means less utility, but it might be worth it.
+> 
+> If you're on board with this, I think I would like to create a simplified version of the system. The simplified version could be based on a "model selector" class I built before, which uses feedback to select between a collection of models. Here's the current version of the class:
+> ```
+> import time, copy, random
+> from . import budget
+> 
+> class BayesSelector:
+>     def __init__(self, responders, debug=False):
+>         # Responders should be a list of objects each with allowed(), cost(messages), and chat_response(messages) methods
+>         self.responders = responders
+>         self.successes = {responder: 0 for responder in responders}
+>         self.failures = {responder: 0 for responder in responders}
+>         self.totaltime = {responder: 1 for responder in responders}
+>         self.tokentime = {responder: 1e3 for responder in responders}
+>         self.last_responder = None
+>         self.debug = debug
+> 
+>     def _weighted_probability(self, responder, tokens):
+>         # Calculate a weighted probability of success based on past performance and cost.
+>         # Success probability with Laplace smoothing.
+>         success_prob = (self.successes[responder] + 1) / (self.successes[responder] + self.failures[responder] + len(self.responders))
+>         totalcost = responder.cost(tokens, 4096) + tokens * (self.totaltime[responder] / self.tokentime[responder]) / 60. # $1 / minute
+>         
+>         return success_prob / totalcost
+> 
+>     def chat_response(self, messages, max_tokens=None):
+>         if self.debug:
+>             prefix = " ".join([message['role'][0] + ":" + str(len(message['content'])) for message in messages[:-1]])
+>             print(prefix + "\n" + messages[-1]['role'] + ": " + messages[-1]['content'])
+>         
+>         tokens = budget.chat_tokens(messages)
+> 
+>         # Select responder based on weighted success probability over cost
+>         probabilities = [(self._weighted_probability(responder, tokens) if responder.allowed(tokens) else 0) for responder in self.responders]
+> 
+>         while sum(probabilities) > 0:
+>             total_probability = sum(probabilities)
+>             scaled_probabilities = [prob / total_probability for prob in probabilities]
+>         
+>             selected_responder = random.choices(self.responders, weights=scaled_probabilities)[0]
+>         
+>             self.last_responder = selected_responder
+>             try:
+>                 before = time.time()
+>                 response = selected_responder.chat_response(messages, max_tokens=max_tokens)
+>                 after = time.time()
+>             except Exception as ex:
+>                 ## Problem with this responder; try another one
+>                 print(f"Failed to call {selected_responder}.")
+>                 probabilities[self.responders.index(selected_responder)] = 0
+>                 continue
+> 
+>             self.totaltime[selected_responder] += after - before
+>             self.tokentime[selected_responder] += tokens
+> 
+>             if self.debug:
+>                 print("assistant: " + response)
+>         
+>             return response
+> 
+>     def success(self):
+>         if self.last_responder is not None:
+>             self.successes[self.last_responder] += 1
+> 
+>     def failure(self):
+>         if self.last_responder is not None:
+>             self.failures[self.last_responder] += 1
+> 
+>     def copy(self):
+>         # Create a deep copy of the object, including a copy of successes and failures
+>         return copy.deepcopy(self)
+> 
+>     def __str__(self):
+>         return "\n".join(
+>             f"{responder}: Successes={self.successes[responder]}, Failures={self.failures[responder]}, Time / Token={self.totaltime[responder] / self.tokentime[responder]}"
+>             for responder in self.responders)
+> ```
+> 
+> This one doesn't do streaming, but I think what I want for this first-step implementation is:
+>  - We need a "stream_response" which works just like "chat_response" but calls "stream_response on the responders.
+>  - Then, we make a full Planner object which allows all of these calls, but which ignores tools and just passes the stream_response, success, and failure calls to BayesSelector.
+**assistant**:
+> Yes, I’m on board.
+> 
+> At this layer, make the API synchronous. `planner.chat_response()` blocks; `planner.stream_response()` returns a normal Python iterator; internal background work can use threads/processes/queues later. You do **not** need `async with`; `await` would require your callers to run in an async context, which is unnecessary for this first version.
+> 
+> Also: treat latency as a utility penalty, not a hard constraint. Your existing conversion of seconds into equivalent dollars is a reasonable initial policy.
+> 
+> I would make the first implementation:
+> 
+> - extend `BayesSelector` with `stream_response()`;
+> - wrap it in `Planner`;
+> - have `Planner` issue response IDs and map them to the selected responder;
+> - expose inert-but-forward-compatible async inspection methods.
+> 
+> ## Minimal `BayesSelector.stream_response`
+> 
+> Add this method (and optionally factor selection into a helper later):
+> 
+> ```python
+> def stream_response(self, messages, max_tokens=None):
+>     """Return a blocking iterator of streamed text chunks."""
+>     if self.debug:
+>         prefix = " ".join(
+>             m["role"][0] + ":" + str(len(m["content"]))
+>             for m in messages[:-1]
+>         )
+>         print(prefix + "\n" + messages[-1]["role"] + ": " + messages[-1]["content"])
+> 
+>     tokens = budget.chat_tokens(messages)
+>     probabilities = [
+>         self._weighted_probability(responder, tokens)
+>         if responder.allowed(tokens) else 0
+>         for responder in self.responders
+>     ]
+> 
+>     while sum(probabilities) > 0:
+>         total = sum(probabilities)
+>         selected = random.choices(
+>             self.responders,
+>             weights=[p / total for p in probabilities],
+>         )[0]
+> 
+>         self.last_responder = selected
+>         before = time.time()
+> 
+>         try:
+>             stream = selected.stream_response(messages, max_tokens=max_tokens)
+>         except Exception:
+>             print(f"Failed to start stream from {selected}.")
+>             probabilities[self.responders.index(selected)] = 0
+>             continue
+> 
+>         def measured_stream():
+>             try:
+>                 for chunk in stream:
+>                     yield chunk
+>             except Exception:
+>                 # Cannot safely switch models after visible output has begun.
+>                 # Record failure through vote_down / explicit instrumentation.
+>                 raise
+>             finally:
+>                 elapsed = time.time() - before
+>                 self.totaltime[selected] += elapsed
+>                 self.tokentime[selected] += tokens
+> 
+>         return measured_stream()
+> 
+>     raise RuntimeError("No responder was available.")
+> ```
+> 
+> Each responder now supports:
+> 
+> ```python
+> responder.chat_response(messages, max_tokens=None) -> str
+> responder.stream_response(messages, max_tokens=None) -> Iterator[str]
+> ```
+> 
+> `stream_response()` itself returns quickly, but each `next()` call blocks until its next chunk arrives.
+> 
+> ## Minimal `Planner`
+> 
+> ```python
+> import uuid
+> from dataclasses import dataclass
+> 
+> @dataclass
+> class Response:
+>     id: str
+>     text: str
+>     model: str | None = None
+> 
+> @dataclass
+> class StreamResponse:
+>     id: str
+>     chunks: object          # Iterator[str]
+>     model: str | None = None
+> 
+>     def __iter__(self):
+>         return iter(self.chunks)
+> 
+> 
+> class Planner:
+>     def __init__(self, conversation_id, selector):
+>         self.conversation_id = conversation_id
+>         self.selector = selector
+>         self.response_responders = {}
+> 
+>     def chat_response(self, messages, max_tokens=None):
+>         text = self.selector.chat_response(messages, max_tokens=max_tokens)
+> 
+>         response_id = str(uuid.uuid4())
+>         responder = self.selector.last_responder
+>         self.response_responders[response_id] = responder
+> 
+>         return Response(
+>             id=response_id,
+>             text=text,
+>             model=str(responder),
+>         )
+> 
+>     def stream_response(self, messages, max_tokens=None):
+>         chunks = self.selector.stream_response(messages, max_tokens=max_tokens)
+> 
+>         response_id = str(uuid.uuid4())
+>         responder = self.selector.last_responder
+>         self.response_responders[response_id] = responder
+> 
+>         return StreamResponse(
+>             id=response_id,
+>             chunks=chunks,
+>             model=str(responder),
+>         )
+> 
+>     def vote_up(self, response_id):
+>         responder = self.response_responders.get(response_id)
+>         if responder is not None:
+>             self.selector.successes[responder] += 1
+> 
+>     def vote_down(self, response_id):
+>         responder = self.response_responders.get(response_id)
+>         if responder is not None:
+>             self.selector.failures[responder] += 1
+> 
+>     # Forward-compatible async API: no background tasks in v1.
+>     def poll(self):
+>         return []
+> 
+>     def ongoing(self):
+>         return []
+> 
+>     def async_status(self):
+>         return {
+>             "count": 0,
+>             "operations": [],
+>         }
+> ```
+> 
+> Usage:
+> 
+> ```python
+> planner = Planner(conversation_id, selector)
+> 
+> stream = planner.stream_response(messages)
+> for chunk in stream:
+>     send_chunk_to_browser(chunk)
+> 
+> planner.vote_up(stream.id)
+> ```
+> 
+> Later, `ongoing()` can return lightweight records such as `{id, description, started_at, status}`, and `poll()` can return completed background responses—without changing the chat-facing API.
+**user**:
+> Perfect. Now, I'm going to want to work on the rest of this later. Could you provide complete notes on our plan for the initial full version of this Planner-- that is, the one that allows models and tools to be registered, which uses the models and tools intelligently, evaluates their success, latency, budgetary implications, learns best parameters, stores its state of learning of the systems, and does it all behind a simplified abstraction?
+> 
+> Oh, and make sure that as we progress, we are updating the messages stream with an internal awareness of things. For example, I see that Claude "loads" certain functionalities, and I imagine that some of this loading is updating the system message with considerations that only upon deciding to use a tool become relevant.
+> 
+> When I pick this back up later, I'm going to kick things off with these notes, so try to make them complete but succinct, with all the relevant ideas but no more of the implementation details than are necessary to conform to our main abstraction interface (so, only API implementation notes, since the "backend" implementation would only start to be constructed at that point).
+**assistant**:
+> # Planner: Initial Full Version Notes
+> 
+> ## Purpose
+> 
+> `Planner` is a simplified, chat-first abstraction over multiple LLM services/models and tools.
+> 
+> Given a dialogue, it selects an **execution plan**—a model and, where useful, configured tools—to maximize expected *trustworthy user utility*, balancing:
+> 
+> - likelihood of a positive user outcome;
+> - independent quality/reliability expectations;
+> - dollar cost;
+> - latency;
+> - uncertainty and occasional exploration.
+> 
+> The public API remains synchronous and simple. Async work is internal and accessed through polling.
+> 
+> ---
+> 
+> ## 1. Public API
+> 
+> ### Registration
+> 
+> Models and tools are registered once in a shared registry.
+> 
+> ```python
+> Planner.register_model(
+>     adapter,
+>     model_id="gemini-2.5-flash",
+>     cost_per_million_tokens=2.5,
+>     quality_prior=0.70,
+> )
+> ```
+> 
+> A registered model adapter is expected to provide:
+> 
+> ```python
+> adapter.chat_response(messages, max_tokens=None) -> str
+> adapter.stream_response(messages, max_tokens=None) -> Iterator[str]
+> adapter.allowed(tokens) -> bool
+> ```
+> 
+> `allowed(tokens)` supports context-window, quota, provider-health, and other availability constraints.
+> 
+> Tools are registered with a human/model-readable description, callable, and optional configurable parameters:
+> 
+> ```python
+> Planner.register_tool(
+>     name="scholar_search",
+>     description=(
+>         "Perform a Google Scholar search and retrieve relevant review PDFs "
+>         "for information needed to answer the prompt."
+>     ),
+>     fn=scholar_search,
+>     config={
+>         "defaults": {"max_results": 5, "reviews_only": True},
+>         "options": {
+>             "max_results": [3, 5, 10],
+>             "reviews_only": [True, False],
+>             "year_from": [None, 2015, 2020],
+>         },
+>     },
+>     quality_prior=0.85,
+>     cost_estimate=0.02,
+> )
+> ```
+> 
+> Tool configuration is a first-class decision variable. For memory retrieval, this includes collections, filters, $k$, score threshold, reranking, token budget, and summarization strategy.
+> 
+> ### Conversation-level interface
+> 
+> ```python
+> planner = Planner(conversation_id="...")
+> ```
+> 
+> ```python
+> response = planner.chat_response(messages, max_tokens=None)
+> ```
+> 
+> ```python
+> stream = planner.stream_response(messages, max_tokens=None)
+> for chunk in stream:
+>     ...
+> ```
+> 
+> ```python
+> planner.vote_up(response_id)
+> planner.vote_down(response_id)
+> ```
+> 
+> Responses:
+> 
+> ```python
+> @dataclass
+> class Response:
+>     id: str
+>     text: str
+>     model: str | None
+> 
+> @dataclass
+> class StreamResponse:
+>     id: str
+>     chunks: Iterator[str]
+>     model: str | None
+> ```
+> 
+> The response ID maps feedback to the actual selected execution plan, rather than relying on a mutable `last_responder`.
+> 
+> ### Forward-compatible async API
+> 
+> All top-level calls remain blocking/synchronous. No `await`, `async with`, or async-infected application code is required.
+> 
+> ```python
+> planner.poll() -> list
+> planner.ongoing() -> list
+> planner.async_status() -> dict
+> ```
+> 
+> - `poll()` returns newly completed user-deliverable async updates.
+> - `ongoing()` returns lightweight active-work records, e.g. ID, description, status, elapsed time.
+> - `async_status()` returns summary counts/status for UI display.
+> - In the first minimal implementation these can return `[]`, `[]`, and `{"count": 0, "operations": []}`.
+> 
+> Later, internal workers may perform tool calls, verification, long research, image generation, monitoring, etc. Completed results are persisted to conversation state and made available through `poll()`.
+> 
+> ---
+> 
+> ## 2. Execution Plans / Responders
+> 
+> The planner should select an entire **execution plan**, not merely a model.
+> 
+> Initially, a `Responder` can remain the practical unit of selection:
+> 
+> ```python
+> responder.chat_response(messages, max_tokens=None) -> str
+> responder.stream_response(messages, max_tokens=None) -> Iterator[str]
+> responder.allowed(tokens) -> bool
+> responder.cost(prompt_tokens, completion_tokens) -> float
+> ```
+> 
+> Over time, a responder represents a complete plan such as:
+> 
+> - `gpt-5-mini`, direct response;
+> - Gemini Flash plus personal-memory retrieval;
+> - OpenAI model plus web search and citation checking;
+> - code-focused model plus execution/testing;
+> - draft model plus independent reviewer;
+> - model plus a specific configured tool setting.
+> 
+> This makes model choice, tool choice, and tool parameters jointly selectable and learnable.
+> 
+> To avoid a combinatorial explosion, plans should initially come from a limited set of explicit templates/families rather than arbitrary model-tool combinations.
+> 
+> ---
+> 
+> ## 3. Selection and Utility
+> 
+> The initial selector can build on `BayesSelector`.
+> 
+> It estimates a responder’s expected value from:
+> 
+> - observed thumbs-up/down outcomes;
+> - model/tool quality priors;
+> - estimated token costs;
+> - observed latency;
+> - availability constraints;
+> - uncertainty / limited experience.
+> 
+> A useful conceptual score is:
+> 
+> \[
+> U(p \mid x)
+> =
+> w_s \hat S(p,x)
+> +
+> w_q \hat Q(p,x)
+> -
+> w_c \hat C(p,x)
+> -
+> w_l \hat L(p,x)
+> -
+> w_r \hat R(p,x)
+> +
+> w_e \hat E(p,x)
+> \]
+> 
+> Where:
+> 
+> - $p$: execution plan / responder;
+> - $x$: request context and inferred task type;
+> - $\hat S$: predicted user satisfaction;
+> - $\hat Q$: independent quality estimate;
+> - $\hat C$: expected cost;
+> - $\hat L$: expected latency;
+> - $\hat R$: reliability/failure risk;
+> - $\hat E$: value of exploration under uncertainty.
+> 
+> For the initial version, this can be approximated by the existing weighted sampling approach:
+> 
+> \[
+> \text{weight}
+> \propto
+> \frac{\text{smoothed success probability} \times \text{quality prior}}
+> {\text{expected direct cost} + \text{latency converted to equivalent cost}}
+> \]
+> 
+> Latency is a **soft utility penalty**, not normally a hard budget. A slower plan may be worthwhile when it meaningfully improves quality.
+> 
+> `budget.chat_tokens(messages)` estimates prompt-token use. Completion-token assumptions should be configurable and eventually learned from observed completions.
+> 
+> Selection remains probabilistic rather than always greedy, allowing safe exploration of under-tested responders. Exploration should be constrained for high-stakes task categories.
+> 
+> ---
+> 
+> ## 4. Feedback, Evaluation, and Anti-Goodhart Safeguards
+> 
+> Thumbs are the primary chat satisfaction signal:
+> 
+> - `vote_up(response_id)` increments success evidence for the selected plan.
+> - `vote_down(response_id)` increments failure evidence.
+> - Feedback is attributed to the response’s recorded plan, including relevant configuration.
+> 
+> But thumbs must not become the sole notion of quality. A low-cost, fluent, hallucination-prone system can otherwise win despite producing less trustworthy answers.
+> 
+> Maintain separate evidence for:
+> 
+> 1. **User satisfaction**: thumbs, ratings, corrections, edits, follow-up behavior.
+> 2. **Quality**: task-specific evaluators, tests, rubric-based judging, source checks.
+> 3. **Reliability/risk**: factuality audits, unsupported-claim rates, calibration, failure history.
+> 4. **Cost and latency**: observed measurements, not provider estimates alone.
+> 
+> Each model/tool/plan begins with priors. Priors may be informed by internal offline evaluation, benchmarks, and expert judgment, but must be calibrated against actual usage.
+> 
+> Build and version a modest internal evaluation suite representing real work: research, coding, numerical/technical analysis, project continuity/memory, planning, writing, and source-grounded factual tasks. Use objective tests where possible.
+> 
+> The planner should apply stronger quality/reliability expectations to high-stakes or freshness-sensitive requests, and prefer grounding/verification plans where appropriate.
+> 
+> ---
+> 
+> ## 5. Learning Tool Parameters
+> 
+> Tool configuration is not static metadata; it is part of the plan.
+> 
+> Examples:
+> 
+> - memory retrieval: collection choice, top-$k$, threshold, reranker, context-token allowance;
+> - web/search: number of queries/results, recency filter, source whitelist, extraction depth;
+> - code: runtime environment, test strategy, timeout;
+> - image generation: size, style, model, iteration count;
+> - model configuration: temperature, reasoning budget, output contract.
+> 
+> The planner learns which configurations perform best for task/context classes. Initially this can be done by registering a small number of discrete configuration variants as separate responders/plans. Later it can use contextual parameter optimization.
+> 
+> Avoid learning arbitrary high-dimensional settings from sparse thumb data; use bounded option sets, strong defaults, and offline evaluation.
+> 
+> ---
+> 
+> ## 6. Internal Awareness and Dynamic Message Construction
+> 
+> The canonical user/assistant transcript should remain intact and auditable. Before invoking a selected plan, the planner builds an **effective message stream** by adding internal context/messages appropriate to that plan.
+> 
+> This is how capabilities are “loaded” only when relevant.
+> 
+> Examples of injected system/developer-level instructions:
+> 
+> - tool-specific usage instructions and result formats;
+> - tool availability and constraints;
+> - retrieved memory or research artifacts;
+> - source-grounding/citation requirements;
+> - output contracts, e.g. concise answer first, three bullets, structured JSON, word limit;
+> - verification requirements;
+> - awareness of outstanding or completed asynchronous work;
+> - task-specific quality standards.
+> 
+> For example, selecting a scholar-search plan may inject instructions about using retrieved reviews, distinguishing sources from inference, and citing claims. Selecting a memory plan may inject retrieved records and instructions to treat them as potentially stale/private context.
+> 
+> The planner—not the user-visible transcript—owns these internal additions. All injected context should have provenance, scope, and relevance controls to avoid irrelevant retrieval, stale information, or prompt-injection contamination.
+> 
+> ---
+> 
+> ## 7. Streaming
+> 
+> `stream_response()` mirrors `chat_response()` but returns a normal blocking iterator.
+> 
+> The selector chooses the responder before streaming begins. It records latency when the stream completes or fails.
+> 
+> If a stream fails before visible output, the selector may retry another responder. Once text has been shown to the user, it should not silently switch models; surface or log the failure instead.
+> 
+> Feedback for a streamed response is associated with the response ID created before the first chunk is returned.
+> 
+> ---
+> 
+> ## 8. State and Persistence
+> 
+> Learning state must ultimately be durable and shared, rather than held only in one process’s memory.
+> 
+> Persist at least:
+> 
+> - registered model/tool/plan versions;
+> - successes/failures and quality/risk evidence;
+> - observed cost, token use, latency, and failures;
+> - response-to-plan attribution;
+> - configuration performance;
+> - conversation state and async operation records;
+> - evaluation outcomes and feedback events.
+> 
+> Use model/tool/configuration version identifiers. Provider model behavior changes, prompts evolve, and tools are revised; past evidence should not be blindly attributed to a materially changed plan.
+> 
+> The initial `BayesSelector` may retain in-memory dictionaries, but its state shape should be designed for later persistence to a database or key-value store.
+> 
+> ---
+> 
+> ## 9. Async Direction
+> 
+> Async is internal infrastructure, not required in ordinary calling code.
+> 
+> Eventually, a selected plan may:
+> 
+> - launch multiple independent tools concurrently;
+> - wait for essential results before responding;
+> - return a provisional response while continuing research/verification;
+> - persist completed artifacts to conversation state;
+> - expose completed user-visible updates through `poll()`.
+> 
+> Async results should update explicit conversation/workspace state, not silently rewrite old messages. If an update is user-visible, it should be a new assistant message clearly linked to the originating response.
+> 
+> The initial full Planner can support registration and tool-aware plan selection before implementing all background execution machinery.
+> 
+> ---
+> 
+> ## 10. Development Sequence
+> 
+> 1. Extend `BayesSelector` with `stream_response()`.
+> 2. Implement synchronous `Planner` wrapper with response IDs and vote attribution.
+> 3. Add durable selector

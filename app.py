@@ -6,16 +6,16 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from openai import OpenAI
 from dotenv import load_dotenv
-from whoosh.index import open_dir
-from whoosh import qparser
 import numpy as np
 from pypdf import PdfReader
 
-from chatwrap import gemini, chatlog
+from chatwrap import chatlog
 import memory
 import memory.default, memory.integration_short_term
 import utils
 from utils import create_chat, fillin_training_end, chat_tokens, chat_tokens_each, chat_tokens_one
+from planner import memory_tool
+from planner.Planner import Planner, PlannerContext
 
 app = Flask(__name__)
 
@@ -25,6 +25,8 @@ client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 user_id = "jar"
 
 break_streaming = False
+
+Planner.register_tool(**memory_tool.tool_info)
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -52,54 +54,53 @@ def stream(input_text, past_messages, log_filename, history_text="",
     break_streaming = False
     print(input_text)
 
-    print(f"Memory: {custom_userid}")
-    
-    messages = create_chat(input_text, past_messages, history_text=history_text, custom_system=custom_system)
-    
-    print(len(messages))
-    if len(messages) < 4:
+    if custom_model:
+        messages = create_chat(input_text, past_messages, history_text=history_text, custom_system=custom_system)
+        
         if custom_model == 'cheap':
             model = 'gpt-5-nano'
         elif custom_model:
             model = custom_model
-        else:
-            chatlen = chat_tokens(messages)
-            model = 'gpt-5-nano'
-
+            
         fillin_training_end(messages, model)
         print(model)
         completion = client.chat.completions.create(model=model, messages=messages,
-                                                  stream=True, max_completion_tokens=max(2500, min(4096, chat_tokens_one(input_text) + 500)), temperature=1)
+                                                    stream=True, max_completion_tokens=3000,
+                                                    temperature=1, verbosity="low")
+
+        response = ""
+        for line in completion:
+            if line.choices[0].delta.content:
+                token = line.choices[0].delta.content
+                response += token
+                yield token
+            if break_streaming:
+                break
     else:
-        if not custom_model or custom_model == 'cheap':
-            model = 'gpt-5-nano'
-        else:
-            model = custom_model
+        messages = create_chat(input_text, past_messages, custom_system=custom_system)
 
-        if custom_model:
-            fillin_training_end(messages, model)
-            completion = client.chat.completions.create(model=model, messages=messages,
-                                                      stream=True, max_completion_tokens=2500, temperature=1)
-        else:
-            try:
-                fillin_training_end(messages, model)
-                completion = client.chat.completions.create(model=model, messages=messages,
-                                                          stream=True, max_completion_tokens=2500, temperature=1)
-            except openai.error.InvalidRequestError as ex:
-                if model == 'gpt-5.6-luna':
-                    raise ex
-                fillin_training_end(messages, 'gpt-5.6-luna')
-                completion = client.chat.completions.create(model='gpt-5.6-luna', messages=messages,
-                                                          stream=True, max_completion_tokens=2500, temperature=1)
+        memory_user_id = custom_userid or user_id
+    
+        planner_context = PlannerContext(
+            user_id_for_memory=memory_user_id,
+            history_list_raw_data=history_text,
+        )
 
-    response = ""
-    for line in completion:
-        if line.choices[0].delta.content:
-            token = line.choices[0].delta.content
+        planner = Planner(conversation_id=log_filename)
+
+        response_stream = planner.stream_response(
+            messages,
+            max_tokens=3000 if len(messages) < 4 else 2500,
+            context=planner_context,
+        )
+
+        response = ""
+        for token in response_stream:
             response += token
             yield token
-        if break_streaming:
-            break
+            if break_streaming:
+                break
+            
     messages.append({"role": "assistant", "content": response})
         
     ## Write all out to logs
@@ -167,25 +168,7 @@ def completion_api(custom_system=None, custom_model=None, custom_context=""):
     if custom_context:
         history_text = custom_context
     else:
-        print("Loading LTM...")
-        ltm = memory.default.create_long_term()
-        print("Loading STM...")
-        stm = memory.integration_short_term.build_memory_block(ltm, user_id=myuser_id,
-                                                               input_text=input_text, past_messages=past_messages)
-        histchoice = random.choice(["history", "gemini", "none"])
-        if histchoice == 'history':
-            print("Memory: History List")
-            history_text = data.get('history', '')
-            if history_text:
-                history_text = history_text.replace("\n\n", "\n").replace("\n\n", "\n")
-                history_text = stm + "\n\nBelow are selected log entries of past conversations. They may have no bearing on the chat.\n" + history_text
-        elif histchoice == 'gemini':
-            print("Memory: Gemini Helper")
-            results = get_logs_raw(input_text)
-            history_text = gemini.single_prompt("The following query has been submitted to a super-intelligent AI assistant named Arachne, which you support as a memory system:\n===\n" + input_text + (("\n===\nHere is the previous response from Arachne:\n===\n" + past_messages[-1]['content']) if len(past_messages) > 0 else "") + "\n===\nHere are outputs from an automated memory system:\n===\n" + stm + "\n===\nAnd the following past discussion synopses have been retrieved, which may relate to this query:\n===\n" + "\n===\n".join([result['path'][9:19] + ' ' + result['path'][20:28].replace('-', ':') + ': ' + result['content'] for result in results]) + "\n===\nPlease excerpt relevant memory items and summarize any history entries that are relevant to the query.")
-        else:
-            print("Memory: Short-term Only")
-            history_text = stm
+        history_text = data.get('history', '')
 
     return stream(input_text, past_messages, data['log_filename'], history_text,
                   custom_system=custom_system, custom_model=custom_model, custom_userid=(myuser_id if myuser_id != user_id else None))
@@ -207,40 +190,14 @@ def completion_custom():
 
 ## Log Management
 
-def get_logs_raw(query=None):
-    if query:
-        ix = open_dir("database/whoosh")
-        with ix.searcher() as searcher:
-            og = qparser.OrGroup.factory(0.9)
-            qp = qparser.QueryParser("content", ix.schema, group=og)
-            qp.add_plugin(qparser.FuzzyTermPlugin())
-            parsed = qp.parse(query)
-            results = searcher.search(parsed, limit=10)
-
-            allres = []
-            for result in results:
-                with open(os.path.join("database", result['path'])) as fp:
-                    allres.append(dict(path=result['path'], line=result['line'], content=fp.read()))
-
-            return allres
-    else:
-        ## Get the last 10 lines from running.log
-        size = os.path.getsize("database/logs/running.log")
-        with open("database/logs/running.log", 'rb') as fp:
-            if size > 2048:
-                fp.seek(-2048, 2)
-            lines = fp.readlines()[1:][-10:]
-
-        return [dict(path='running.log', line=line.decode(), content=line) for line in lines]
-
 @app.route('/get-logs',  methods=['GET', 'POST'])
 def get_logs():
     if request.method == "POST":
         query = request.form['query']
-        results = get_logs_raw(query)
+        results = utils.get_logs_raw(query)
         lines = [result['path'][9:19] + ' ' + result['path'][20:28].replace('-', ':') + ': ' + result['line'] for result in results]
     else:
-        results = get_logs_raw()
+        results = utils.get_logs_raw()
         lines = [result['line'] for result in results]
     print(results)
         

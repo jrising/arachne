@@ -1,0 +1,48 @@
+**user**:
+> I have two tables with multiple identifying columns. Here's one table:
+> ```
+> > head(df)
+> # A tibble: 6 × 15
+>   `Author(s)`   Year DOI                          Outcome        `Time Period`  GSAT Adaptation Region  Impact    SD `Low Quantile` `Low Value` `High Quantile` `High Value` Bucket          
+>   <chr>        <dbl> <chr>                        <chr>                  <dbl> <dbl> <chr>      <chr>    <dbl> <dbl>          <dbl>       <dbl>           <dbl>        <dbl> <chr>           
+> 1 Stoerk et al  2025 DOI: 10.1126/science.adu7392 Tipping points          2050   1.7 None       US-Wide  -0.07    NA              5       -0.41              95         0.35 2050 1.3 - 1.7 C
+> 2 Stoerk et al  2025 DOI: 10.1126/science.adu7392 Tipping points          2100   1.8 None       US-Wide  -0.4     NA              5       -1.03              95         0.14 2100 1.7 - 2.1 C
+> 3 Stoerk et al  2025 DOI: 10.1126/science.adu7392 Tipping points          2050   2   None       US-Wide   0.07    NA              5       -0.43              95         0.36 2050 1.7 - 2.1 C
+> 4 Stoerk et al  2025 DOI: 10.1126/science.adu7392 Tipping points          2100   2.7 None       US-Wide  -0.53    NA              5       -1.4               95         0.09 2100 2.4 - 3.0 C
+> 5 Stoerk et al  2025 DOI: 10.1126/science.adu7392 Tipping points          2100   3.2 None       US-Wide   0.55    NA              5       -1.46              95         0.1  2100 3.2 - 4.0 C
+> 6 Dinan         2017 <NA>                         Hurricanes              2017   1.4 None       <NA>      0.16    NA             NA       NA                 NA        NA    2025 (any)      
+> ```
+> 
+> The other looks identical, but all of its Impact, ..., `High Value` columns are inferred. I want to now combine them, so that I get all of these rows, plus any rows from the inferred data frame where the Bucket column is not present in this "real values" dataset. How do I do that?
+**assistant**:
+> Use an `anti_join()` to retain only inferred rows whose `Bucket` does not occur in the real-data table, then append those to the real data.
+> 
+> ```r
+> library(dplyr)
+> 
+> combined_df <- bind_rows(
+>   df,
+>   inferred_df %>%
+>     anti_join(df %>% distinct(Bucket), by = "Bucket")
+> )
+> ```
+> 
+> This gives you:
+> 
+> - every row in `df` (the real values); and
+> - rows from `inferred_df` only for `Bucket`s entirely absent from `df`.
+> 
+> If `Bucket` is only unique *within* other identifiers—for example, an `Outcome` may have the same Bucket as another Outcome—join on the full identifying key instead:
+> 
+> ```r
+> id_cols <- c("Author(s)", "Year", "DOI", "Outcome",
+>              "Time Period", "GSAT", "Adaptation", "Region", "Bucket")
+> 
+> combined_df <- bind_rows(
+>   df,
+>   inferred_df %>%
+>     anti_join(df %>% distinct(across(all_of(id_cols))), by = id_cols)
+> )
+> ```
+> 
+> That second approach is generally safer if `Bucket` labels such as `"2050 1.3 - 1.7 C"` recur for different outcomes or studies.

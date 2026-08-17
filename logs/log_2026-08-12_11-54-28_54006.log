@@ -1,0 +1,157 @@
+**user**:
+> I've had continued problems with the new OpenAI models that they tend to drone on a bit and as a result they don't finish up within the "max_completion_tokens" that I specify. Here is my normal call line:
+> ```
+> completion = client.chat.completions.create(model=model, messages=messages,
+>                                                   stream=True, max_completion_tokens=max(2500, min(4096, chat_tokens_one(input_text) + 500)), temperature=1)
+> ```
+> My system message includes the line "Answer as directly as possible, or ask for clarification.", but that doesn't seem to do it for the new models. What else can I do to encourage the model to finish up in the space alotted?
+**assistant**:
+> A few things are likely interacting here:
+> 
+> 1. **`max_completion_tokens` is a hard ceiling, not a target.** Newer reasoning-capable models may spend part of it on hidden reasoning, leaving too little for the visible answer.
+> 2. **“Answer directly” is weak and qualitative.** Give a concrete response budget and priority order.
+> 3. **`temperature=1` encourages variation**, including occasional expansive answers. For a production assistant, I’d use roughly `0.2–0.5`.
+> 4. Your budget currently scales with *input* length, rather than the amount of output you actually want. Those are usually different decisions.
+> 
+> ## 1. Add an explicit response contract
+> 
+> Put something like this in a developer/system instruction, ideally near the end so it is salient:
+> 
+> ```text
+> Response policy:
+> - Default to a concise, self-contained answer.
+> - Lead with the answer or recommendation; do not write a preamble or recap the question.
+> - Use at most 350 words unless the user explicitly requests detail.
+> - Prefer short paragraphs and bullets over exhaustive discussion.
+> - Do not expose chain-of-thought or narrate your process.
+> - If the task cannot be completed within the response budget, provide the most useful completed answer first, then state the single most important limitation or clarification needed.
+> - End on a complete sentence; never promise to continue in a later message.
+> ```
+> 
+> For especially short interactions, use a tighter bound:
+> 
+> ```text
+> Unless asked otherwise, answer in <= 150 words and <= 6 bullets.
+> ```
+> 
+> A word count or number-of-bullets constraint tends to work better than asking it to “be concise.” I would avoid saying “use fewer than N tokens”; models are much less reliable at estimating tokens.
+> 
+> ## 2. Use the model’s native controls where available
+> 
+> For models that support them, set:
+> 
+> ```python
+> reasoning_effort="low",
+> verbosity="low",
+> ```
+> 
+> The exact availability is model/API-version dependent, but these are much better levers than prompt wording alone:
+> 
+> - `reasoning_effort="low"` reduces internal deliberation, which matters because reasoning tokens can count against `max_completion_tokens`.
+> - `verbosity="low"` asks for less elaborate visible prose.
+> 
+> For example:
+> 
+> ```python
+> completion = client.chat.completions.create(
+>     model=model,
+>     messages=messages,
+>     stream=True,
+>     max_completion_tokens=3000,
+>     temperature=0.3,
+>     reasoning_effort="low",  # if supported by this model
+>     verbosity="low",         # if supported by this model
+> )
+> ```
+> 
+> If the model does not accept these parameters, omit them rather than trying to emulate them with malformed prompt syntax.
+> 
+> ## 3. Decouple output allowance from input size
+> 
+> This part of your current expression is probably counterproductive:
+> 
+> ```python
+> chat_tokens_one(input_text) + 500
+> ```
+> 
+> A long user message does not necessarily warrant a long answer. Instead, choose a desired answer class, for example:
+> 
+> ```python
+> MAX_COMPLETION = {
+>     "short": 1200,
+>     "normal": 2500,
+>     "detailed": 5000,
+> }[response_mode]
+> ```
+> 
+> Then pair it with an instruction matched to that mode:
+> 
+> ```python
+> brevity_instruction = {
+>     "short": "Answer in at most 150 words.",
+>     "normal": "Answer in at most 400 words unless detail is essential.",
+>     "detailed": "Be thorough, but prioritize a clear conclusion and avoid repetition.",
+> }[response_mode]
+> ```
+> 
+> For reasoning models, if you need, say, a reliable 300–500-token visible answer, a total completion cap of only 1,000–1,500 can be fragile. Either use low reasoning effort, allow a larger total cap, or use a non-reasoning model for routine conversational tasks.
+> 
+> ## 4. Make the answer robust to truncation
+> 
+> Ask for the conclusion first:
+> 
+> ```text
+> State the recommendation or direct answer first. Add justification only afterward.
+> ```
+> 
+> This does not prevent a length cutoff, but it ensures the useful part arrives before it.
+> 
+> For complex tasks, a useful pattern is:
+> 
+> ```text
+> Give:
+> 1. A direct answer in 3–5 bullets.
+> 2. Only then, brief caveats or implementation details.
+> ```
+> 
+> ## 5. Inspect whether the cutoff is actually reasoning-token pressure
+> 
+> Log `finish_reason` and usage. If you see `finish_reason == "length"` often, inspect the completion token breakdown where your API/model provides it—especially reasoning tokens. With streaming, request usage in the final stream event if supported:
+> 
+> ```python
+> stream_options={"include_usage": True}
+> ```
+> 
+> If many tokens are reasoning tokens, prompt changes alone will not fully solve it; lower `reasoning_effort`, increase the total cap, or use a model/configuration intended for low-latency direct answers.
+> 
+> ## My practical default
+> 
+> I’d start here:
+> 
+> ```python
+> messages = [
+>     {
+>         "role": "developer",
+>         "content": """Response policy:
+> Answer the user's question directly and self-containedly.
+> Lead with the conclusion or recommendation; no preamble or recap.
+> Default to <= 350 words and <= 8 bullets unless the user explicitly asks for detail.
+> Avoid repetition, exhaustive edge cases, and process narration.
+> If space is limited, prioritize a complete useful answer over caveats.
+> End with a complete sentence; do not promise a continuation."""
+>     },
+>     *messages,
+> ]
+> 
+> completion = client.chat.completions.create(
+>     model=model,
+>     messages=messages,
+>     stream=True,
+>     max_completion_tokens=3000,
+>     temperature=0.3,
+>     reasoning_effort="low",  # if supported
+>     verbosity="low",         # if supported
+> )
+> ```
+> 
+> The key change is: **tell it what a satisfactory short answer looks like, use low verbosity/reasoning where supported, and treat total completion budget as separate from desired visible answer length.**

@@ -1,7 +1,37 @@
+mathjaxTimeout = null;
+
+const md = window.markdownit({
+    html: true, // Enable HTML tags in the source
+    linkify: true, // Auto-convert URLs to links
+    breaks: true,      // Convert '\n' in paragraphs into <br/>
+    typographer: true, // Enable some language-neutral replacements + quotes beautification
+    highlight: function (str, lang) {
+	if (lang && hljs.getLanguage(lang)) {
+	    try {
+		return hljs.highlight(str, { language: lang }).value;
+	    } catch (__) {}
+	}
+	return ''; // Use the external default escaping
+    },
+});
+
+function myrender(htmltext, outputdiv) {
+    outputdiv.innerHTML = md.render(htmlDecode(htmltext));
+    clearTimeout(mathjaxTimeout);
+    mathjaxTimeout = setTimeout(() => {
+        if (window.MathJax && window.MathJax.typesetPromise) {
+            // Typeset only the newly appended content box asynchronously
+            MathJax.typesetPromise([outputdiv]).catch((err) => console.log(err));
+        } else {
+	    console.log("Not loaded.");
+	}
+    }, 150);
+}
+
 function addToResponse(text, temp, temprend) {
     const atBottom = isAtBottom();
     temp.innerHTML += htmlEscape(text);
-    temprend.innerHTML = md.render(htmlDecode(temp.innerHTML));
+    myrender(temp.innerHTML, temprend);
     if (atBottom)
 	scrollToBottom();
 }
@@ -40,20 +70,6 @@ function htmlEscape(str) {
         .replace(/>/g, '&gt')   
         .replace(/</g, '&lt');
 }
-
-const md = window.markdownit({
-    html: true, // Enable HTML tags in the source
-    linkify: true, // Auto-convert URLs to links
-    typographer: true, // Enable some language-neutral replacements + quotes beautification
-    highlight: function (str, lang) {
-	if (lang && hljs.getLanguage(lang)) {
-	    try {
-		return hljs.highlight(str, { language: lang }).value;
-	    } catch (__) {}
-	}
-	return ''; // Use the external default escaping
-    },
-});
 
 completion_route = "/completion";
 
