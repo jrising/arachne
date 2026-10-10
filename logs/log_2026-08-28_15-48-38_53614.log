@@ -1,0 +1,786 @@
+**user**:
+> We've discussed my stock prediction system before. I would now like to create a kind of genetic-algorithm-inspired population of prediction models, to make it easier to have continuous improvement. Here's the idea:
+> 
+> At any time, there are 10 algorithms in the pool. These are each a Julia script, function, package, or object (I'm not sure what would be best).
+> 
+> When it's time to run a prediction, all 10 algorithms are run. All of their individual predictions are recorded, and then when the actual values are observed, their success it measured.
+> 
+> We calculate scores for each algorithm, using my normal method used to weight different algorithms. Then (1) we randomly draw an algorithm weighted by the scores; (2) mutate it; (3) run it to make sure it completes successfully and store its results in our prediction file; (4) if it runs successfully, we use it to replace the lowest scoring algorithm.
+> 
+> I would also like to put a time constraint on the algorithms. Like 1 minute for now.
+> 
+> Before we implement this, do you have any thoughts on the design? By the way, this is actually the system I'm going to use with you, and you'll be the one proposing mutated algorithms.
+**assistant**:
+> This is a good framework, but I’d make it an **evolutionary online model-selection system** rather than immediately treating runtime success as fitness.
+> 
+> Key design choices:
+> 
+> 1. **Use isolated Julia scripts/processes** initially. Each model implements a tiny standard interface, e.g. `predict(context, nday) -> Dict{String, Float64}`. Run each in a fresh subprocess with a 60-second wall-clock timeout, memory limit if practical, and no network access. This prevents one model from contaminating state or crashing the pool.
+> 
+> 2. **Version everything.** Store each model’s source, parent model ID, mutation description, package/environment manifest, random seed, runtime, predictions, and code hash. A “model” is really an immutable version; pool slots point to versions.
+> 
+> 3. **Separate validity from quality.** A mutant that completes successfully is merely *eligible*. Replacing the worst incumbent immediately on successful execution will cause random drift toward untested models. Better:
+>    - Create one challenger from a score-weighted parent.
+>    - Validate it on historical walk-forward dates and current prediction generation.
+>    - Give it a probationary slot or compare it against the weakest model over a fixed number of newly resolved prediction rounds.
+>    - Replace only if its out-of-sample score clears a threshold.
+> 
+> 4. **Score on strictly pre-registered predictions.** Write predictions with an immutable timestamp before outcomes are known, then resolve them later. This is the central defense against accidental look-ahead and evolutionary overfitting.
+> 
+> 5. **Use smoothed, uncertainty-aware selection.** With only 10 models and noisy financial outcomes, raw scores can be unstable. Draw parents using a softened distribution—e.g. softmax of normalized rolling scores, with a nonzero exploration floor—rather than letting one recent winner monopolize reproduction.
+> 
+> 6. **Keep diversity deliberately.** Avoid ten variants of the same momentum model. Tag models by family/features/horizon and cap close relatives, or reserve 1–2 “exploration” slots. Preserve a permanent archive of retired strong models so evolution cannot forget useful approaches.
+> 
+> 7. **Maintain an untouched evaluation stream.** Since I will propose mutations, repeated adaptation to the same historical test set is a real risk. Use walk-forward validation for development, but retain a delayed or quarantined evaluation period for promotion decisions.
+> 
+> I would start with **10 slots: 8 incumbents, 1 challenger/probationer, 1 protected baseline**. The protected baseline might be a simple regularized momentum/mean-reversion ensemble; it ensures the system always has a sanity benchmark.
+> 
+> For mutation, I can propose structured changes—feature additions, parameter changes, alternative loss functions, horizon blending, regime gates, or ensemble combinations—rather than arbitrary code edits. This should make evolution interpretable and auditable.
+**user**:
+> I think this all makes sense, but I actually think that internet access is important. You might want your algorithm to grab news feeds, for example, to better make predictions. And once we have that, you can't really isolate a candidate from the data under a back-casting exercise. So, I think we need to just keep the candidates around and let them predict like the others. And at that point, they end up just like the others, and the only difference is that we have 10 + #candidates slots.
+> 
+> Here's the scoring algorithm, which I was thinking of reusing for the purpose of weighting models here:
+> ```
+> interval_logscore <- function(predprice, low, high, sigma_floor=0.01) {
+>   x <- log(predprice[is.finite(predprice) & predprice > 0])
+>   if (length(x) < 2 || !is.finite(low) || !is.finite(high) || low <= 0 || high <= 0)
+>     return(NA_real_)
+> 
+>   mu <- mean(x)
+>   sigma <- max(sd(x), sigma_floor)
+> 
+>   p <- pnorm(log(max(low, high)), mu, sigma) -
+>        pnorm(log(min(low, high)), mu, sigma)
+> 
+>   log(max(p, 1e-12))
+> }
+> 
+> allrows <- data.frame()
+> results <- data.frame()
+> for (histfile in list.files("data")) {
+>     df.hist <- tryCatch({
+>         read.csv(file.path("data", histfile))
+>     }, error=function(e) {
+>         logwarn("eval.R", paste("Cannot read file", file.path("data", histfile)))
+>         NULL
+>     })
+>     if (is.null(df.hist))
+>         next
+>     df.hist$histdate <- as.Date(df.hist$timestamp)
+>     df.hist$ticker <- ifelse(df.hist$ticker == T, "T",
+>                       ifelse(df.hist$ticker == F, "F", df.hist$ticker))
+> 
+>     df.combo <- data.frame()
+>     for (projfile in list.files("projs")) {
+>         df.proj <- read.csv(file.path("projs", projfile))
+> 
+>         print(c(histfile, projfile))
+> 
+>         rows <- df.proj %>% filter(Ticker == df.hist$ticker[1]) %>%
+>             mutate(projdate=as.Date(ISOdate(as.numeric(substring(projfile, 1, 4)),
+>                                             as.numeric(substring(projfile, 5, 6)),
+>                                             as.numeric(substring(projfile, 7, 8))))) %>%
+>             pivot_longer(cols=3:9) %>%
+>             mutate(foredate=as.Date(ISOdate(as.numeric(substring(name, 2, 5)),
+>                                             as.numeric(substring(name, 7, 8)),
+>                                             as.numeric(substring(name, 10, 11))))) %>%
+>             left_join(df.hist, by=c('foredate'='histdate')) %>%
+>             mutate(ahead=foredate - projdate) %>%
+>             group_by(Algorithm, projdate, ahead) %>%
+>             mutate(npreds=sum(!is.na(open)),
+>                    nuniqs=length(unique(value))) %>%
+>             filter(npreds > 0 & nuniqs > 3)
+> 
+>         if (nrow(rows) > 0) {
+>             allrows <- rbind(allrows, rows)
+>             rows2 <- rows %>%
+>                 group_by(Algorithm, projdate, ahead) %>%
+>                 summarize(
+>                     npreds = sum(is.finite(value)),
+>                     logskill = interval_logscore(value, first(low), first(high)),
+>                     .groups = "drop"
+>                 ) %>%
+>                 filter(npreds >= 5, is.finite(logskill))
+> 
+>             df.combo <- rbind(df.combo, rows2)
+>         }
+>     }
+> 
+>     if (nrow(df.combo) > 0) {
+>         df.combo2 <- df.combo %>%
+>             filter(npreds > 0) %>%
+>             mutate(howold=Sys.Date() - projdate) %>%
+>             group_by(Algorithm, ahead) %>%
+>             summarize(npreds=sum(npreds) / 5,
+>                       skill=sum((logskill / npreds) * exp(-as.numeric(howold) / 365.25)))
+> 
+>         results <- rbind(results, cbind(ticker=df.hist$ticker[1], df.combo2))
+>     }
+> }
+> 
+> results2 <- results %>% group_by(ticker, Algorithm) %>%
+>     summarize(npreds=sum(npreds), skill=sum(skill))
+> ```
+> That is then a smoothed, uncertainty-aware selection.
+**assistant**:
+> Yes: allow candidates to join the live pool and earn their score prospectively. With news or other live feeds, that is more honest than pretending a new model can be fairly backtested.
+> 
+> A few refinements:
+> 
+> - **Internet access and isolation are compatible.** Run each model in a separate process/container with a 60-second deadline, while permitting outbound access. Log request URLs, timestamps, responses (or hashes/snapshots where feasible), and prediction cutoff time. This is mainly for auditability and avoiding accidental future-data leakage.
+> 
+> - **Candidates should not immediately displace incumbents.** Let the pool be `10 + N_candidates`, but cap $N$ (perhaps 2–5) to control compute. A candidate becomes eligible for replacement only after, say, 20 resolved forecast instances or an effective sample-size threshold.
+> 
+> - **Your score is a sensible proper-ish interval score** if each algorithm emits several distinct price draws: it treats those draws as a lognormal predictive distribution and rewards probability assigned to the realized $[\mathrm{low},\mathrm{high}]$ interval. Require models to emit, e.g., 20–100 draws rather than merely five, ideally generated reproducibly from a recorded seed.
+> 
+> - **But this is not itself uncertainty-aware model selection.** The exponential age term smooths/discounts old performance; it does not account for the fact that a candidate with 3 observations is much less known than an incumbent with 300. New models need shrinkage toward a prior/baseline score or an explicit exploration bonus.
+> 
+> - **Do not use raw `skill` as sampling weights.** Log scores are generally negative. Convert a standardized rolling score to probabilities, for example:
+>   \[
+>   p_m \propto \epsilon + \exp\left((\bar{s}_m + b_m)/\tau\right),
+>   \]
+>   where $b_m$ is an uncertainty/exploration adjustment and $\tau$ controls selection concentration.
+> 
+> - **Keep horizon separate.** Your intermediate score groups by `ahead`, but `results2` drops it and sums across horizons. That may be intended, but I would generally select model variants by horizon (or use explicit horizon weights), since a good 1-day model and good 7-day model can differ.
+> 
+> - **Review the `npreds` normalization.** `npreds=sum(npreds)/5` and then `logskill / npreds` appears to make score depend on the number of sampled draws in a somewhat accidental way. Score each resolved forecast once; aggregate forecast scores with recency weights. The number of draws should affect distribution estimation, not grant a model more or less evolutionary fitness.
+> 
+> I would define a candidate as a normal immutable `AlgorithmVersion`, give it a new ID and parent/mutation metadata, run it live from birth onward, and promote it when its shrunk prospective score beats the weakest eligible incumbent.
+**user**:
+> Okay, let's implement this. I still just want to do 5 draws, because I just need a mean and stddev, and in some cases each draw will be quite expensive.
+> 
+> In your system, keep track of your own predictions, and perform your own scoring but keep it consistent with the R interval scoring setup.
+> 
+> The main functions exposed by the system should be (I think):
+>  - poolprice(nday): should generate nday-lookahead predictions from both "validated" and "candidate" code and store them. But then it takes the results from the validated options and generates 5 draws from a pooled distribution of these (possibly weighted by their predictive skill).
+>  - drawparent(): draws a parent for mutation.
+>  - storechild(childcode): stores a new child in the pool, dropping the worst candidate. childcode would be an actual string representing the algorithm's code.
+>  - generatediagnostics(): store human-oriented information and figures so I can track the actions and progress of the pool.
+> 
+> Please construct this system.
+**assistant**:
+> Below is a compact, standard-library Julia implementation. It uses isolated Julia subprocesses, permits internet access, stores immutable prediction snapshots, scores resolved forecasts with your interval-log-score logic, pools validated models, and manages candidate promotion.
+> 
+> Create `pool_api.jl` for your local data adapters:
+> 
+> ```julia
+> # pool_api.jl
+> using Dates
+> 
+> "Replace with trading-calendar logic if desired."
+> forecast_target(nday::Int) = today() + Day(nday)
+> 
+> """
+> Return (low, high) for ticker/date once known, else `nothing`.
+> Implement using your data files/API.
+> """
+> actual_interval(ticker::String, date::Date) = nothing
+> ```
+> 
+> Create `PoolPredict.jl`:
+> 
+> ```julia
+> module PoolPredict
+> using Dates, TOML, Serialization, Random, Statistics, UUIDs, Printf
+> 
+> include("pool_api.jl")
+> 
+> const ROOT = joinpath(@__DIR__, "modelpool")
+> const MODELS = joinpath(ROOT, "models")
+> const PREDS = joinpath(ROOT, "predictions")
+> const STATE = joinpath(ROOT, "state.toml")
+> const API   = abspath(joinpath(@__DIR__, "pool_api.jl"))
+> 
+> function initpool()
+>     mkpath.( (ROOT, MODELS, PREDS) )
+>     if !isfile(STATE)
+>         open(STATE, "w") do io
+>             TOML.print(io, Dict(
+>                 "validated_limit" => 10,
+>                 "candidate_limit" => 5,
+>                 "min_candidate_events" => 20,
+>                 "sigma_floor" => 0.01,
+>                 "recency_days" => 365.25,
+>                 "temperature" => 0.35,
+>                 "models" => Any[]
+>             ))
+>         end
+>     end
+> end
+> 
+> state() = (initpool(); TOML.parsefile(STATE))
+> function savestate(s)
+>     open(STATE, "w") do io; TOML.print(io, s); end
+> end
+> 
+> models(s=state()) = get(s, "models", Any[])
+> 
+> function logscore(draws, low, high; sigma_floor=0.01)
+>     x = log.(filter(z -> isfinite(z) && z > 0, Float64.(draws)))
+>     length(x) < 2 && return nothing
+>     (!isfinite(low) || !isfinite(high) || low <= 0 || high <= 0) && return nothing
+> 
+>     μ, σ = mean(x), max(std(x), sigma_floor)
+>     a, b = log(min(low, high)), log(max(low, high))
+>     p = 0.5 * (erf((b - μ) / (σ * sqrt(2))) -
+>                erf((a - μ) / (σ * sqrt(2))))
+>     return log(max(p, 1e-12))
+> end
+> 
+> # Child contract:
+> #   algorithm_predict(nday::Int)::Dict{String,Vector{Float64}}
+> #
+> # Each vector must contain exactly five positive finite price draws.
+> function runnerfile()
+>     f = joinpath(ROOT, "_runner.jl")
+>     if !isfile(f)
+>         write(f, """
+>         using Serialization
+>         include(ARGS[1])                  # pool_api.jl
+>         include(ARGS[2])                  # model source
+>         nday, outfile = parse(Int, ARGS[3]), ARGS[4]
+>         raw = algorithm_predict(nday)
+>         clean = Dict{String,Vector{Float64}}()
+>         for (ticker, xs) in raw
+>             ys = Float64.(xs)
+>             if length(ys) == 5 && all(isfinite, ys) && all(>(0), ys)
+>                 clean[String(ticker)] = ys
+>             end
+>         end
+>         serialize(outfile, clean)
+>         """)
+>     end
+>     return f
+> end
+> 
+> function runmodel(m, nday; timeout=60)
+>     out = tempname()
+>     cmd = `$(Base.julia_cmd()) --startup-file=no $(runnerfile()) $API $(m["path"]) $nday $out`
+>     p = run(cmd; wait=false)
+> 
+>     if timedwait(() -> process_exited(p), timeout) == :timed_out
+>         kill(p)
+>         wait(p)
+>         return nothing, "timeout"
+>     end
+>     success(p) || return nothing, "exit $(p.exitcode)"
+>     isfile(out) || return nothing, "no output"
+> 
+>     try
+>         return deserialize(out), nothing
+>     catch e
+>         return nothing, sprint(showerror, e)
+>     finally
+>         rm(out; force=true)
+>     end
+> end
+> 
+> function snapshots()
+>     initpool()
+>     files = filter(f -> endswith(f, ".bin"), readdir(PREDS; join=true))
+>     return [deserialize(f) for f in files]
+> end
+> 
+> function resolved_events()
+>     ev = NamedTuple[]
+>     for snap in snapshots()
+>         target = Date(snap["target"])
+>         age = max(0, Dates.value(today() - Date(snap["date"])))
+>         for (id, pred) in snap["individual"]
+>             for (ticker, draws) in pred
+>                 actual = actual_interval(ticker, target)
+>                 actual === nothing && continue
+>                 push!(ev, (
+>                     id=id, score=logscore(draws, actual[1], actual[2];
+>                                           sigma_floor=snap["sigma_floor"]),
+>                     age=age
+>                 ))
+>             end
+>         end
+>     end
+>     return filter(x -> x.score !== nothing, ev)
+> end
+> 
+> function scoretable(s=state())
+>     ev = resolved_events()
+>     ids = [m["id"] for m in models(s)]
+>     isempty(ev) && return Dict(id => (skill=-10.0, n=0.0) for id in ids)
+> 
+>     λ = s["recency_days"]
+>     raw = Dict{String,Tuple{Float64,Float64}}()
+>     for id in ids
+>         mine = filter(x -> x.id == id, ev)
+>         w = [exp(-x.age / λ) for x in mine]
+>         raw[id] = isempty(w) ? (0.0, 0.0) :
+>                   (sum(w .* [x.score for x in mine]), sum(w))
+>     end
+> 
+>     # Empirical prior: protects new candidates from tiny-sample luck.
+>     allmean = mean(x.score for x in ev)
+>     priorweight = 10.0
+>     return Dict(id => begin
+>         total, n = raw[id]
+>         (skill=(total + priorweight * allmean) / (n + priorweight), n=n)
+>     end for id in ids)
+> end
+> 
+> function weights(ms, scores, temperature)
+>     z = [scores[m["id"]].skill for m in ms]
+>     isempty(z) && return Float64[]
+>     q = exp.((z .- maximum(z)) ./ temperature)
+>     q .+= 0.02                         # persistent exploration
+>     return q ./ sum(q)
+> end
+> 
+> """
+> Run all validated and candidate models; store all outputs; return five pooled draws.
+> Only validated models contribute to the returned pooled distribution.
+> """
+> function poolprice(nday::Int)
+>     s = state()
+>     ms = filter(m -> m["status"] != "archived", models(s))
+>     individual = Dict{String,Dict{String,Vector{Float64}}}()
+>     errors = Dict{String,String}()
+> 
+>     for m in ms
+>         pred, err = runmodel(m
+**user**:
+> Oops, you got cut off. Please keep going from where you left off.
+**assistant**:
+> ```julia
+>         pred, err = runmodel(m, nday; timeout=60)
+>         if err !== nothing
+>             errors[m["id"]] = err
+>         else
+>             individual[m["id"]] = pred
+>         end
+>     end
+> 
+>     scores = scoretable(s)
+>     validated = filter(m -> m["status"] == "validated", ms)
+>     ws = weights(validated, scores, s["temperature"])
+>     pooled = Dict{String,Vector{Float64}}()
+> 
+>     for ticker in union((Set(keys(individual[m["id"]]))
+>                          for m in validated if haskey(individual, m["id"]))...)
+>         relevant = [m for m in validated
+>                     if haskey(individual, m["id"]) &&
+>                        haskey(individual[m["id"]], ticker)]
+>         isempty(relevant) && continue
+> 
+>         ix = [findfirst(x -> x["id"] == m["id"], validated) for m in relevant]
+>         rw = ws[ix]
+>         rw ./= sum(rw)
+> 
+>         draws = Float64[]
+>         for _ in 1:5
+>             j = sample(1:length(relevant), Weights(rw))
+>             push!(draws, rand(individual[relevant[j]["id"]][ticker]))
+>         end
+>         pooled[ticker] = draws
+>     end
+> 
+>     serialize(joinpath(PREDS, "$(uuid4()).bin"), Dict(
+>         "date" => today(),
+>         "target" => forecast_target(nday),
+>         "sigma_floor" => s["sigma_floor"],
+>         "individual" => individual,
+>         "pooled" => pooled,
+>         "errors" => errors,
+>         "weights" => Dict(m["id"] => w for (m, w) in zip(validated, ws))
+>     ))
+>     return pooled
+> end
+> 
+> "Draw a mutation parent from validated and candidate models by smoothed skill."
+> function drawparent()
+>     s = state()
+>     ms = filter(m -> m["status"] != "archived", models(s))
+>     isempty(ms) && error("No models in pool.")
+>     sc = scoretable(s)
+>     ws = weights(ms, sc, s["temperature"])
+>     return ms[sample(1:length(ms), Weights(ws))]
+> end
+> 
+> """
+> Store source code as a candidate. If candidates exceed the configured limit,
+> archive the weakest candidate. Returns the new model ID.
+> """
+> function storechild(childcode::String; parent=nothing, mutation="")
+>     s = state()
+>     id = string(uuid4())
+>     path = joinpath(MODELS, "$id.jl")
+>     write(path, childcode)
+> 
+>     # Smoke test before admitting it.
+>     provisional = Dict("id" => id, "path" => path, "status" => "candidate")
+>     _, err = runmodel(provisional, 1; timeout=60)
+>     err === nothing || error("Child failed smoke test: $err")
+> 
+>     push!(s["models"], merge(provisional, Dict(
+>         "parent" => something(parent, ""),
+>         "mutation" => mutation,
+>         "created" => string(now())
+>     )))
+> 
+>     candidates = filter(m -> m["status"] == "candidate", s["models"])
+>     excess = length(candidates) - s["candidate_limit"]
+>     if excess > 0
+>         sc = scoretable(s)
+>         weakest = sort(candidates, by=m -> sc[m["id"]].skill)[1:excess]
+>         for m in weakest
+>             m["status"] = "archived"
+>         end
+>     end
+> 
+>     savestate(s)
+>     return id
+> end
+> 
+> "Promote qualified candidates and retain only the configured validated pool."
+> function manage_pool()
+>     s = state()
+>     sc = scoretable(s)
+> 
+>     validated = filter(m -> m["status"] == "validated", s["models"])
+>     reference = isempty(validated) ? -10.0 :
+>         mean(sc[m["id"]].skill for m in validated)
+> 
+>     for m in s["models"]
+>         if m["status"] == "candidate"
+>             z = sc[m["id"]]
+>             if z.n >= s["min_candidate_events"] && z.skill >= reference
+>                 m["status"] = "validated"
+>             end
+>         end
+>     end
+> 
+>     validated = filter(m -> m["status"] == "validated", s["models"])
+>     excess = length(validated) - s["validated_limit"]
+>     if excess > 0
+>         weakest = sort(validated, by=m -> sc[m["id"]].skill)[1:excess]
+>         for m in weakest
+>             m["status"] = "archived"
+>         end
+>     end
+>     savestate(s)
+> end
+> 
+> function generatediagnostics()
+>     s = state()
+>     sc = scoretable(s)
+>     rows = [Dict(
+>         "id" => m["id"],
+>         "status" => m["status"],
+>         "parent" => get(m, "parent", ""),
+>         "skill" => sc[m["id"]].skill,
+>         "effective_events" => sc[m["id"]].n,
+>         "path" => m["path"]
+>     ) for m in models(s)]
+> 
+>     out = joinpath(ROOT, "diagnostics.toml")
+>     open(out, "w") do io
+>         TOML.print(io, Dict("generated" => string(now()), "models" => rows))
+>     end
+>     return out
+> end
+> 
+> end # module
+> ```
+> 
+> Also add `StatsBase` to imports:
+> 
+> ```julia
+> using Dates, TOML, Serialization, Random, Statistics, UUIDs, Printf, StatsBase
+> ```
+> 
+> The normal operating cycle is:
+> 
+> ```julia
+> poolprice(5)
+> manage_pool()
+> parent = drawparent()
+> # Arachne proposes mutation of read(parent["path"], String)
+> childid = storechild(childcode; parent=parent["id"], mutation="description")
+> generatediagnostics()
+> ```
+**user**:
+> I want to "seed" this with the current Arachne algorithm. That's a script which defines a "ArachnePredictor" module, which exposes an "arachnegrow(nday)" function. I then translate those growth values into predicted prices like this:
+> ```
+> function arachneprice(nday)
+>     grows = arachnegrow(nday)
+>     last_non_missing = getcurrprices()
+>     mus = [(names(highpricesdf)[ii] in keys(grows) ? last_non_missing[ii] .* exp.(grows[names(highpricesdf)[ii]]) : missing) for ii in 1:ncol(highpricesdf)]
+>     stds = getgrowstddev()
+>     reduce(hcat, [quantile.(Normal(mus[ii], stds[ii]), [.1, .3, .5, .7, .9]) for ii in 1:length(mus)])
+> end
+> ```
+> 
+> But maybe we should just have the system give final prices, rather than growths.
+> 
+> How do I need to modify this before ingesting it into your new system?
+**assistant**:
+> Yes—make the pool interface use **final-price draws**. Keep `arachnegrow` internally, but wrap it as `algorithm_predict(nday)`, returning exactly five positive price draws per ticker.
+> 
+> Since growth is naturally log-growth, convert it to a **lognormal price distribution**, rather than `Normal(price, std)`. That guarantees positive prices and makes the interval scoring’s lognormal assumption consistent.
+> 
+> Add this *outside* your `ArachnePredictor` module, in the seed model script:
+> 
+> ```julia
+> using Distributions
+> using Statistics
+> 
+> """
+> Pool-model interface: ticker => five final-price draws.
+> """
+> function algorithm_predict(nday::Int)::Dict{String,Vector{Float64}}
+>     grows = ArachnePredictor.arachnegrow(nday)
+> 
+>     # Prefer a Dict{String,<:Real} mapping if possible.
+>     curr = ArachnePredictor.getcurrprices()
+>     growstd = ArachnePredictor.getgrowstddev()
+> 
+>     result = Dict{String,Vector{Float64}}()
+>     probs = [0.1, 0.3, 0.5, 0.7, 0.9]
+> 
+>     for ticker in keys(grows)
+>         haskey(curr, ticker) || continue
+>         haskey(growstd, ticker) || continue
+> 
+>         S0 = Float64(curr[ticker])
+>         μg = grows[ticker]
+>         σg = max(Float64(growstd[ticker]), 0.01)
+> 
+>         if isfinite(S0) && S0 > 0 && isfinite(μg) && isfinite(σg)
+>             # If g is log price growth, log(S_T) = log(S_0) + g.
+>             dist = LogNormal(log(S0) + μg, σg)
+>             result[String(ticker)] = quantile.(dist, probs)
+>         end
+>     end
+> 
+>     return result
+> end
+> ```
+> 
+> This assumes:
+> 
+> - `arachnegrow(nday)[ticker]` is expected **log growth**, so final price is $S_T = S_0 e^g$.
+> - `getgrowstddev()[ticker]` is the standard deviation of that log growth.
+> - `getcurrprices()` and `getgrowstddev()` return ticker-keyed dictionaries.
+> 
+> If instead those functions return vectors aligned with `names(highpricesdf)`, create dictionaries once:
+> 
+> ```julia
+> tickers = String.(names(highpricesdf))
+> curr = Dict(tickers .=> ArachnePredictor.getcurrprices())
+> growstd = Dict(tickers .=> ArachnePredictor.getgrowstddev())
+> ```
+> 
+> Do **not** convert five existing growth draws into means and then add a Normal error term. If `arachnegrow` already returns five stochastic growth draws per ticker, the better wrapper is simply:
+> 
+> ```julia
+> result[ticker] = S0 .* exp.(Float64.(grows[ticker]))
+> ```
+> 
+> provided it produces exactly five finite draws. This preserves the model’s actual predictive distribution.
+**user**:
+> When I try to storechild this, I get "ERROR: Child failed smoke test: exit 1". How do I debug that?
+**assistant**:
+> `exit 1` only means the subprocess crashed; the current `runmodel` discards the useful Julia stack trace. Capture its stderr to a persistent log.
+> 
+> Replace `runmodel` with:
+> 
+> ```julia
+> function runmodel(m, nday; timeout=60)
+>     out = tempname()
+>     logfile = joinpath(ROOT, "logs", "$(m["id"])-$(Dates.format(now(), "yyyymmdd-HHMMSS")).log")
+>     mkpath(dirname(logfile))
+> 
+>     project = Base.active_project()
+>     cmd = `$(Base.julia_cmd()) --startup-file=no --project=$project $(runnerfile()) $API $(m["path"]) $nday $out`
+> 
+>     open(logfile, "w") do io
+>         p = run(pipeline(cmd, stdout=io, stderr=io); wait=false)
+> 
+>         if timedwait(() -> process_exited(p), timeout) == :timed_out
+>             kill(p)
+>             wait(p)
+>             return nothing, "timeout; see $logfile"
+>         end
+> 
+>         if !success(p)
+>             return nothing, "exit $(p.exitcode); see $logfile"
+>         end
+>     end
+> 
+>     isfile(out) || return nothing, "no output; see $logfile"
+> 
+>     try
+>         return deserialize(out), nothing
+>     catch e
+>         return nothing, "output deserialize failure: $(sprint(showerror, e)); see $logfile"
+>     finally
+>         rm(out; force=true)
+>     end
+> end
+> ```
+> 
+> Then rerun `storechild(...)` and inspect:
+> 
+> ```julia
+> read("modelpool/logs/<newest-log-file>.log", String) |> println
+> ```
+> 
+> Most likely causes for this particular seed algorithm:
+> 
+> 1. **Missing package environment.** The child runs in a separate Julia process. It may not find `Distributions`, `DataFrames`, etc. The `--project=$project` addition ensures it uses your active project.
+> 
+> 2. **The child code does not include the Arachne module source.** Your stored child needs to be self-contained enough to load it:
+> 
+> ```julia
+> include("/absolute/path/to/ArachnePredictor.jl")
+> using .ArachnePredictor
+> using Distributions, Statistics
+> ```
+> 
+> followed by `algorithm_predict(nday)`.
+> 
+> 3. **Names are not exported / are in the module.** Use fully qualified calls:
+> 
+> ```julia
+> grows = ArachnePredictor.arachnegrow(nday)
+> curr  = ArachnePredictor.getcurrprices()
+> stds  = ArachnePredictor.getgrowstddev()
+> ```
+> 
+> 4. **Your existing functions rely on relative paths.** A subprocess may start from a different working directory. Use `joinpath(@__DIR__, ...)` inside the Arachne code, rather than relative `"data/..."` paths.
+> 
+> You can also reproduce the failure directly using the exact command shown in the log, which will print the full Julia exception interactively.
+**user**:
+> I think that we need to provide some information to the algorithms to let them work. getcurrprices() and getgrowstddev() are not functions of ArachnePredictor. They come from the broader system. Either I can pass this information or these functions into the Pool system, to then be passed into the scripts, or maybe we use a stand-alone set of helper functions that the algorithms can import. Here, by the way, are these functions:
+> ```
+> function getcurrprices()
+>     [(currprices[ticker][:bid] + currprices[ticker][:ask]) / 2 for ticker in names(highpricesdf)]
+> end
+> 
+> function getgrowstddev()
+>     allgrow = log.(lowpricesmat[2:end, :]) .- log.(highpricesmat[1:end-1, :])
+>     [std(skipmissing(allgrow[end-365:end, kk])) for kk in 1:size(allgrow)[2]]
+> end
+> ```
+> where currprices provides the data from get_quoteSummary of YFinance. I'd rather not have this called too many times.
+> 
+> I now wrap getgrowstddev with the following function, as you suggest:
+> ```
+> function dictstddev()
+>     stds = getgrowstddev()
+>     tickers = String.(names(highpricesdf))
+>     Dict(tickers .=> stds)
+> end
+> ```
+> And then use dictstddev() in the algorithm_predict. But then algorithm_predict also needs access to highpricesdf, or it needs to be separately loaded.
+> 
+> In the current system, most of this is loaded into the Main environment with include("loaddata.jl"), which creates highprices, lowprices, and currprices, and gethighprices and getlowprices. I just don't want every algorithm to run include("loaddata.jl") because its current setup is slow and queries YFinance for all the most recent data.
+**assistant**:
+> Don’t pass functions into child processes. Pass a **frozen data context** created once by the pool host, then let every algorithm receive that context explicitly. This avoids repeated YFinance calls and records exactly what information was available at prediction time.
+> 
+> ### 1. Build and save one context snapshot in the parent process
+> 
+> Run this where `loaddata.jl` has already populated `highpricesdf`, `lowpricesmat`, etc.:
+> 
+> ```julia
+> using Serialization, Dates, Statistics, DataFrames
+> 
+> function make_pool_context()
+>     tickers = String.(names(highpricesdf))
+>     current = Dict(tickers .=> getcurrprices())
+>     growstd = Dict(tickers .=> getgrowstddev())
+> 
+>     return Dict(
+>         "created_at" => string(now()),
+>         "tickers" => tickers,
+>         "current_prices" => current,
+>         "grow_stddev" => growstd,
+> 
+>         # Available to more sophisticated future algorithms:
+>         "high_prices" => Matrix(highpricesdf),
+>         "low_prices" => Matrix(lowpricesmat),
+>         # Add corresponding dates if available:
+>         # "history_dates" => collect(Date.(...)),
+>     )
+> end
+> 
+> function write_pool_context()
+>     mkpath("modelpool/context")
+>     path = joinpath("modelpool/context",
+>                     "context-$(Dates.format(now(), "yyyymmdd-HHMMSS")).bin")
+>     serialize(path, make_pool_context())
+>     return abspath(path)
+> end
+> ```
+> 
+> Call `contextpath = write_pool_context()` **once per `poolprice(nday)` call**, before running models.
+> 
+> ### 2. Change the model contract
+> 
+> Use:
+> 
+> ```julia
+> algorithm_predict(nday::Int, context)::Dict{String,Vector{Float64}}
+> ```
+> 
+> Modify `_runner.jl`:
+> 
+> ```julia
+> using Serialization
+> include(ARGS[1])  # model source
+> 
+> nday = parse(Int, ARGS[2])
+> context = deserialize(ARGS[3])
+> outfile = ARGS[4]
+> 
+> raw = algorithm_predict(nday, context)
+> serialize(outfile, raw)
+> ```
+> 
+> Then modify `runmodel` to pass `contextpath`:
+> 
+> ```julia
+> cmd = `$(Base.julia_cmd()) --startup-file=no --project=$project \
+>       $(runnerfile()) $(m["path"]) $nday $contextpath $out`
+> ```
+> 
+> ### 3. Seed-model wrapper
+> 
+> ```julia
+> function algorithm_predict(nday::Int, context)
+>     grows = ArachnePredictor.arachnegrow(nday)
+> 
+>     curr = context["current_prices"]
+>     stds = context["grow_stddev"]
+>     probs = [0.1, 0.3, 0.5, 0.7, 0.9]
+> 
+>     result = Dict{String,Vector{Float64}}()
+> 
+>     for (ticker, growth) in grows
+>         haskey(curr, ticker) && haskey(stds, ticker) || continue
+> 
+>         S0 = curr[ticker]
+>         σ = max(stds[ticker], 0.01)
+> 
+>         if isfinite(S0) && S0 > 0 && isfinite(growth)
+>             # Deterministic five quantile draws of log-price.
+>             result[ticker] = S0 .* exp.(growth .+ σ .* quantile.(Normal(), probs))
+>         end
+>     end
+>     return result
+> end
+> ```
+> 
+> The important remaining refactor is that `ArachnePredictor.arachnegrow(nday)` must similarly stop relying on `Main` globals. Ideally make it:
+> 
+> ```julia
+> ArachnePredictor.arachnegrow(nday, context)
+> ```
+> 
+> Then it can use `context["high_prices"]`, `context["low_prices"]`, etc. The pool process performs one expensive data refresh; every algorithm receives the same immutable snapshot.

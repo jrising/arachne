@@ -1,0 +1,69 @@
+**user**:
+> How do I fix this:
+> ```
+> julia> posinfo = pyimport("positions")
+> ERROR: PyError (PyImport_ImportModule) <class 'ValueError'>
+> ValueError('numpy.dtype size changed, may indicate binary incompatibility. Expected 96 from C header, got 88 from PyObject')
+>   File "/Users/admin/projects/justeco/stockings/positions.py", line 1, in <module>
+>     from schwab import *
+>   File "/Users/admin/projects/justeco/stockings/schwab.py", line 5, in <module>
+>     import pandas
+>   File "/Users/admin/.julia/conda/3/lib/python3.9/site-packages/pandas/__init__.py", line 29, in <module>
+>     from pandas._libs import hashtable as _hashtable, lib as _lib, tslib as _tslib
+>   File "/Users/admin/.julia/conda/3/lib/python3.9/site-packages/pandas/_libs/__init__.py", line 13, in <module>
+>     from pandas._libs.interval import Interval
+>   File "pandas/_libs/interval.pyx", line 1, in init pandas._libs.interval
+> 
+> Stacktrace:
+>  [1] pyimport(name::String)
+>    @ PyCall ~/.julia/packages/PyCall/1gn3u/src/PyCall.jl:558
+>  [2] top-level scope
+>    @ REPL[15]:1
+> ```
+**assistant**:
+> `PyCall` is using its private Conda Python:
+> 
+> ```text
+> ~/.julia/conda/3/lib/python3.9/
+> ```
+> 
+> Its installed `pandas` binary was built against a different NumPy version. Reinstall NumPy and pandas *together* in that environment.
+> 
+> From a terminal:
+> 
+> ```bash
+> ~/.julia/conda/3/bin/conda install -y --force-reinstall numpy pandas
+> ```
+> 
+> Then quit and restart Julia, and test:
+> 
+> ```julia
+> using PyCall
+> pyimport("numpy")
+> pyimport("pandas")
+> pyimport("positions")
+> ```
+> 
+> If Conda cannot resolve it, reset Julia’s private Conda environment:
+> 
+> ```bash
+> rm -rf ~/.julia/conda/3
+> ```
+> 
+> Then in Julia:
+> 
+> ```julia
+> using Pkg
+> Pkg.build("PyCall")
+> ```
+> 
+> Reinstall any Python dependencies required by `positions.py` afterward.
+> 
+> To confirm which Python PyCall uses:
+> 
+> ```julia
+> using PyCall
+> println(PyCall.python)
+> ```
+> 
+> Avoid installing/upgrading NumPy or pandas with `pip` inside `~/.julia/conda/3`; use Conda there, or instead configure PyCall to use a dedicated external virtual/Conda environment and rebuild `PyCall`.

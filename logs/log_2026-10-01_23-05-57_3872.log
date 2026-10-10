@@ -1,0 +1,298 @@
+**user**:
+> I have started a plan to build an abstraction around model and tool selection in my AI system. Here is the contract for tools:
+> """
+> Tool protocol and normalized typed tool-result contract.
+> 
+> Tools are executable capabilities. In the initial synchronous system they may
+> be invoked directly by a responder. In the workflow system they are executed
+> as Operations and yield Artifacts. Tool interfaces should therefore avoid
+> assuming that their primary result is user-visible text.
+> 
+> Expected tool callable shape:
+> 
+> ToolCallable = Callable[
+>     [ToolInvocation],
+>     ToolResult,
+> ]
+> 
+> @dataclass(frozen=True)
+> class ToolInvocation:
+>     operation_id: str | None
+>     conversation_id: str
+>     arguments: Mapping[str, Any]
+>     config: Mapping[str, Any]
+>     context: PlannerContext | None
+>     provenance_requirements: Mapping[str, Any]
+> 
+> @dataclass
+> class Tool:
+>     name: str
+>     description: str
+>     fn: ToolCallable | Callable[..., Any]
+>     config: ToolConfig
+>     quality_prior: float | None = None
+>     cost_estimate: float | None = None
+>     version: str = "1"
+> 
+> Compatibility:
+> - registry.py may accept legacy functions such as
+>   `fn(prompt, config) -> str`.
+> - tools/base.py normalizes such outputs to ToolResult/Artifact.
+> - Tool configuration defaults and allowed discrete options are validated here.
+> 
+> Caller:
+> - responders.py or workflow/workers.py invokes:
+>       result = tool.fn(invocation)
+> - the caller persists raw temporary output as appropriate, converts relevant
+>   materials to artifacts/source excerpts, and never blindly injects untrusted
+>   tool text into system instructions.
+> """
+> 
+> Now, here is the documentation for a tool available through OpenAI:
+> ## Computer use
+> 
+> `computer` returns structured mouse and keyboard actions for a browser or desktop that you run; you execute them and send back a screenshot. The tool takes no configuration fields in the current docs. For GPT-6 Astra, OpenAI now recommends a code-execution harness (a `function` tool that runs Playwright or PyAutoGUI scripts) instead.
+> 
+> ```python
+> resp = client.responses.create(
+>     model="gpt-5.6-sol",
+>     tools=[{"type": "computer"}],
+>     input="Open the Filters panel if needed, then search for penguin.",
+> )
+> # then, for each computer_call:
+> client.responses.create(
+>     model="gpt-5.6-sol",
+>     tools=[{"type": "computer"}],
+>     previous_response_id=resp.id,
+>     input=[{"type": "computer_call_output", "call_id": call_id,
+>             "output": {"type": "computer_screenshot",
+>                        "image_url": f"data:image/png;base64,{png_b64}",
+>                        "detail": "original"}}],
+> )
+> ```
+> 
+> Each `computer_call` holds an ordered `actions` array. Action types: `click` (with `button`, `x`, `y`), `double_click`, `drag`, `move`, `scroll`, `keypress`, `type` (with `text`), `wait`, `screenshot`. Run it in an isolated VM or browser and confirm consequential actions with a human.
+> 
+> Can you construct a full tool implementation for this? Please start off the file with a docstring, describing the tool and its usage.
+**assistant**:
+> ```python
+> """
+> OpenAI Computer tool adapter.
+> 
+> This tool asks an OpenAI Responses model to plan browser/desktop interactions
+> using OpenAI's `computer` tool. It does *not* execute mouse or keyboard actions
+> itself. Instead, it returns structured `computer_call` action batches as
+> artifacts; a trusted, isolated browser/VM executor must execute them.
+> 
+> Usage:
+>     tool = make_openai_computer_tool(client, model="gpt-5.6-sol")
+> 
+>     result = tool.fn(ToolInvocation(
+>         operation_id="op_123",
+>         conversation_id="conv_123",
+>         arguments={"input": "Search for penguins."},
+>         config={},
+>         context=None,
+>         provenance_requirements={},
+>     ))
+> 
+> For continuation after executing actions, invoke it with
+> `previous_response_id` and `computer_call_outputs`, where each output includes
+> the original call ID and an executor-captured screenshot data URL. Never allow
+> the model to directly control a non-isolated host, and require human approval
+> for consequential actions.
+> """
+> 
+> from __future__ import annotations
+> 
+> import base64
+> from dataclasses import asdict, is_dataclass
+> from typing import Any, Mapping, Sequence
+> 
+> from .base import Artifact, ToolResult
+> from .registry import Tool, ToolConfig
+> from .types import ToolInvocation
+> 
+> 
+> _MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024
+> 
+> 
+> def make_openai_computer_tool(
+>     client: Any,
+>     *,
+>     model: str = "gpt-5.6-sol",
+>     name: str = "openai_computer",
+> ) -> Tool:
+>     """Create a normalized OpenAI computer-planning tool.
+> 
+>     `client` should be an initialized OpenAI client. Keep credentials and model
+>     selection in application configuration rather than tool invocation inputs.
+>     """
+> 
+>     def invoke(invocation: ToolInvocation) -> ToolResult:
+>         args = dict(invocation.arguments)
+>         prompt = args.get("input")
+>         previous_response_id = args.get("previous_response_id")
+>         outputs = args.get("computer_call_outputs")
+> 
+>         if prompt is None and not outputs:
+>             return _failure("invalid_arguments", "Provide `input` or computer_call_outputs.")
+>         if prompt is not None and not isinstance(prompt, (str, list)):
+>             return _failure("invalid_arguments", "`input` must be a string or Responses input list.")
+>         if previous_response_id is not None and not isinstance(previous_response_id, str):
+>             return _failure("invalid_arguments", "`previous_response_id` must be a string.")
+> 
+>         try:
+>             continuation_input = _build_continuation_outputs(outputs) if outputs else prompt
+> 
+>             request: dict[str, Any] = {
+>                 "model": model,
+>                 "tools": [{"type": "computer"}],
+>                 "input": continuation_input,
+>             }
+>             if previous_response_id:
+>                 request["previous_response_id"] = previous_response_id
+> 
+>             response = client.responses.create(**request)
+>         except ValueError as exc:
+>             return _failure("invalid_arguments", str(exc))
+>         except Exception as exc:
+>             # Do not expose credentials, headers, or arbitrary provider payloads.
+>             return _failure("openai_request_failed", f"{type(exc).__name__}: {exc}")
+> 
+>         response_id = getattr(response, "id", None)
+>         calls = _extract_computer_calls(response)
+> 
+>         artifacts = [
+>             Artifact(
+>                 kind="computer_action_batch",
+>                 mime_type="application/json",
+>                 data={
+>                     "response_id": response_id,
+>                     "call_id": call["call_id"],
+>                     "actions": call["actions"],
+>                     "status": call["status"],
+>                 },
+>                 metadata={
+>                     "provider": "openai",
+>                     "tool": "computer",
+>                     "model": model,
+>                     "operation_id": invocation.operation_id,
+>                     "conversation_id": invocation.conversation_id,
+>                     "untrusted": True,
+>                 },
+>             )
+>             for call in calls
+>         ]
+> 
+>         return ToolResult(
+>             success=True,
+>             artifacts=artifacts,
+>             data={
+>                 "response_id": response_id,
+>                 "computer_call_count": len(calls),
+>                 # Text is deliberately not promoted to instructions.
+>                 "output_text": getattr(response, "output_text", None),
+>             },
+>             error=None,
+>         )
+> 
+>     return Tool(
+>         name=name,
+>         description=(
+>             "Requests structured browser/desktop actions from OpenAI Computer. "
+>             "Actions must be executed only by an isolated, trusted executor."
+>         ),
+>         fn=invoke,
+>         config=ToolConfig(defaults={}, allowed_options={}),
+>         quality_prior=0.8,
+>         cost_estimate=None,
+>         version="1",
+>     )
+> 
+> 
+> def _build_continuation_outputs(outputs: Any) -> list[dict[str, Any]]:
+>     if not isinstance(outputs, Sequence) or isinstance(outputs, (str, bytes)):
+>         raise ValueError("`computer_call_outputs` must be a list.")
+> 
+>     result: list[dict[str, Any]] = []
+>     for item in outputs:
+>         if not isinstance(item, Mapping):
+>             raise ValueError("Each computer_call_output must be an object.")
+> 
+>         call_id = item.get("call_id")
+>         image_url = item.get("image_url")
+>         detail = item.get("detail", "original")
+> 
+>         if not isinstance(call_id, str) or not call_id:
+>             raise ValueError("Each computer_call_output requires a non-empty `call_id`.")
+>         if not isinstance(image_url, str) or not image_url.startswith("data:image/"):
+>             raise ValueError("Screenshots must be image data URLs.")
+>         if len(image_url) > (_MAX_SCREENSHOT_BYTES * 4 // 3):
+>             raise ValueError("Screenshot exceeds maximum permitted size.")
+> 
+>         result.append(
+>             {
+>                 "type": "computer_call_output",
+>                 "call_id": call_id,
+>                 "output": {
+>                     "type": "computer_screenshot",
+>                     "image_url": image_url,
+>                     "detail": detail,
+>                 },
+>             }
+>         )
+>     return result
+> 
+> 
+> def _extract_computer_calls(response: Any) -> list[dict[str, Any]]:
+>     calls: list[dict[str, Any]] = []
+> 
+>     for item in getattr(response, "output", []) or []:
+>         item_type = getattr(item, "type", None)
+>         if item_type != "computer_call":
+>             continue
+> 
+>         raw_actions = getattr(item, "actions", []) or []
+>         actions = [
+>             _jsonable(action)
+>             for action in raw_actions
+>             if getattr(action, "type", None) in {
+>                 "click", "double_click", "drag", "move", "scroll",
+>                 "keypress", "type", "wait", "screenshot",
+>             }
+>         ]
+> 
+>         calls.append(
+>             {
+>                 "call_id": getattr(item, "call_id", None) or getattr(item, "id", None),
+>                 "status": getattr(item, "status", None),
+>                 "actions": actions,
+>             }
+>         )
+> 
+>     return calls
+> 
+> 
+> def _jsonable(value: Any) -> Any:
+>     if hasattr(value, "model_dump"):
+>         return value.model_dump(mode="json")
+>     if is_dataclass(value):
+>         return asdict(value)
+>     if isinstance(value, Mapping):
+>         return {str(k): _jsonable(v) for k, v in value.items()}
+>     if isinstance(value, (list, tuple)):
+>         return [_jsonable(v) for v in value]
+>     return value
+> 
+> 
+> def _failure(code: str, message: str) -> ToolResult:
+>     return ToolResult(
+>         success=False,
+>         artifacts=[],
+>         data={},
+>         error={"code": code, "message": message},
+>     )
+> ```
+> 
+> The executor should treat `computer_action_batch` artifacts as untrusted requests, enforce allowlists and approval gates, execute only in an isolated environment, and supply the resulting screenshot through `computer_call_outputs`.

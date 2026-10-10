@@ -1,0 +1,2184 @@
+**user**:
+> I have started a plan to build an abstraction around model and tool selection in my AI system. Here is the basic structure:
+> 
+> # Planner: Initial Full Version Notes
+> 
+> ## Purpose
+> 
+> `Planner` is a simplified, chat-first abstraction over multiple LLM services/models and tools.
+> 
+> Given a dialogue, it selects an **execution plan**—a model and, where useful, configured tools—to maximize expected *trustworthy user utility*, balancing:
+> 
+> - likelihood of a positive user outcome;
+> - independent quality/reliability expectations;
+> - dollar cost;
+> - latency;
+> - uncertainty and occasional exploration.
+> 
+> The public API remains synchronous and simple. Async work is internal and accessed through polling.
+> 
+> ---
+> 
+> ## 1. Public API
+> 
+> ### Registration
+> 
+> Models and tools are registered once in a shared registry.
+> 
+> ```python
+> Planner.register_model(
+>     adapter,
+>     model_id="gemini-2.5-flash",
+>     cost_per_million_tokens=2.5,
+>     quality_prior=0.70,
+> )
+> ```
+> 
+> A registered model adapter is expected to provide:
+> 
+> ```python
+> adapter.chat_response(messages, max_tokens=None) -> str
+> adapter.stream_response(messages, max_tokens=None) -> Iterator[str]
+> adapter.allowed(tokens) -> bool
+> ```
+> 
+> `allowed(tokens)` supports context-window, quota, provider-health, and other availability constraints.
+> 
+> Tools are registered with a human/model-readable description, callable, and optional configurable parameters:
+> 
+> ```python
+> Planner.register_tool(
+>     name="scholar_search",
+>     description=(
+>         "Perform a Google Scholar search and retrieve relevant review PDFs "
+>         "for information needed to answer the prompt."
+>     ),
+>     fn=scholar_search,
+>     config={
+>         "defaults": {"max_results": 5, "reviews_only": True},
+>         "options": {
+>             "max_results": [3, 5, 10],
+>             "reviews_only": [True, False],
+>             "year_from": [None, 2015, 2020],
+>         },
+>     },
+>     quality_prior=0.85,
+>     cost_estimate=0.02,
+> )
+> 
+> Planner.register_tool(
+>     name="image_generation",
+>     description="Create an image based on a prompt.",
+>     fn=lambda prompt, config: create_image(prompt, **config),
+>     config=ToolConfig(defaults={"size": "1024x1024"}),
+>     quality_prior=0.80,
+>     cost_estimate=0.04,
+> )
+> ```
+> 
+> Tool configuration is a first-class decision variable. For memory retrieval, this includes collections, filters, $k$, score threshold, reranking, token budget, and summarization strategy.
+> 
+> ### Conversation-level interface
+> 
+> ```python
+> planner = Planner(conversation_id="...")
+> ```
+> 
+> ```python
+> response = planner.chat_response(messages, max_tokens=None)
+> ```
+> 
+> ```python
+> stream = planner.stream_response(messages, max_tokens=None)
+> for chunk in stream:
+>     ...
+> ```
+> 
+> ```python
+> planner.vote_up(response_id)
+> planner.vote_down(response_id)
+> ```
+> 
+> Responses:
+> 
+> ```python
+> @dataclass
+> class Response:
+>     id: str
+>     text: str
+>     model: str | None
+> 
+> @dataclass
+> class StreamResponse:
+>     id: str
+>     chunks: Iterator[str]
+>     model: str | None
+> ```
+> 
+> The response ID maps feedback to the actual selected execution plan, rather than relying on a mutable `last_responder`.
+> 
+> ### Forward-compatible async API
+> 
+> All top-level calls remain blocking/synchronous. No `await`, `async with`, or async-infected application code is required.
+> 
+> ```python
+> planner.poll() -> list
+> planner.ongoing() -> list
+> planner.async_status() -> dict
+> ```
+> 
+> - `poll()` returns newly completed user-deliverable async updates.
+> - `ongoing()` returns lightweight active-work records, e.g. ID, description, status, elapsed time.
+> - `async_status()` returns summary counts/status for UI display.
+> - In the first minimal implementation these can return `[]`, `[]`, and `{"count": 0, "operations": []}`.
+> 
+> Later, internal workers may perform tool calls, verification, long research, image generation, monitoring, etc. Completed results are persisted to conversation state and made available through `poll()`.
+> 
+> ---
+> 
+> ## 2. Execution Plans / Responders
+> 
+> The planner should select an entire **execution plan**, not merely a model.
+> 
+> Initially, a `Responder` can remain the practical unit of selection:
+> 
+> ```python
+> responder.chat_response(messages, max_tokens=None) -> str
+> responder.stream_response(messages, max_tokens=None) -> Iterator[str]
+> responder.allowed(tokens) -> bool
+> responder.cost(prompt_tokens, completion_tokens) -> float
+> ```
+> 
+> Over time, a responder represents a complete plan such as:
+> 
+> - `gpt-5-mini`, direct response;
+> - Gemini Flash plus personal-memory retrieval;
+> - OpenAI model plus web search and citation checking;
+> - code-focused model plus execution/testing;
+> - draft model plus independent reviewer;
+> - model plus a specific configured tool setting.
+> 
+> This makes model choice, tool choice, and tool parameters jointly selectable and learnable.
+> 
+> To avoid a combinatorial explosion, plans should initially come from a limited set of explicit templates/families rather than arbitrary model-tool combinations.
+> 
+> ---
+> 
+> ## 3. Selection and Utility
+> 
+> The initial selector can build on `BayesSelector`.
+> 
+> It estimates a responder’s expected value from:
+> 
+> - observed thumbs-up/down outcomes;
+> - model/tool quality priors;
+> - estimated token costs;
+> - observed latency;
+> - availability constraints;
+> - uncertainty / limited experience.
+> 
+> A useful conceptual score is:
+> 
+> \[
+> U(p \mid x)
+> =
+> w_s \hat S(p,x)
+> +
+> w_q \hat Q(p,x)
+> -
+> w_c \hat C(p,x)
+> -
+> w_l \hat L(p,x)
+> -
+> w_r \hat R(p,x)
+> +
+> w_e \hat E(p,x)
+> \]
+> 
+> Where:
+> 
+> - $p$: execution plan / responder;
+> - $x$: request context and inferred task type;
+> - $\hat S$: predicted user satisfaction;
+> - $\hat Q$: independent quality estimate;
+> - $\hat C$: expected cost;
+> - $\hat L$: expected latency;
+> - $\hat R$: reliability/failure risk;
+> - $\hat E$: value of exploration under uncertainty.
+> 
+> For the initial version, this can be approximated by the existing weighted sampling approach:
+> 
+> \[
+> \text{weight}
+> \propto
+> \frac{\text{smoothed success probability} \times \text{quality prior}}
+> {\text{expected direct cost} + \text{latency converted to equivalent cost}}
+> \]
+> 
+> Latency is a **soft utility penalty**, not normally a hard budget. A slower plan may be worthwhile when it meaningfully improves quality.
+> 
+> `budget.chat_tokens(messages)` estimates prompt-token use. Completion-token assumptions should be configurable and eventually learned from observed completions.
+> 
+> Selection remains probabilistic rather than always greedy, allowing safe exploration of under-tested responders. Exploration should be constrained for high-stakes task categories.
+> 
+> ---
+> 
+> ## 4. Feedback, Evaluation, and Anti-Goodhart Safeguards
+> 
+> Thumbs are the primary chat satisfaction signal:
+> 
+> - `vote_up(response_id)` increments success evidence for the selected plan.
+> - `vote_down(response_id)` increments failure evidence.
+> - Feedback is attributed to the response’s recorded plan, including relevant configuration.
+> 
+> But thumbs must not become the sole notion of quality. A low-cost, fluent, hallucination-prone system can otherwise win despite producing less trustworthy answers.
+> 
+> Maintain separate evidence for:
+> 
+> 1. **User satisfaction**: thumbs, ratings, corrections, edits, follow-up behavior.
+> 2. **Quality**: task-specific evaluators, tests, rubric-based judging, source checks.
+> 3. **Reliability/risk**: factuality audits, unsupported-claim rates, calibration, failure history.
+> 4. **Cost and latency**: observed measurements, not provider estimates alone.
+> 
+> Each model/tool/plan begins with priors. Priors may be informed by internal offline evaluation, benchmarks, and expert judgment, but must be calibrated against actual usage.
+> 
+> Build and version a modest internal evaluation suite representing real work: research, coding, numerical/technical analysis, project continuity/memory, planning, writing, and source-grounded factual tasks. Use objective tests where possible.
+> 
+> The planner should apply stronger quality/reliability expectations to high-stakes or freshness-sensitive requests, and prefer grounding/verification plans where appropriate.
+> 
+> ---
+> 
+> ## 5. Learning Tool Parameters
+> 
+> Tool configuration is not static metadata; it is part of the plan.
+> 
+> Examples:
+> 
+> - memory retrieval: collection choice, top-$k$, threshold, reranker, context-token allowance;
+> - web/search: number of queries/results, recency filter, source whitelist, extraction depth;
+> - code: runtime environment, test strategy, timeout;
+> - image generation: size, style, model, iteration count;
+> - model configuration: temperature, reasoning budget, output contract.
+> 
+> The planner learns which configurations perform best for task/context classes. Initially this can be done by registering a small number of discrete configuration variants as separate responders/plans. Later it can use contextual parameter optimization.
+> 
+> Avoid learning arbitrary high-dimensional settings from sparse thumb data; use bounded option sets, strong defaults, and offline evaluation.
+> 
+> ---
+> 
+> ## 6. Internal Awareness and Dynamic Message Construction
+> 
+> The canonical user/assistant transcript should remain intact and auditable. Before invoking a selected plan, the planner builds an **effective message stream** by adding internal context/messages appropriate to that plan.
+> 
+> This is how capabilities are “loaded” only when relevant.
+> 
+> Examples of injected system/developer-level instructions:
+> 
+> - tool-specific usage instructions and result formats;
+> - tool availability and constraints;
+> - retrieved memory or research artifacts;
+> - source-grounding/citation requirements;
+> - output contracts, e.g. concise answer first, three bullets, structured JSON, word limit;
+> - verification requirements;
+> - awareness of outstanding or completed asynchronous work;
+> - task-specific quality standards.
+> 
+> For example, selecting a scholar-search plan may inject instructions about using retrieved reviews, distinguishing sources from inference, and citing claims. Selecting a memory plan may inject retrieved records and instructions to treat them as potentially stale/private context.
+> 
+> The planner—not the user-visible transcript—owns these internal additions. All injected context should have provenance, scope, and relevance controls to avoid irrelevant retrieval, stale information, or prompt-injection contamination.
+> 
+> ---
+> 
+> ## 7. Streaming
+> 
+> `stream_response()` mirrors `chat_response()` but returns a normal blocking iterator.
+> 
+> The selector chooses the responder before streaming begins. It records latency when the stream completes or fails.
+> 
+> If a stream fails before visible output, the selector may retry another responder. Once text has been shown to the user, it should not silently switch models; surface or log the failure instead.
+> 
+> Feedback for a streamed response is associated with the response ID created before the first chunk is returned.
+> 
+> ---
+> 
+> ## 8. State and Persistence
+> 
+> Learning state must ultimately be durable and shared, rather than held only in one process’s memory.
+> 
+> Persist at least:
+> 
+> - registered model/tool/plan versions;
+> - successes/failures and quality/risk evidence;
+> - observed cost, token use, latency, and failures;
+> - response-to-plan attribution;
+> - configuration performance;
+> - conversation state and async operation records;
+> - evaluation outcomes and feedback events.
+> 
+> Use model/tool/configuration version identifiers. Provider model behavior changes, prompts evolve, and tools are revised; past evidence should not be blindly attributed to a materially changed plan.
+> 
+> The initial `BayesSelector` may retain in-memory dictionaries, but its state shape should be designed for later persistence to a database or key-value store.
+> 
+> ---
+> 
+> ## 9. Async Direction
+> 
+> Async is internal infrastructure, not required in ordinary calling code.
+> 
+> Eventually, a selected plan may:
+> 
+> - launch multiple independent tools concurrently;
+> - wait for essential results before responding;
+> - return a provisional response while continuing research/verification;
+> - persist completed artifacts to conversation state;
+> - expose completed user-visible updates through `poll()`.
+> 
+> Async results should update explicit conversation/workspace state, not silently rewrite old messages. If an update is user-visible, it should be a new assistant message clearly linked to the originating response.
+> 
+> The initial full Planner can support registration and tool-aware plan selection before implementing all background execution machinery.
+> 
+> ---
+> 
+> ## 10. Other items
+> 
+> # Optional richer signals later:
+> planner.feedback(
+>     response.id,
+>     kind="correction",
+>     value="The cited paper was not actually a review article.",
+> )
+> 
+> # Inspection/debugging tool
+> planner.explain(response.id)
+> # {
+> #   "model": "gemini-2.5-flash",
+> #   "tools": [{"name": "scholar_search", "config": {"max_results": 5}}],
+> #   "estimated_cost_usd": 0.031,
+> #   "estimated_latency_s": 4.2,
+> #   "reason": "fresh, source-sensitive research question"
+> # }
+> 
+> # Outcomes from poll()
+> 
+> updates = planner.poll()
+> 
+> for update in updates:
+>     print(update.id)
+>     print(update.text)
+>     print(update.reply_to_response_id)
+>     print(update.kind)       # "research_update", "correction", "image", ...
+>     print(update.artifacts)  # optional URLs/attachments/structured outputs
+> 
+> # Add a durable asynchronous work layer
+> 
+> Distinguish these concepts:
+> 
+> | Concept | Meaning |
+> |---|---|
+> | **Plan** | The intended workflow selected by the policy |
+> | **Operation** | An individual executable unit: tool call, model call, evaluator, job |
+> | **Artifact** | Durable output of an operation: retrieved records, source bundle, code result, model draft |
+> | **Dependency** | An operation/artifact another operation needs |
+> | **Continuation** | Work triggered once dependencies resolve |
+> | **Subscription / watch** | A rule that reacts to future events or artifact completion |
+> | **Conversation state** | The durable, versioned state the next turn—or a later async update—can use |
+> 
+> A tool call should not fundamentally return “text.” It should create an operation and eventually produce typed artifacts.
+> 
+> ---
+> 
+> # Represent execution as a DAG, not a serial tool loop
+> 
+> The policy should construct a small **workflow DAG**.
+> 
+> For example, a fresh factual research question might become:
+> 
+> ```text
+>                  ┌─────────────────┐
+>                  │ memory.retrieve │
+>                  └────────┬────────┘
+>                           │
+> User turn ───────┬────────┴────────┐
+>                  │                 │
+>            ┌─────▼─────┐     ┌─────▼─────┐
+>            │ web.search│     │ task.class │
+>            └─────┬─────┘     └───────────┘
+>                  │
+>            ┌─────▼──────────┐
+>            │ source.extract │
+>            └─────┬──────────┘
+>                  │
+>         ┌────────▼────────┐
+>         │ answer.synthesis │
+>         └────────┬────────┘
+>                  │
+>         ┌────────▼─────────┐
+>         │ claim verification│
+>         └────────┬─────────┘
+>                  │
+>               response
+> ```
+> 
+> Independent operations begin immediately and concurrently. Dependent work begins when its required artifacts are ready.
+> 
+> This avoids an expensive pattern where a model sequentially decides:
+> 
+> 1. retrieve memory;
+> 2. wait;
+> 3. web search;
+> 4. wait;
+> 5. inspect sources;
+> 6. wait;
+> 7. write answer.
+> 
+> Instead, the planner can know in advance that retrieval and search are likely necessary and launch them in parallel.
+> 
+> # Support three response strategies: wait, provisional, and deferred
+> 
+> For a chat interaction, the policy should be able to choose among three patterns.
+> 
+> ## Wait for the complete answer
+> 
+> Use when the expected wait is short and results are essential.
+> 
+> ```text
+> User asks → run required operations concurrently → synthesize → respond once
+> ```
+> 
+> Appropriate for normal retrieval, short code execution, and fast web lookups.
+> 
+> ## Give a provisional answer, then improve it
+> 
+> Use when the system can offer something genuinely helpful now but a slow operation is likely to add value.
+> 
+> ```text
+> User asks
+>   → launch slow research / computation
+>   → return: “My initial view is X. I’m checking Y and Z.”
+>   → publish update if the results materially change or strengthen the answer
+> ```
+> 
+> This needs strong product discipline: do not create noisy “I found something!” follow-ups. The initial response must be clearly labelled as preliminary if material facts remain unresolved.
+> 
+> ## Acknowledge and defer
+> 
+> Use when doing the work before answering would exceed the latency budget and a partial answer would be misleading.
+> 
+> ```text
+> “I’ll investigate this and report back.”
+> ```
+> 
+> Then persist the work and deliver a later result.
+> 
+> This is especially appropriate for long-running computations, document ingestion, periodic searches, multi-model audits, or anything that should continue even if the browser/client disconnects.
+> 
+> ---
+> 
+> # “Drop results in” should mean state updates first, visible messages second
+> 
+> Completed async work should not have to wait uselessly for the next user prompt.
+> 
+> But there are two distinct destinations:
+> 
+> 1. **The system’s durable conversation/workspace state**
+> 2. **The user-visible chat stream**
+> 
+> Every completed operation should be eligible to update the first. Only some should update the second.
+> 
+> ## Durable state injection
+> 
+> When an operation completes, write a versioned state patch:
+> 
+> ```python
+> @dataclass
+> class StatePatch:
+>     scope: Literal["turn", "conversation", "project", "user_memory"]
+>     target_id: str
+>     patch: list[JsonPatchOp]
+>     provenance: Provenance
+>     confidence: float
+>     write_policy: Literal["append", "replace", "propose_for_review"]
+> ```
+> 
+> For example, a retrieval process might add:
+> 
+> ```json
+> {
+>   "scope": "conversation",
+>   "patch": [
+>     {
+>       "op": "add",
+>       "path": "/working_artifacts/research/2026-08-12/sources",
+>       "value": {
+>         "artifact_id": "art_123",
+>         "summary": "Five primary sources on ...",
+>         "status": "ready"
+>       }
+>     }
+>   ]
+> }
+> ```
+> 
+> The next model invocation automatically sees relevant ready artifacts through the context assembler.
+> 
+> This is what I would mean by “drop results into the conversation”: **put them into an explicit state/artifact layer associated with the conversation**, not silently splice arbitrary new text into the immutable transcript.
+> 
+> Why avoid transcript mutation?
+> 
+> - It destroys a clean audit trail.
+> - It can confuse models about who said what and when.
+> - It makes stale results look current.
+> - It creates prompt-injection and provenance problems.
+> - It can overwrite or conflict with newer user intent.
+> 
+> Instead, preserve an append-only event history and construct the model’s context from:
+> 
+> ```text
+> - canonical user/assistant transcript
+> - current task state
+> - eligible completed artifacts
+> - active plans / outstanding operations
+> - selected durable memories
+> ```
+> 
+> ## User-visible asynchronous updates
+> 
+> A result can create a visible assistant follow-up only under an explicit **delivery policy**.
+> 
+> ```python
+> @dataclass
+> class DeliveryPolicy:
+>     mode: Literal[
+>         "never",
+>         "on_material_result",
+>         "on_completion",
+>         "on_user_request",
+>         "digest"
+>     ]
+>     materiality_threshold: float
+>     quiet_hours: TimeWindow | None
+>     require_user_opt_in: bool
+>     max_updates_per_conversation: int
+> ```
+> 
+> For example:
+> 
+> - **Never**: background retrieval that merely prepares later context.
+> - **On material result**: a fact-check contradicts a preliminary answer.
+> - **On completion**: user explicitly asked “research this and get back to me.”
+> - **Digest**: a recurring watch/search sends one consolidated update daily or weekly.
+> - **On user request**: work completes silently, but is ready the moment the user asks.
+> 
+> A visible update should be an ordinary new assistant message with an explicit relationship to the originating turn:
+> 
+> ```python
+> @dataclass
+> class AsyncAssistantMessage:
+>     reply_to_turn_id: str
+>     operation_ids: list[str]
+>     artifact_ids: list[str]
+>     message: str
+>     reason_for_delivery: str
+>     provisional_answer_superseded: bool
+> ```
+> 
+> For example:
+> 
+> > **Update to my earlier answer:** I checked the primary sources, and one point needs correction: …  
+> > The rest of the recommendation still stands.
+> 
+> That is much safer and more legible than silently rewriting the earlier response.
+> 
+> ---
+> 
+> # Add an event bus and a state reducer
+> 
+> Introduce an append-only event log plus workers.
+> 
+> ```text
+> Chat/API/UI
+>     │
+>     ▼
+> Task creation ──► Policy/planner ──► Workflow DAG
+>     │                                      │
+>     ▼                                      ▼
+> Event log ◄──────── operation workers / tool adapters
+>     │
+>     ├── State reducer ──► conversation/project/user state
+>     ├── Context indexer ─► artifacts available to future model calls
+>     ├── Continuation scheduler
+>     ├── Delivery service ─► chat websocket / notification / email
+>     └── Learning logger ─► policy-training dataset
+> ```
+> 
+> ## Additional notes:
+> 
+>  - Under some conditions, the plan should be revised, but the delay
+>    associated with that should be included in the eventual evaluation
+>    of the original plan.
+>    
+>  - The entire process should be auditable, temporarily keeping track
+>    of full tool results, but permanently keeping track of "source
+>    materials": the exact excerpts from tool results that matter to the
+>    final responses.
+> 
+> I would like your help now in implementing this system. I have a dummy system in place, for which I would like a drop-in replacement:
+> ```
+> import random, uuid
+> from dataclasses import dataclass
+> from typing import Any, Callable
+> from .. import selector, openaigpt
+> 
+> @dataclass
+> class PlannerContext:
+>     user_id_for_memory: str
+>     current_timestamp: float
+>     history_list_raw_data: str = ""
+> 
+> @dataclass
+> class Response:
+>     id: str
+>     text: str
+>     model: str | None = None
+> 
+> @dataclass
+> class StreamResponse:
+>     id: str
+>     chunks: object          # Iterator[str]
+>     model: str | None = None
+> 
+>     def __iter__(self):
+>         return iter(self.chunks)
+> 
+> @dataclass
+> class Tool:
+>     name: str
+>     description: str
+>     fn: Callable
+>     config: dict[str, Any]
+>     quality_prior: float | None = None
+>     cost_estimate: float | None = None
+>     
+> class Planner:
+>     tools: dict[str, Tool] = {}
+> 
+>     @classmethod
+>     def register_tool(
+>         cls,
+>         name: str,
+>         description: str,
+>         fn: Callable,
+>         config: dict[str, Any],
+>         quality_prior: float | None = None,
+>         cost_estimate: float | None = None,
+>     ):
+>         cls.tools[name] = Tool(
+>             name=name,
+>             description=description,
+>             fn=fn,
+>             config=config,
+>             quality_prior=quality_prior,
+>             cost_estimate=cost_estimate,
+>         )
+>     
+>     def __init__(self, conversation_id):
+>         self.conversation_id = conversation_id
+>         self.selector = selector.BayesSelector([openaigpt])
+>         self.response_responders = {}
+> 
+>     def stream_response(self, messages, max_tokens=None, context=None):
+>         chunks = self.selector.stream_response(messages, max_tokens=max_tokens)
+> 
+>         response_id = str(uuid.uuid4())
+>         responder = self.selector.last_responder
+>         self.response_responders[response_id] = responder
+> 
+>         return StreamResponse(response_id, chunks, str(responder))
+> 
+>     def vote_up(self, response_id):
+>         responder = self.response_responders.get(response_id)
+>         if responder is not None:
+>             self.selector.successes[responder] += 1
+> 
+>     def vote_down(self, response_id):
+>         responder = self.response_responders.get(response_id)
+>         if responder is not None:
+>             self.selector.failures[responder] += 1
+> 
+>     # Forward-compatible async API: no background tasks in v1.
+>     def poll(self):
+>         return []
+> 
+>     def ongoing(self):
+>         return []
+> 
+>     def async_status(self):
+>         return {
+>             "count": 0,
+>             "operations": [],
+>         }
+> ```
+> 
+> Here is an example script to test it with:
+> ```
+> import time
+> from .planner import calculate_tool
+> from .planner.Planner import Planner, PlannerContext
+> 
+> Planner.register_tool(**calculate_tool.calculator_info)
+> planner_context = PlannerContext(user_id_for_memory="user", current_timestamp=time.time())
+> planner = Planner(conversation_id="example")
+> 
+> messages = [{"role": "system", "content": "You are a helpful assistant that explains things clearly."},
+>             {"role": "user", "content": "I heard that the Andromeda galaxy is headed toward us. How soon might it collide with our galaxy?"}]
+> 
+> response_stream = planner.stream_response(
+>     messages,
+>     max_tokens=200,
+>     context=planner_context)
+> 
+> for token in response_stream:
+>     print(token, end="")
+> ```
+> 
+> Can you start by planning out the necessary structure and files, for a full implementation of this tool?
+**assistant**:
+> I’d structure this as a small, layered package so the initial synchronous selector can evolve into a durable DAG/workflow system without breaking the existing `Planner` API.
+> 
+> ```text
+> planner/
+> ├── __init__.py                 # Public exports: Planner, Response, StreamResponse, etc.
+> ├── planner.py                  # Main synchronous facade / compatibility API
+> ├── types.py                    # Shared dataclasses and protocols
+> ├── registry.py                 # Versioned model/tool/plan registration
+> ├── responders.py               # Responder protocol and concrete plan responders
+> ├── plans.py                    # Plan templates, PlanSpec, configured tool variants
+> ├── selection.py                # Policy interface + BayesSelector adapter
+> ├── context.py                  # Effective-message construction and provenance controls
+> ├── feedback.py                 # Response attribution and vote/feedback recording
+> ├── metrics.py                  # Cost, tokens, latency, failure measurements
+> ├── persistence.py              # Repository interfaces; in-memory implementation initially
+> ├── evaluation.py               # Quality/risk evidence and offline evaluation records
+> ├── async_api.py                # poll(), ongoing(), async_status() compatibility layer
+> │
+> ├── workflow/
+> │   ├── __init__.py
+> │   ├── models.py               # Operation, Artifact, Dependency, Workflow DAG
+> │   ├── scheduler.py            # DAG readiness and continuation scheduling
+> │   ├── workers.py              # Operation execution abstraction
+> │   ├── events.py               # Append-only event types/log interface
+> │   ├── reducer.py              # Event -> durable conversation/workspace state
+> │   └── delivery.py             # DeliveryPolicy and async assistant updates
+> │
+> ├── tools/
+> │   ├── __init__.py
+> │   ├── base.py                 # Tool protocol and typed ToolResult
+> │   ├── calculator.py
+> │   ├── memory.py
+> │   └── search.py
+> │
+> ├── adapters/
+> │   ├── __init__.py
+> │   ├── base.py                 # ModelAdapter protocol
+> │   ├── openai.py
+> │   └── gemini.py
+> │
+> └── tests/
+>     ├── test_planner.py
+>     ├── test_selection.py
+>     ├── test_streaming.py
+>     ├── test_feedback.py
+>     ├── test_context.py
+>     └── test_workflow.py
+> ```
+> 
+> Key core types in `types.py`:
+> 
+> - `ModelSpec`, `ToolSpec`, `PlanSpec`, `Responder`
+> - `ResponseRecord`: response ID, plan/version IDs, timestamps, costs, latency, status
+> - `Provenance`: source, tool version, artifact ID, trust level
+> - `ToolResult`: typed artifacts rather than raw text alone
+> - `PlannerContext`: retain your current fields, expanding gradually
+> 
+> Recommended implementation phases:
+> 
+> 1. **Drop-in planner v1**
+>    - Preserve `stream_response`, votes, and empty async methods.
+>    - Add `chat_response`.
+>    - Replace `last_responder` reliance with explicit response records.
+>    - Add model registration and plan registration.
+> 
+> 2. **Plan-aware selection**
+>    - Wrap existing `BayesSelector` behind a policy interface.
+>    - Register explicit responder templates: direct model, model + calculator, model + memory, etc.
+>    - Record observed latency/cost/failures.
+> 
+> 3. **Context assembly**
+>    - Keep canonical messages immutable.
+>    - Build effective messages per selected plan.
+>    - Attach injected material with provenance and token-budget rules.
+> 
+> 4. **Durable persistence**
+>    - Define repository protocols first.
+>    - Implement `InMemoryRepository`; later add SQLite/Postgres without changing planner logic.
+> 
+> 5. **Workflow/DAG layer**
+>    - Introduce operations, artifacts, event log, reducer, and scheduler.
+>    - Initially execute synchronously; later attach worker queues.
+>    - Keep `poll()` as the stable external delivery mechanism.
+> 
+> The immediate first coding target should be `types.py`, `registry.py`, `responders.py`, `selection.py`, `persistence.py`, and a rewritten `planner.py`. This gives you a useful, testable plan-selection system before introducing workflow infrastructure.
+**user**:
+> Before we do the first steps of implementation, I would like for you to give me docstring-style material for each of the files. In so doing, please ensure that all of the relevant information from the long description above is preserved where it needs to be implemented in each of the files, so that we can then proceed to implement these with just that information. Make sure to also include function templates information on both sides: both in the caller file and in the helper file.
+**assistant**:
+> Below is a docstring-first package specification. These can be placed at the top of each file before implementation. Function signatures are included both where contracts are defined and where they are consumed.
+> 
+> ---
+> 
+> ### `planner/__init__.py`
+> 
+> ```python
+> """
+> Public Planner package API.
+> 
+> This module re-exports the stable application-facing interfaces:
+> 
+>     from .planner import Planner
+>     from .types import (
+>         PlannerContext, Response, StreamResponse, ToolConfig,
+>         AsyncUpdate, ResponseRecord,
+>     )
+> 
+> The ordinary application API is intentionally synchronous:
+> 
+>     planner = Planner(conversation_id="...")
+>     response = planner.chat_response(messages)
+>     stream = planner.stream_response(messages)
+> 
+>     planner.vote_up(response.id)
+>     planner.vote_down(response.id)
+> 
+>     updates = planner.poll()
+>     active = planner.ongoing()
+>     status = planner.async_status()
+> 
+> Internally, plans may eventually execute asynchronous workflow DAGs, but
+> callers must not need `await`, `async with`, or provider-specific APIs.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/types.py`
+> 
+> ```python
+> """
+> Shared immutable-ish domain types for planning, selection, execution,
+> feedback, provenance, and durable state.
+> 
+> Important design rules:
+> - A response is attributed to a concrete selected PlanSpec/version, never to
+>   mutable state such as `selector.last_responder`.
+> - Canonical user/assistant transcript messages are append-only and auditable.
+> - Internal context, tool outputs, and async results belong in typed artifacts
+>   and explicit state, not silently rewritten transcript text.
+> - Tool configuration is part of plan identity and therefore learnable.
+> - Full raw tool results may be retained temporarily; durable source material
+>   should preserve exact excerpts actually relevant to a response.
+> 
+> Expected core types:
+> 
+> @dataclass
+> class PlannerContext:
+>     user_id_for_memory: str
+>     current_timestamp: float
+>     history_list_raw_data: str = ""
+>     project_id: str | None = None
+>     workspace_id: str | None = None
+>     task_class: str | None = None
+>     risk_level: str | None = None
+> 
+> @dataclass
+> class Response:
+>     id: str
+>     text: str
+>     model: str | None = None
+> 
+> @dataclass
+> class StreamResponse:
+>     id: str
+>     chunks: Iterator[str]
+>     model: str | None = None
+>     # __iter__ returns iter(self.chunks).
+> 
+> @dataclass(frozen=True)
+> class ToolConfig:
+>     defaults: Mapping[str, Any]
+>     options: Mapping[str, Sequence[Any]] = field(default_factory=dict)
+>     version: str = "1"
+> 
+> @dataclass(frozen=True)
+> class ModelSpec:
+>     model_id: str
+>     adapter_id: str
+>     version: str
+>     cost_per_million_tokens: float | None
+>     quality_prior: float | None
+>     metadata: Mapping[str, Any] = field(default_factory=dict)
+> 
+> @dataclass(frozen=True)
+> class ToolSpec:
+>     name: str
+>     description: str
+>     version: str
+>     config: ToolConfig
+>     quality_prior: float | None
+>     cost_estimate: float | None
+> 
+> @dataclass(frozen=True)
+> class PlanSpec:
+>     plan_id: str
+>     version: str
+>     model_id: str | None
+>     tool_bindings: tuple[ToolBinding, ...]
+>     template_id: str
+>     quality_prior: float | None
+>     risk_policy: RiskPolicy | None
+>     metadata: Mapping[str, Any]
+>     # Identity must incorporate model, tool versions, prompts/instructions,
+>     # and discrete configuration variants that materially affect behavior.
+> 
+> @dataclass(frozen=True)
+> class ToolBinding:
+>     tool_name: str
+>     tool_version: str
+>     config: Mapping[str, Any]
+> 
+> @dataclass
+> class ResponseRecord:
+>     response_id: str
+>     conversation_id: str
+>     turn_id: str | None
+>     plan_id: str
+>     plan_version: str
+>     model_id: str | None
+>     started_at: float
+>     completed_at: float | None = None
+>     status: Literal["streaming", "completed", "failed", "cancelled"] = "streaming"
+>     prompt_tokens: int | None = None
+>     completion_tokens: int | None = None
+>     estimated_cost_usd: float | None = None
+>     observed_cost_usd: float | None = None
+>     latency_s: float | None = None
+>     visible_output_started: bool = False
+>     error: str | None = None
+> 
+> @dataclass(frozen=True)
+> class Provenance:
+>     source_kind: Literal["tool", "model", "memory", "user", "system", "evaluator"]
+>     source_id: str
+>     source_version: str | None
+>     operation_id: str | None
+>     artifact_id: str | None
+>     retrieved_at: float | None
+>     trust_level: Literal["untrusted", "external", "verified", "internal"]
+>     prompt_injection_risk: float | None = None
+> 
+> @dataclass
+> class ToolResult:
+>     # Tools return typed durable candidates, not merely display text.
+>     artifacts: list["Artifact"]
+>     source_excerpts: list["SourceExcerpt"] = field(default_factory=list)
+>     state_patches: list["StatePatch"] = field(default_factory=list)
+>     metadata: Mapping[str, Any] = field(default_factory=dict)
+> 
+> @dataclass
+> class AsyncUpdate:
+>     id: str
+>     reply_to_response_id: str | None
+>     kind: str
+>     text: str
+>     artifacts: list[str] = field(default_factory=list)
+> ```
+> ```
+> 
+> ---
+> 
+> ### `planner/adapters/base.py`
+> 
+> ```python
+> """
+> Provider-neutral model adapter protocol.
+> 
+> Adapters encapsulate provider SDKs and expose only capabilities required by
+> Planner/Responder. They do not choose plans, mutate learning state, or inject
+> planner-owned context.
+> 
+> Required adapter contract:
+> 
+> class ModelAdapter(Protocol):
+>     def chat_response(
+>         self,
+>         messages: Sequence[Mapping[str, Any]],
+>         max_tokens: int | None = None,
+>     ) -> str: ...
+> 
+>     def stream_response(
+>         self,
+>         messages: Sequence[Mapping[str, Any]],
+>         max_tokens: int | None = None,
+>     ) -> Iterator[str]: ...
+> 
+>     def allowed(self, tokens: int) -> bool:
+>         '''
+>         Return False when unavailable due to context limits, quota, health,
+>         policy, provider outage, or other execution constraints.
+>         '''
+>         ...
+> 
+>     def estimate_cost(
+>         self,
+>         prompt_tokens: int,
+>         completion_tokens: int,
+>     ) -> float | None: ...
+> 
+> Caller contract:
+> - responders.py calls `adapter.allowed(estimated_prompt_tokens)` before
+>   invocation;
+> - responders.py calls chat_response/stream_response only after Planner's
+>   context assembler has created effective messages;
+> - metrics.py records actual provider usage where available;
+> - no adapter should rely on a global mutable "last responder".
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/adapters/openai.py` and `planner/adapters/gemini.py`
+> 
+> ```python
+> """
+> Concrete implementation of `adapters.base.ModelAdapter` for one provider.
+> 
+> This file translates normalized message structures, max_tokens, streaming
+> events, errors, token accounting, and provider health into the base protocol.
+> 
+> Public constructor template:
+> 
+> class OpenAIAdapter:
+>     def __init__(self, client: Any, provider_model_name: str, ...): ...
+>     def chat_response(self, messages, max_tokens=None) -> str: ...
+>     def stream_response(self, messages, max_tokens=None) -> Iterator[str]: ...
+>     def allowed(self, tokens: int) -> bool: ...
+>     def estimate_cost(self, prompt_tokens, completion_tokens) -> float | None: ...
+> 
+> Caller: registry.py registers the adapter through:
+>     Planner.register_model(adapter, model_id=..., cost_per_million_tokens=...)
+> 
+> This module must not contain task policy, tool selection, persistence policy,
+> or durable user-memory logic.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/tools/base.py`
+> 
+> ```python
+> """
+> Tool protocol and normalized typed tool-result contract.
+> 
+> Tools are executable capabilities. In the initial synchronous system they may
+> be invoked directly by a responder. In the workflow system they are executed
+> as Operations and yield Artifacts. Tool interfaces should therefore avoid
+> assuming that their primary result is user-visible text.
+> 
+> Expected tool callable shape:
+> 
+> ToolCallable = Callable[
+>     [ToolInvocation],
+>     ToolResult,
+> ]
+> 
+> @dataclass(frozen=True)
+> class ToolInvocation:
+>     operation_id: str | None
+>     conversation_id: str
+>     arguments: Mapping[str, Any]
+>     config: Mapping[str, Any]
+>     context: PlannerContext | None
+>     provenance_requirements: Mapping[str, Any]
+> 
+> @dataclass
+> class Tool:
+>     name: str
+>     description: str
+>     fn: ToolCallable | Callable[..., Any]
+>     config: ToolConfig
+>     quality_prior: float | None = None
+>     cost_estimate: float | None = None
+>     version: str = "1"
+> 
+> Compatibility:
+> - registry.py may accept legacy functions such as
+>   `fn(prompt, config) -> str`.
+> - tools/base.py normalizes such outputs to ToolResult/Artifact.
+> - Tool configuration defaults and allowed discrete options are validated here.
+> 
+> Caller:
+> - responders.py or workflow/workers.py invokes:
+>       result = tool.fn(invocation)
+> - the caller persists raw temporary output as appropriate, converts relevant
+>   materials to artifacts/source excerpts, and never blindly injects untrusted
+>   tool text into system instructions.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/tools/calculator.py`
+> 
+> ```python
+> """
+> Safe calculator tool.
+> 
+> The calculator evaluates only a restricted mathematical expression language.
+> It must use AST parsing with an explicit allowlist of node types, operators,
+> functions, constants, numeric limits, and execution-time limits. It must not
+> use unrestricted eval(), import access, attribute access, indexing into
+> arbitrary objects, file access, or function calls outside the allowlist.
+> 
+> Exports legacy-compatible registration metadata:
+> 
+> calculator_info = {
+>     "name": "calculator",
+>     "description": "...",
+>     "fn": calculate,
+>     "config": {...},
+>     "quality_prior": ...,
+>     "cost_estimate": ...,
+> }
+> 
+> Expected helper:
+>     def calculate(invocation: ToolInvocation) -> ToolResult: ...
+> 
+> Caller:
+>     Planner.register_tool(**calculate_tool.calculator_info)
+> 
+> The result should contain the numerical answer, normalized expression,
+> calculation provenance, and any warnings about invalid/unsafe input.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/tools/memory.py` and `planner/tools/search.py`
+> 
+> ```python
+> """
+> Typed retrieval/search tool implementation.
+> 
+> Memory/search configuration is a first-class decision variable, including:
+> collection(s), filters, top-k, score threshold, reranking strategy, token
+> budget, summarization strategy, recency limits, source whitelists, extraction
+> depth, and review-only/source-quality filters.
+> 
+> Required behavior:
+> - return retrieved records and exact excerpts as typed Artifacts;
+> - include provenance, timestamps, source URLs/identifiers, and trust level;
+> - label retrieved content as potentially stale and externally supplied;
+> - treat retrieved documents as untrusted data, never as privileged
+>   instructions;
+> - produce concise context candidates rather than injecting arbitrary raw text.
+> 
+> Expected helper:
+>     def retrieve(invocation: ToolInvocation) -> ToolResult: ...
+> or:
+>     def search(invocation: ToolInvocation) -> ToolResult: ...
+> 
+> Caller:
+> - plans.py creates bounded discrete configuration variants;
+> - responders.py/workflow.workers invokes the tool;
+> - context.py chooses eligible excerpts under a token and relevance budget.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/registry.py`
+> 
+> ```python
+> """
+> Shared, version-aware registry for models, tools, plans, and plan templates.
+> 
+> Registry entries are registered once and then referenced by stable IDs and
+> versions. The registry contains capability metadata; it does not execute
+> providers and does not decide which plan to use.
+> 
+> Public API consumed by Planner:
+> 
+> class Registry:
+>     def register_model(
+>         self,
+>         adapter: ModelAdapter,
+>         *,
+>         model_id: str,
+>         cost_per_million_tokens: float | None = None,
+>         quality_prior: float | None = None,
+>         version: str = "1",
+>         metadata: Mapping[str, Any] | None = None,
+>     ) -> ModelSpec: ...
+> 
+>     def register_tool(
+>         self,
+>         *,
+>         name: str,
+>         description: str,
+>         fn: Callable,
+>         config: ToolConfig | Mapping[str, Any],
+>         quality_prior: float | None = None,
+>         cost_estimate: float | None = None,
+>         version: str = "1",
+>     ) -> ToolSpec: ...
+> 
+>     def register_plan(self, plan: PlanSpec) -> PlanSpec: ...
+>     def get_model(self, model_id: str, version: str | None = None) -> ...: ...
+>     def get_tool(self, name: str, version: str | None = None) -> Tool: ...
+>     def get_plan(self, plan_id: str, version: str | None = None) -> PlanSpec: ...
+>     def eligible_plans(self, context: PlannerContext | None) -> list[PlanSpec]: ...
+> 
+> Caller:
+> - `Planner.register_model(...)` and `Planner.register_tool(...)` delegate here.
+> - plans.py reads registered models/tools to instantiate explicit templates.
+> - selection.py receives eligible concrete plans, not registry internals.
+> 
+> Do not silently overwrite a materially
+**user**:
+> Please continue where you left off.
+**assistant**:
+> ### `planner/registry.py` (continued)
+> 
+> ```python
+> """
+> Do not silently overwrite a materially changed version of a registered item.
+> Instead, require an explicit version bump or a clear overwrite flag during
+> registration, as plan identity must be stable for attribution and learning.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/context.py`
+> 
+> ```python
+> """
+> Context assembly for plan selection and execution.
+> 
+> This module is responsible for gathering all relevant information needed by
+> the plan selector and responders from various sources: canonical conversation
+> history, user profile, active tasks, durable workspace/conversation state,
+> eligible retrieved artifacts, tool results, and async updates.
+> 
+> Important design rules:
+> - Context is assembled per-turn and immutable for that turn.
+> - It provides a unified view, abstracting away underlying storage/retrieval.
+> - It includes canonical messages, derived metadata, and eligibility signals.
+> - It does not mutate state or choose plans.
+> - Canonical transcript messages remain intact and append-only.
+> - Retrieved/external content is data, not trusted instruction text.
+> - Internal injected material must retain provenance, relevance, scope, and
+>   token-budget controls.
+> 
+> Public API consumed by selection.py and responders.py:
+> 
+> class ContextAssembler:
+>     def __init__(
+>         self,
+>         conversation_id: str,
+>         user_id: str | None,
+>         registry: Registry,
+>         repository: PlannerRepository,
+>         ...
+>     ): ...
+> 
+>     def assemble(
+>         self,
+>         raw_messages: Sequence[Mapping[str, Any]],
+>         current_state: Any | None = None,
+>         tool_results: Sequence[ToolResult] | None = None,
+>         async_updates: Sequence[AsyncUpdate] | None = None,
+>         metadata: Mapping[str, Any] | None = None,
+>     ) -> PlannerContext: ...
+> 
+>     def effective_messages(
+>         self,
+>         context: PlannerContext,
+>         plan: PlanSpec,
+>         *,
+>         max_tokens: int | None = None,
+>     ) -> list[Mapping[str, Any]]:
+>         '''
+>         Produce plan-specific model messages by combining canonical messages
+>         with relevant, provenance-labeled internal context.
+> 
+>         This may add tool instructions, selected artifacts, source-grounding
+>         requirements, output contracts, outstanding-work awareness, or
+>         verification instructions. It must not modify the canonical transcript.
+>         '''
+>         ...
+> 
+>     def get_conversation_history(self) -> Sequence[Mapping[str, Any]]: ...
+>     def get_user_profile(self) -> Mapping[str, Any]: ...
+>     def get_active_tasks(self) -> Sequence[Mapping[str, Any]]: ...
+>     def get_eligible_artifacts(self) -> Sequence[Artifact]: ...
+> 
+> Caller:
+> - planner.py invokes `assemble` at the beginning of each chat interaction.
+> - selection.py receives the resulting PlannerContext.
+> - responders.py invokes `effective_messages` only after plan selection.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/plans.py`
+> 
+> ```python
+> """
+> Plan specification, templating, and instantiation.
+> 
+> This module defines the structure of a Plan, how PlanSpecs are templated from
+> registered models and tools, and how they are instantiated into concrete
+> candidate plans ready for selection and execution.
+> 
+> Important design rules:
+> - Plans are immutable after instantiation.
+> - Plan identity incorporates model/tool versions, prompts/instructions,
+>   responder type, risk policy, and configuration variants that materially
+>   affect behavior.
+> - Tool configuration is a first-class decision variable.
+> - Avoid arbitrary combinatorial model-tool generation. Start with a small,
+>   explicit, bounded family of plans.
+> - Examples: direct response; model + calculator; model + memory retrieval;
+>   model + web/source grounding; draft + independent reviewer.
+> 
+> Expected helpers:
+> 
+> class PlanTemplate(Protocol):
+>     def instantiate_plan(
+>         self,
+>         template_id: str,
+>         model_specs: Mapping[str, ModelSpec],
+>         tool_specs: Mapping[str, ToolSpec],
+>         context: PlannerContext,
+>         **template_args: Any,
+>     ) -> PlanSpec: ...
+> 
+> def create_direct_plan_template(...) -> PlanTemplate: ...
+> def create_tool_use_plan_template(...) -> PlanTemplate: ...
+> def create_rag_plan_template(...) -> PlanTemplate: ...
+> def create_reviewed_plan_template(...) -> PlanTemplate: ...
+> 
+> def generate_plans_from_templates(
+>     templates: Sequence[PlanTemplate],
+>     context: PlannerContext,
+>     registry: Registry,
+> ) -> list[PlanSpec]:
+>     '''
+>     Instantiate only plans feasible and eligible for this context. For example,
+>     exclude plans whose required model/tool is unavailable, disallowed for the
+>     risk category, or incompatible with available token budget.
+>     '''
+>     ...
+> 
+> Caller:
+> - planner.py asks this module for current candidate plans.
+> - registry.py stores explicitly registered plans.
+> - selection.py receives concrete PlanSpecs, never templates.
+> - responders.py interprets the selected plan's responder/template metadata.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/selection.py`
+> 
+> ```python
+> """
+> Pure plan-selection policy.
+> 
+> This module chooses a PlanSpec for a PlannerContext from eligible candidates.
+> It applies learned evidence, quality priors, cost, latency, reliability risk,
+> availability, and constrained exploration. It never executes plans or mutates
+> durable state during selection.
+> 
+> Conceptual utility:
+> 
+>     U(p | x) =
+>         w_s * predicted_satisfaction
+>       + w_q * predicted_quality
+>       - w_c * expected_cost
+>       - w_l * expected_latency
+>       - w_r * expected_risk
+>       + w_e * exploration_value
+> 
+> Quality, reliability, user satisfaction, and cost/latency must remain separate
+> evidence streams. Do not allow cheap fluent plans to dominate solely because
+> they collect positive thumbs.
+> 
+> Public API:
+> 
+> class PlanSelector(Protocol):
+>     def select_plan(
+>         self,
+>         context: PlannerContext,
+>         candidate_plans: Sequence[PlanSpec],
+>         past_response_records: Sequence[ResponseRecord] | None = None,
+>     ) -> PlanSpec: ...
+> 
+> class BayesSelector:
+>     def __init__(
+>         self,
+>         weights: Mapping[str, float] | None = None,
+>         *,
+>         random_seed: int | None = None,
+>         high_stakes_exploration_limit: float = ...,
+>     ): ...
+> 
+>     def select_plan(...) -> PlanSpec: ...
+> 
+>     def score_plan(
+>         self,
+>         plan: PlanSpec,
+>         context: PlannerContext,
+>         records: Sequence[ResponseRecord],
+>     ) -> float: ...
+> 
+>     def update_weights(self, feedback: Any) -> None:
+>         '''
+>         Called by evaluation.py or feedback.py. This is not invoked as a hidden
+>         side effect of `select_plan`.
+>         '''
+>         ...
+> 
+> Caller:
+> - planner.py gets candidate plans and invokes `selector.select_plan(...)`.
+> - feedback.py/evaluation.py update evidence after outcomes arrive.
+> - selection must be deterministic given candidates, context, learned state,
+>   and configured/random exploration seed.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/responders.py`
+> 
+> ```python
+> """
+> Execution of selected plans.
+> 
+> Responders take a selected PlanSpec and PlannerContext, construct effective
+> messages, invoke registered model adapters and/or tools, and return a Response
+> or StreamResponse plus a ResponseRecord.
+> 
+> Important design rules:
+> - Responders execute; they do not choose plans or update durable learning.
+> - Tool outputs require provenance/safety handling before model injection.
+> - A responder must record model/tool failure, latency, tokens, and estimated
+>   or observed cost.
+> - For streaming, create the response record before yielding the first token.
+> - Before visible output, a failed stream may be retried under planner policy.
+>   After visible output, do not silently switch model or plan.
+> 
+> Public protocol:
+> 
+> class Responder(Protocol):
+>     def chat_response(
+>         self,
+>         plan: PlanSpec,
+>         context: PlannerContext,
+>         registry: Registry,
+>         *,
+>         max_tokens: int | None = None,
+>     ) -> tuple[Response, ResponseRecord]: ...
+> 
+>     def stream_response(
+>         self,
+>         plan: PlanSpec,
+>         context: PlannerContext,
+>         registry: Registry,
+>         *,
+>         max_tokens: int | None = None,
+>     ) -> tuple[StreamResponse, ResponseRecord]: ...
+> 
+> Concrete responders:
+> 
+> class LLMResponder: ...
+> class ToolUseResponder: ...
+> class WorkflowResponder: ...
+> 
+> Caller:
+> - planner.py selects the responder appropriate to `plan.template_id` or plan
+>   metadata and invokes one of these methods.
+> - planner.py persists the resulting ResponseRecord.
+> - feedback.py later uses the record for attribution.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/feedback.py`
+> 
+> ```python
+> """
+> Feedback event capture and response-to-plan attribution.
+> 
+> Feedback is always linked to immutable response records, not a mutable current
+> responder. Thumbs are useful satisfaction signals, but they are not equivalent
+> to truthfulness, source quality, or reliability.
+> 
+> Public API:
+> 
+> class FeedbackService:
+>     def vote_up(self, response_id: str) -> FeedbackEvent: ...
+>     def vote_down(self, response_id: str) -> FeedbackEvent: ...
+> 
+>     def feedback(
+>         self,
+>         response_id: str,
+>         *,
+>         kind: Literal["thumb_up", "thumb_down", "correction", "rating", "edit"],
+>         value: Any = None,
+>     ) -> FeedbackEvent: ...
+> 
+> Caller:
+> - planner.py exposes `vote_up`, `vote_down`, and eventually `feedback`.
+> - FeedbackService reads the ResponseRecord from persistence.py.
+> - It writes durable feedback events and forwards attributable learning signals
+>   to evaluation.py / selection.py.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/metrics.py`
+> 
+> ```python
+> """
+> Token, cost, latency, availability, and failure measurement.
+> 
+> All estimates are explicit and revisable. Observed provider usage should
+> eventually supersede static provider price estimates.
+> 
+> Public helpers:
+> 
+> def estimate_prompt_tokens(messages: Sequence[Mapping[str, Any]]) -> int: ...
+> def estimate_completion_tokens(max_tokens: int | None, plan: PlanSpec) -> int: ...
+> def estimate_plan_cost(plan: PlanSpec, prompt_tokens: int, completion_tokens: int) -> float | None: ...
+> def measure_latency() -> ContextManager[Callable[[], float]]: ...
+> def record_execution_metrics(record: ResponseRecord, ...) -> ResponseRecord: ...
+> 
+> Caller:
+> - selection.py uses estimates as soft cost/latency penalties.
+> - responders.py measures observed execution metrics.
+> - persistence.py stores metrics.
+> - evaluation.py uses failures/reliability statistics.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/persistence.py`
+> 
+> ```python
+> """
+> Durable storage interfaces and initial in-memory implementations.
+> 
+> Persistence is separated from planning so a local prototype can use in-memory
+> stores while production uses SQLite, Postgres, Redis, object storage, queues,
+> or event infrastructure.
+> 
+> Persist at minimum:
+> - registered model/tool/plan versions;
+> - response-to-plan attribution and feedback;
+> - quality, reliability, failure, cost, token, and latency evidence;
+> - artifacts, exact source excerpts, state patches, and async operations;
+> - conversation state, events, evaluation outcomes, and delivery records.
+> 
+> Public interfaces:
+> 
+> class PlannerRepository(Protocol):
+>     def save_response_record(self, record: ResponseRecord) -> None: ...
+>     def get_response_record(self, response_id: str) -> ResponseRecord | None: ...
+>     def append_feedback(self, event: FeedbackEvent) -> None: ...
+>     def response_records_for_plan(self, plan_id: str, version: str) -> list[ResponseRecord]: ...
+>     def append_event(self, event: Event) -> None: ...
+>     def events_for_conversation(self, conversation_id: str) -> list[Event]: ...
+>     def get_state(self, scope: str, target_id: str) -> Mapping[str, Any]: ...
+>     def apply_state_patch(self, patch: StatePatch) -> None: ...
+>     def save_artifact(self, artifact: Artifact) -> None: ...
+>     def get_artifacts(self, conversation_id: str, ...) -> list[Artifact]: ...
+>     def save_operation(self, operation: Operation) -> None: ...
+>     def get_operation(self, operation_id: str) -> Operation | None: ...
+> 
+> class InMemoryRepository(PlannerRepository):
+>     '''Thread-safe development implementation.'''
+> 
+> Caller:
+> - planner.py reads/writes response records and state.
+> - context.py reads state/artifacts.
+> - workflow reducers and workers append events and persist outputs.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/evaluation.py`
+> 
+> ```python
+> """
+> Quality, reliability, and offline evaluation.
+> 
+> This module prevents chat thumbs from becoming the sole optimization target.
+> It maintains separate evidence for satisfaction, task quality, factuality,
+> source grounding, calibration, policy compliance, tests, and failures.
+> 
+> Public API:
+> 
+> class Evaluator(Protocol):
+>     def evaluate(
+>         self,
+>         record: ResponseRecord,
+>         response: Response | None,
+>         context: PlannerContext,
+>     ) -> EvaluationResult: ...
+> 
+> class EvaluationService:
+>     def record_feedback(self, feedback: FeedbackEvent) -> None: ...
+>     def record_evaluation(self, result: EvaluationResult) -> None: ...
+>     def update_plan_evidence(self, plan: PlanSpec) -> None: ...
+>     def run_offline_suite(self, suite: EvaluationSuite) -> list[EvaluationResult]: ...
+> 
+> Evaluation suites should cover representative real work: research, coding,
+> technical/numerical analysis, project continuity, planning, writing, and
+> source-grounded factual tasks. Prefer objective tests when possible.
+> 
+> Caller:
+> - feedback.py forwards user feedback.
+> - workflow may schedule verification evaluators.
+> - selection.py consumes summarized evidence, never raw evaluator internals.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/async_api.py`
+> 
+> ```python
+> """
+> Synchronous facade for internally asynchronous work.
+> 
+> Initial implementation is intentionally inert:
+> 
+>     poll() -> []
+>     ongoing() -> []
+>     async_status() -> {"count": 0, "operations": []}
+> 
+> Later it exposes durable workflow results without requiring application callers
+> to become async.
+> 
+> Public API:
+> 
+> class AsyncWorkService:
+>     def poll(self, conversation_id: str) -> list[AsyncUpdate]: ...
+>     def ongoing(self, conversation_id: str) -> list[OperationSummary]: ...
+>     def async_status(self, conversation_id: str) -> dict[str, Any]: ...
+> 
+> Caller:
+> - planner.py delegates Planner.poll/ongoing/async_status here.
+> - workflow/delivery.py writes eligible delivered updates.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/workflow/models.py`
+> 
+> ```python
+> """
+> Workflow-DAG domain types.
+> 
+> A Plan is intended policy. An Operation is an executable unit. An Artifact is
+> durable output. Dependencies define readiness. Continuations run after needed
+> artifacts resolve. Subscriptions/watch rules react to future events.
+> 
+> Expected types:
+> 
+> @dataclass
+> class Operation:
+>     id: str
+>     workflow_id: str
+>     kind: str                 # model_call, tool_call, evaluator
+**user**:
+> Please continue where you left off.
+**assistant**:
+> ### `planner/workflow/models.py` (continued)
+> 
+> ```python
+> """
+>     kind: str                 # model_call, tool_call, evaluator, job
+>     status: Literal["pending", "ready", "running", "completed", "failed", "cancelled"]
+>     plan_id: str | None
+>     input: Mapping[str, Any]
+>     dependency_ids: list[str]
+>     artifact_ids: list[str]
+>     created_at: float
+>     started_at: float | None = None
+>     completed_at: float | None = None
+>     error: str | None = None
+>     retry_count: int = 0
+> 
+> @dataclass
+> class Artifact:
+>     id: str
+>     conversation_id: str
+>     operation_id: str
+>     kind: str                 # source_bundle, retrieval, draft, code_result, image, ...
+>     content: Any
+>     provenance: Provenance
+>     created_at: float
+>     expires_at: float | None = None
+>     durable: bool = True
+> 
+> @dataclass
+> class SourceExcerpt:
+>     id: str
+>     artifact_id: str
+>     text: str
+>     source_locator: str | None
+>     relevance_score: float | None
+>     provenance: Provenance
+> 
+> @dataclass
+> class Workflow:
+>     id: str
+>     conversation_id: str
+>     originating_turn_id: str | None
+>     plan: PlanSpec
+>     operations: dict[str, Operation]
+>     delivery_policy: DeliveryPolicy
+> 
+> @dataclass
+> class StatePatch:
+>     scope: Literal["turn", "conversation", "project", "user_memory"]
+>     target_id: str
+>     patch: list[JsonPatchOp]
+>     provenance: Provenance
+>     confidence: float
+>     write_policy: Literal["append", "replace", "propose_for_review"]
+> 
+> @dataclass
+> class DeliveryPolicy:
+>     mode: Literal["never", "on_material_result", "on_completion",
+>                   "on_user_request", "digest"]
+>     materiality_threshold: float = 0.0
+>     quiet_hours: Any | None = None
+>     require_user_opt_in: bool = False
+>     max_updates_per_conversation: int = 1
+> 
+> Caller:
+> - plans.py or responders.py creates a Workflow from a selected PlanSpec.
+> - scheduler.py identifies runnable operations.
+> - workers.py executes operations and emits artifacts/events.
+> - reducer.py applies state patches.
+> - delivery.py turns eligible artifacts into user-visible updates.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/workflow/events.py`
+> 
+> ```python
+> """
+> Append-only workflow event definitions and event-log interface.
+> 
+> Events are the audit trail for planning, execution, retries, artifacts, state
+> updates, delivery decisions, and learning. State is derived from events rather
+> than silently mutated wherever practical.
+> 
+> Expected event kinds:
+> - workflow.created
+> - operation.ready / started / completed / failed / cancelled
+> - artifact.created
+> - state.patch.proposed / applied / rejected
+> - continuation.scheduled
+> - async.update.delivered
+> - feedback.recorded
+> - evaluation.completed
+> 
+> Public API:
+> 
+> @dataclass(frozen=True)
+> class Event:
+>     id: str
+>     kind: str
+>     timestamp: float
+>     conversation_id: str
+>     workflow_id: str | None
+>     operation_id: str | None
+>     payload: Mapping[str, Any]
+>     provenance: Provenance | None = None
+> 
+> class EventLog(Protocol):
+>     def append(self, event: Event) -> None: ...
+>     def read(self, conversation_id: str, after: str | None = None) -> list[Event]: ...
+> 
+> Caller:
+> - planner.py emits workflow/response lifecycle events.
+> - workers.py emits execution and artifact events.
+> - reducer.py and scheduler.py consume events.
+> - persistence.py implements EventLog or delegates it to infrastructure.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/workflow/scheduler.py`
+> 
+> ```python
+> """
+> Workflow DAG readiness and continuation scheduling.
+> 
+> The scheduler determines which operations can begin based on completed
+> dependencies. Independent operations should run concurrently where supported;
+> it must not impose a serial model-tool loop when the selected plan already
+> knows necessary work.
+> 
+> Public API:
+> 
+> class WorkflowScheduler:
+>     def create_workflow(
+>         self,
+>         plan: PlanSpec,
+>         context: PlannerContext,
+>         strategy: Literal["wait", "provisional", "deferred"],
+>     ) -> Workflow: ...
+> 
+>     def runnable_operations(self, workflow: Workflow) -> list[Operation]:
+>         '''
+>         Return pending operations whose required artifact/operation
+>         dependencies are completed successfully.
+>         '''
+>         ...
+> 
+>     def mark_completed(
+>         self,
+>         workflow_id: str,
+>         operation_id: str,
+>         artifacts: Sequence[Artifact],
+>         patches: Sequence[StatePatch],
+>     ) -> list[Operation]: ...
+> 
+>     def schedule_continuations(self, event: Event) -> list[Operation]: ...
+> 
+> Caller:
+> - responders.py uses it for synchronous execution of small workflows.
+> - background workers use it for deferred/provisional workflows.
+> - workers.py receives runnable operations from it.
+> - it emits scheduling events through events.py.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/workflow/workers.py`
+> 
+> ```python
+> """
+> Operation execution workers.
+> 
+> Workers dispatch an Operation to a registered tool, model adapter, evaluator,
+> or job handler. They produce typed artifacts and events. A worker must not
+> choose plans or mutate transcript history.
+> 
+> Public API:
+> 
+> class OperationWorker(Protocol):
+>     def execute(
+>         self,
+>         operation: Operation,
+>         *,
+>         context: PlannerContext,
+>         registry: Registry,
+>     ) -> ToolResult | Sequence[Artifact]: ...
+> 
+> class WorkerDispatcher:
+>     def execute_ready_operations(
+>         self,
+>         workflow: Workflow,
+>         operations: Sequence[Operation],
+>     ) -> list[Event]: ...
+> 
+> Caller:
+> - scheduler.py identifies readiness.
+> - synchronous responders may invoke workers inline.
+> - a future queue/worker service invokes the same API asynchronously.
+> 
+> Failures should be recorded structurally, with retry policy and output
+> visibility governed by plan/workflow policy.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/workflow/reducer.py`
+> 
+> ```python
+> """
+> Event-to-state reducer.
+> 
+> The reducer creates durable, versioned conversation/project/user state from
+> append-only events and approved StatePatches. It never rewrites canonical
+> chat history.
+> 
+> Public API:
+> 
+> class StateReducer:
+>     def reduce(self, event: Event) -> None: ...
+>     def apply_patch(self, patch: StatePatch) -> None: ...
+>     def state_for(self, scope: str, target_id: str) -> Mapping[str, Any]: ...
+> 
+> Required safeguards:
+> - enforce patch scope and write policy;
+> - retain provenance/confidence;
+> - detect conflicting replacement patches;
+> - use review/proposal state for sensitive user-memory writes;
+> - make artifacts available to context.py only when eligible.
+> 
+> Caller:
+> - event consumers call `reduce(event)` after event-log persistence.
+> - context.py reads reduced state and ready artifacts.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/workflow/delivery.py`
+> 
+> ```python
+> """
+> Async result delivery policy and user-visible update creation.
+> 
+> Every completed operation may update durable state. Only explicitly eligible
+> results may create visible assistant messages. Do not generate noisy progress
+> messages or silently revise earlier answers.
+> 
+> Public API:
+> 
+> class DeliveryService:
+>     def consider_delivery(
+>         self,
+>         workflow: Workflow,
+>         artifacts: Sequence[Artifact],
+>         *,
+>         original_response_id: str | None,
+>     ) -> AsyncUpdate | None:
+>         '''
+>         Apply DeliveryPolicy: never, on_material_result, on_completion,
+>         on_user_request, or digest. Enforce opt-in, quiet hours, materiality,
+>         and max-update limits.
+>         '''
+>         ...
+> 
+>     def deliver(self, update: AsyncUpdate) -> None: ...
+> 
+> Visible updates must:
+> - be ordinary new assistant messages;
+> - identify their relation to the originating turn/response;
+> - identify correction or supersession where applicable;
+> - preserve links to operations and artifacts;
+> - explain why delivery occurred.
+> 
+> Caller:
+> - workers/scheduler call `consider_delivery` after results are persisted.
+> - async_api.py exposes delivered-but-unread updates through `poll()`.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/planner.py`
+> 
+> ```python
+> """
+> Primary synchronous Planner facade and drop-in replacement for the existing API.
+> 
+> Planner coordinates registration, context assembly, candidate plan generation,
+> selection, response execution, response attribution, feedback, and the
+> forward-compatible async polling API.
+> 
+> The public application interface remains synchronous:
+> 
+> class Planner:
+>     @classmethod
+>     def register_model(
+>         cls,
+>         adapter: ModelAdapter,
+>         *,
+>         model_id: str,
+>         cost_per_million_tokens: float | None = None,
+>         quality_prior: float | None = None,
+>         version: str = "1",
+>     ) -> ModelSpec: ...
+> 
+>     @classmethod
+>     def register_tool(
+>         cls,
+>         name: str,
+>         description: str,
+>         fn: Callable,
+>         config: ToolConfig | Mapping[str, Any],
+>         quality_prior: float | None = None,
+>         cost_estimate: float | None = None,
+>         version: str = "1",
+>     ) -> ToolSpec: ...
+> 
+>     def __init__(
+>         self,
+>         conversation_id: str,
+>         *,
+>         repository: PlannerRepository | None = None,
+>         registry: Registry | None = None,
+>         selector: PlanSelector | None = None,
+>     ): ...
+> 
+>     def chat_response(
+>         self,
+>         messages: Sequence[Mapping[str, Any]],
+>         max_tokens: int | None = None,
+>         context: PlannerContext | None = None,
+>     ) -> Response: ...
+> 
+>     def stream_response(
+>         self,
+>         messages: Sequence[Mapping[str, Any]],
+>         max_tokens: int | None = None,
+>         context: PlannerContext | None = None,
+>     ) -> StreamResponse: ...
+> 
+>     def vote_up(self, response_id: str) -> None: ...
+>     def vote_down(self, response_id: str) -> None: ...
+>     def feedback(self, response_id: str, *, kind: str, value: Any = None) -> None: ...
+> 
+>     def poll(self) -> list[AsyncUpdate]: ...
+>     def ongoing(self) -> list[Any]: ...
+>     def async_status(self) -> dict[str, Any]: ...
+> 
+>     def explain(self, response_id: str) -> Mapping[str, Any]: ...
+> 
+> Required synchronous request flow:
+> 1. Validate/assemble PlannerContext.
+> 2. Generate bounded eligible PlanSpecs from explicit templates.
+> 3. Select a plan using PlanSelector.
+> 4. Create and persist a ResponseRecord before execution/streaming.
+> 5. Execute the relevant Responder.
+> 6. Persist final metrics, artifacts, and failures.
+> 7. Return Response or StreamResponse.
+> 
+> `stream_response` requirements:
+> - allocate response ID before first yielded chunk;
+> - set visible_output_started after first non-empty visible chunk;
+> - record final metrics when exhausted or failed;
+> - only retry before visible output, never silently after it.
+> 
+> Compatibility:
+> - accepts the legacy `context` argument;
+> - supports current `Planner.register_tool(**calculator_info)` usage;
+> - initial async methods may return empty structures.
+> """
+> ```
+> 
+> ---
+> 
+> ### `planner/tests/test_planner.py`
+> 
+> ```python
+> """
+> Integration tests for the stable synchronous Planner API.
+> 
+> Test:
+> - legacy tool registration works;
+> - model registration and explicit plan generation work;
+> - chat_response returns Response with ID/model;
+> - stream_response is iterable and allocates ID before iteration;
+> - response records persist selected plan attribution;
+> - vote_up/down affect only the recorded response plan;
+> - poll/ongoing/async_status preserve initial compatibility.
+> """
+> ```
+> 
+> ### `planner/tests/test_selection.py`
+> 
+> ```python
+> """
+> Selection-policy tests.
+> 
+> Test that:
+> - unavailable models/plans are excluded;
+> - priors influence cold-start choices;
+> - positive and negative feedback affect attributed plans;
+> - cost and latency are soft penalties;
+> - bounded exploration occurs;
+> - high-stakes context limits exploration and increases quality/risk weighting;
+> - plan configuration variants remain distinct learning identities.
+> """
+> ```
+> 
+> ### `planner/tests/test_streaming.py`
+> 
+> ```python
+> """
+> Streaming lifecycle tests.
+> 
+> Test that:
+> - response ID and record exist before first chunk;
+> - completion latency is recorded after exhaustion;
+> - pre-output failures may retry according to policy;
+> - post-output failures do not silently change responder;
+> - feedback can be applied to partial/failed streamed responses.
+> """
+> ```
+> 
+> ### `planner/tests/test_context.py`
+> 
+> ```python
+> """
+> Context assembly and provenance tests.
+> 
+> Test that:
+> - canonical messages are unchanged;
+> - selected plan determines injected instructions/artifacts;
+> - irrelevant, stale, oversized, or disallowed artifacts are excluded;
+> - retrieved text is labeled/protected as untrusted data;
+> - token budgets are respected;
+> - async operation status can be included without impersonating user messages.
+> """
+> ```
+> 
+> ### `planner/tests/test_workflow.py`
+> 
+> ```python
+> """
+> Workflow DAG, event, reducer, and delivery tests.
+> 
+> Test that:
+> - independent operations are runnable concurrently;
+> - dependencies block downstream operations;
+> - operation completion creates artifacts/events/state patches;
+> - state patches do not alter transcript history;
+> - delivery policy prevents unwanted visible updates;
+> - material corrections create linked new AsyncUpdates;
+> - event history supports complete audit reconstruction.
+> """
+> ```

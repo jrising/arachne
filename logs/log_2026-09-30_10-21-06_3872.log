@@ -1,0 +1,58 @@
+**user**:
+> Why does this work?
+> ```
+> julia> response1
+> "Name: CrossSectionalReturnModelCache\nDescription: Builds aligned, gap-aware per-ticker return histories and leak-free rolling features—including robust volatility, market/sector beta and residual returns, momentum, moving-average deviation, drawdown, liquidity/data-quality proxies, and cross-sectional ranks—for calibrated multi-horizon forecasts."
+> 
+> julia> m = match(r"^Name:\s*(.+?)\s*\n\s*\nDescription:\s*(.*)$"s, response1)
+> 
+> julia> m
+> 
+> julia> 
+> ```
+**assistant**:
+> It actually **doesn’t match**: `m` is `nothing`, which Julia’s REPL displays as a blank line.
+> 
+> Your regex requires a blank line between fields:
+> 
+> ```regex
+> \s*\n\s*\nDescription:
+> ```
+> 
+> That means:
+> 
+> 1. optional whitespace
+> 2. newline
+> 3. optional whitespace
+> 4. **another newline**
+> 5. `Description:`
+> 
+> But `response1` contains only one newline:
+> 
+> ```text
+> Name: CrossSectionalReturnModelCache
+> Description: Builds ...
+> ```
+> 
+> Use:
+> 
+> ```julia
+> m = match(r"^Name:\s*(.+?)\s*\n\s*Description:\s*(.*)$"s, response1)
+> ```
+> 
+> Then:
+> 
+> ```julia
+> m.captures
+> # ["CrossSectionalReturnModelCache",
+> #  "Builds aligned, gap-aware ... forecasts."]
+> ```
+> 
+> Details:
+> 
+> - `^Name:`: starts at the beginning with `Name:`
+> - `\s*`: skips optional whitespace
+> - `(.+?)`: captures the name, lazily
+> - `\n\s*Description:`: finds the next line’s `Description:`
+> - `(.*)`: captures the description
+> - `s`: makes `.` include newline characters, useful if descriptions can span lines.

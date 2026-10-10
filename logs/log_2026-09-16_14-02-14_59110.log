@@ -1,0 +1,88 @@
+**user**:
+> I have stable diffusion on my computer, and I've been using this function as an API to produce images:
+> def txt2img(prompt, negative_prompt=""):
+>     payload = {
+>         "prompt": prompt,
+>         "negative_prompt": negative_prompt,
+>         # Mirror your UI configuration here:
+>         "steps": 30,
+>         "sampler_name": "DPM++ 2M",
+>         "cfg_scale": 7.0,
+>         "width": 512,
+>         "height": 512,
+>         "seed": -1,        # -1 for random seed
+>         "batch_size": 1,
+>         "n_iter": 1,
+>     }
+> 
+>     response = requests.post(
+>         f"{WEBUI_URL}/sdapi/v1/txt2img",
+>         json=payload,
+>         timeout=600,
+>     )
+>     response.raise_for_status()
+>     r = response.json()
+> 
+>     return base64.b64decode(r["images"][0].split(",", 1)[-1])
+> 
+> Now I would like to make a similar for an img2img workflow. Any image would initially be in the form of binary data.
+**assistant**:
+> ```python
+> import base64
+> import requests
+> 
+> def img2img(image_bytes, prompt, negative_prompt="", denoising_strength=0.6):
+>     # AUTOMATIC1111 expects the input image as base64 text
+>     init_image = base64.b64encode(image_bytes).decode("utf-8")
+> 
+>     payload = {
+>         "init_images": [init_image],
+>         "prompt": prompt,
+>         "negative_prompt": negative_prompt,
+> 
+>         # Mirror your UI configuration here:
+>         "steps": 30,
+>         "sampler_name": "DPM++ 2M",
+>         "cfg_scale": 7.0,
+>         "width": 512,
+>         "height": 512,
+>         "seed": -1,
+>         "batch_size": 1,
+>         "n_iter": 1,
+> 
+>         # Core img2img control: 0 = nearly unchanged; 1 = largely regenerated
+>         "denoising_strength": denoising_strength,
+> 
+>         # Optional UI-equivalent settings:
+>         "resize_mode": 0,       # 0 = just resize; 1 = crop and resize; 2 = resize and fill
+>         "include_init_images": False,
+>     }
+> 
+>     response = requests.post(
+>         f"{WEBUI_URL}/sdapi/v1/img2img",
+>         json=payload,
+>         timeout=600,
+>     )
+>     response.raise_for_status()
+>     r = response.json()
+> 
+>     return base64.b64decode(r["images"][0].split(",", 1)[-1])
+> ```
+> 
+> For example, if you have an image file:
+> 
+> ```python
+> with open("input.png", "rb") as f:
+>     input_bytes = f.read()
+> 
+> output_bytes = img2img(
+>     input_bytes,
+>     "a watercolor painting of this scene, vibrant colors",
+>     denoising_strength=0.5,
+> )
+> 
+> with open("output.png", "wb") as f:
+>     f.write(output_bytes)
+> ```
+> 
+> `denoising_strength` is the key new parameter: around `0.2–0.4` preserves composition closely; `0.5–0.7` permits substantial restyling; values near `1.0` mostly regenerate the image.

@@ -1,0 +1,43 @@
+**user**:
+> I am trying to serve a PDF within a shiny app. I have a PDF in a www directory:% lsapp-test.Rapp2.Rdeploy.Rpicker_test.Rtestit.R~app-test.R~app2.R~deploy.R~rsconnectwwwapp.Rchannelslibshapefilesapp.R~Dataset v2output-v2testit.R% ls wwwPROSPER_Technical_Documentation.pdfBut both of these links show "Not Found":http://127.0.0.1:6568/www/PROSPER_Technical_Documentation.pdfhttp://127.0.0.1:6568/PROSPER_Technical_Documentation.pdf
+> 
+> The app s running:> shinyApp(ui, server)Listening on http://127.0.0.1:6568
+**assistant**:
+> `www/` is normally served at the app root, so the expected URL is:
+> 
+> ```text
+> http://127.0.0.1:6568/PROSPER_Technical_Documentation.pdf
+> ```
+> 
+> —not `/www/...`.
+> 
+> However, when launching an app directly with `shinyApp(ui, server)`, Shiny may not automatically register the local `www` directory as an app resource path. Explicitly register it:
+> 
+> ```r
+> library(shiny)
+> 
+> addResourcePath(
+>   prefix = "docs",
+>   directoryPath = normalizePath("www")
+> )
+> 
+> ui <- fluidPage(
+>   tags$a(
+>     "Technical documentation",
+>     href = "docs/PROSPER_Technical_Documentation.pdf",
+>     target = "_blank"
+>   )
+> )
+> 
+> server <- function(input, output, session) {}
+> 
+> shinyApp(ui, server)
+> ```
+> 
+> Then this should work:
+> 
+> ```text
+> http://127.0.0.1:6568/docs/PROSPER_Technical_Documentation.pdf
+> ```
+> 
+> `addResourcePath()` is especially useful if you run the app from a script or a working directory other than the app directory. `normalizePath("www")` also ensures Shiny receives an absolute filesystem path.

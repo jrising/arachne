@@ -1,0 +1,437 @@
+**user**:
+> I have started a plan to build an abstraction around model and tool selection in my AI system. Here is the contract for tools:
+> """
+> Tool protocol and normalized typed tool-result contract.
+> 
+> Tools are executable capabilities. In the initial synchronous system they may
+> be invoked directly by a responder. In the workflow system they are executed
+> as Operations and yield Artifacts. Tool interfaces should therefore avoid
+> assuming that their primary result is user-visible text.
+> 
+> Expected tool callable shape:
+> 
+> ToolCallable = Callable[
+>     [ToolInvocation],
+>     ToolResult,
+> ]
+> 
+> @dataclass(frozen=True)
+> class ToolInvocation:
+>     operation_id: str | None
+>     conversation_id: str
+>     arguments: Mapping[str, Any]
+>     config: Mapping[str, Any]
+>     context: PlannerContext | None
+>     provenance_requirements: Mapping[str, Any]
+> 
+> @dataclass
+> class Tool:
+>     name: str
+>     description: str
+>     fn: ToolCallable | Callable[..., Any]
+>     config: ToolConfig
+>     quality_prior: float | None = None
+>     cost_estimate: float | None = None
+>     version: str = "1"
+> 
+> Compatibility:
+> - registry.py may accept legacy functions such as
+>   `fn(prompt, config) -> str`.
+> - tools/base.py normalizes such outputs to ToolResult/Artifact.
+> - Tool configuration defaults and allowed discrete options are validated here.
+> 
+> Caller:
+> - responders.py or workflow/workers.py invokes:
+>       result = tool.fn(invocation)
+> - the caller persists raw temporary output as appropriate, converts relevant
+>   materials to artifacts/source excerpts, and never blindly injects untrusted
+>   tool text into system instructions.
+> """
+> 
+> Now, here is the documentation for a tool available through OpenAI:
+> ## Shell and Skills
+> 
+> `shell` gives the model a terminal, either in an OpenAI-hosted Debian 12 container or on your own machine. Calls arrive as `shell_call` items (commands, `timeout_ms`, `max_output_length`); hosted runs return `shell_call_output` automatically, local runs need you to send it back.
+> 
+> ```python
+> resp = client.responses.create(
+>     model="gpt-6-astra",
+>     tools=[{
+>         "type": "shell",
+>         "environment": {
+>             "type": "container_auto",
+>             "network_policy": {
+>                 "type": "allowlist",
+>                 "allowed_domains": ["pypi.org", "files.pythonhosted.org"],
+>             },
+>             "skills": [{"type": "skill_reference",
+>                         "skill_id": "openai-spreadsheets", "version": "latest"}],
+>         },
+>     }],
+>     input="pip install pandas, then summarise /mnt/data/results.csv.",
+> )
+> ```
+> 
+> | Option | Values / range | Notes |
+> | --- | --- | --- |
+> | `environment.type` | `container_auto`, `container_reference`, `local` | Hosted-new, hosted-existing, or your machine |
+> | `environment.container_id` | `cntr_...` | With `container_reference` |
+> | `environment.network_policy` | `{"type": "allowlist", "allowed_domains": [...], "domain_secrets": [...]}` | No network by default; domains must also be in your org allow list |
+> | `domain_secrets[]` | `domain`, `name`, `value` | Model sees only `$NAME`; real value injected for that domain |
+> | `environment.skills` | `skill_reference` (`skill_id`, `version` int or `"latest"`) or `inline` (base64 zip) for hosted; `{name, description, path}` for local | Mounts skill bundles |
+> 
+> Containers created via `/v1/containers` take `name`, `memory_limit`, `expires_after` (`anchor: "last_active_at"`, `minutes`) and `skills`. Hosted runtime ships Python 3.11, Node 22.16, Java 17, PHP 8.2, Ruby 3.1 and Go 1.23; working directory is `/mnt/data`; no TTY or `sudo`.
+> 
+> **Skills** are folders with a `SKILL.md` manifest, uploaded to `/v1/skills` as multipart or zip. Limits: 50 MB zip, 500 files per version, 25 MB uncompressed per file. OpenAI also offers curated skills such as `openai-spreadsheets`. The older `local_shell` tool is superseded by `shell` with `environment.type: "local"`.
+> 
+> Can you construct a full tool implementation for this? Please start off the file with a docstring, describing the tool and its usage.
+**assistant**:
+> ```python
+> """
+> OpenAI Responses API shell tool adapter.
+> 
+> This tool asks an OpenAI model to perform a bounded shell-based task using the
+> Responses API `shell` tool. Hosted shell environments execute commands inside an
+> OpenAI-managed Debian container; returned shell output is preserved as untrusted
+> Artifact data rather than injected into prompts or system instructions.
+> 
+> Usage:
+> 
+>     tool = make_openai_shell_tool(client, default_model="gpt-6-astra")
+> 
+>     result = tool.fn(ToolInvocation(
+>         operation_id="op_123",
+>         conversation_id="conv_123",
+>         arguments={
+>             "input": "Inspect /mnt/data/results.csv and report its columns.",
+>             # Optional: "model": "gpt-6-astra",
+>         },
+>         config={
+>             "environment": {
+>                 "type": "container_auto",
+>                 "network_policy": {
+>                     "type": "allowlist",
+>                     "allowed_domains": ["pypi.org"],
+>                 },
+>             },
+>         },
+>         context=None,
+>         provenance_requirements={},
+>     ))
+> 
+> `local` environments are intentionally unsupported by this adapter: safely
+> running model-generated commands on the application host requires a dedicated,
+> sandboxed local-shell executor and approval policy.
+> """
+> 
+> from __future__ import annotations
+> 
+> import json
+> from dataclasses import asdict, dataclass, field, is_dataclass
+> from typing import Any, Callable, Mapping, Sequence
+> 
+> # Adjust this import to match your project layout.
+> from tools.base import Artifact, Tool, ToolInvocation, ToolResult
+> 
+> 
+> @dataclass(frozen=True)
+> class OpenAIShellToolConfig:
+>     default_model: str
+>     default_environment: Mapping[str, Any] = field(
+>         default_factory=lambda: {"type": "container_auto"}
+>     )
+>     max_input_characters: int = 100_000
+>     quality_prior: float | None = None
+>     cost_estimate: float | None = None
+> 
+> 
+> class ShellConfigurationError(ValueError):
+>     """Raised when shell configuration is invalid or unsafe."""
+> 
+> 
+> def _as_mapping(value: Any, name: str) -> Mapping[str, Any]:
+>     if not isinstance(value, Mapping):
+>         raise ShellConfigurationError(f"{name} must be an object.")
+>     return value
+> 
+> 
+> def _jsonable(value: Any) -> Any:
+>     """Best-effort conversion of OpenAI SDK response objects to JSON-like data."""
+>     if value is None or isinstance(value, (str, int, float, bool)):
+>         return value
+>     if isinstance(value, Mapping):
+>         return {str(k): _jsonable(v) for k, v in value.items()}
+>     if isinstance(value, (list, tuple)):
+>         return [_jsonable(v) for v in value]
+>     if is_dataclass(value):
+>         return _jsonable(asdict(value))
+>     if hasattr(value, "model_dump"):
+>         return _jsonable(value.model_dump())
+>     if hasattr(value, "to_dict"):
+>         return _jsonable(value.to_dict())
+>     if hasattr(value, "__dict__"):
+>         return _jsonable(vars(value))
+>     return str(value)
+> 
+> 
+> def _redact_secrets(value: Any, secret_values: Sequence[str]) -> Any:
+>     """Avoid persisting configured domain-secret values in returned artifacts."""
+>     if isinstance(value, str):
+>         for secret in secret_values:
+>             if secret:
+>                 value = value.replace(secret, "[REDACTED_DOMAIN_SECRET]")
+>         return value
+>     if isinstance(value, list):
+>         return [_redact_secrets(item, secret_values) for item in value]
+>     if isinstance(value, dict):
+>         return {
+>             key: _redact_secrets(item, secret_values)
+>             for key, item in value.items()
+>         }
+>     return value
+> 
+> 
+> def _validate_environment(environment: Mapping[str, Any]) -> dict[str, Any]:
+>     environment = dict(environment)
+>     environment_type = environment.get("type", "container_auto")
+> 
+>     if environment_type not in {
+>         "container_auto",
+>         "container_reference",
+>         "local",
+>     }:
+>         raise ShellConfigurationError(
+>             "environment.type must be container_auto, container_reference, or local."
+>         )
+> 
+>     # This adapter deliberately does not execute commands on its own host.
+>     if environment_type == "local":
+>         raise ShellConfigurationError(
+>             "environment.type='local' is unsupported. Use a separately sandboxed "
+>             "local-shell executor with explicit command approval."
+>         )
+> 
+>     if environment_type == "container_reference":
+>         container_id = environment.get("container_id")
+>         if not isinstance(container_id, str) or not container_id.startswith("cntr_"):
+>             raise ShellConfigurationError(
+>                 "container_reference requires environment.container_id beginning cntr_."
+>             )
+> 
+>     network_policy = environment.get("network_policy")
+>     if network_policy is not None:
+>         network_policy = _as_mapping(network_policy, "environment.network_policy")
+>         if network_policy.get("type") != "allowlist":
+>             raise ShellConfigurationError(
+>                 "environment.network_policy.type must be 'allowlist'."
+>             )
+> 
+>         domains = network_policy.get("allowed_domains", [])
+>         if not isinstance(domains, list) or not all(
+>             isinstance(domain, str) and domain for domain in domains
+>         ):
+>             raise ShellConfigurationError(
+>                 "network_policy.allowed_domains must be a list of non-empty strings."
+>             )
+> 
+>         for secret in network_policy.get("domain_secrets", []):
+>             secret = _as_mapping(secret, "network_policy.domain_secrets entry")
+>             if not all(
+>                 isinstance(secret.get(key), str) and secret[key]
+>                 for key in ("domain", "name", "value")
+>             ):
+>                 raise ShellConfigurationError(
+>                     "Each domain secret requires non-empty domain, name, and value."
+>                 )
+> 
+>     skills = environment.get("skills", [])
+>     if not isinstance(skills, list):
+>         raise ShellConfigurationError("environment.skills must be a list.")
+> 
+>     for skill in skills:
+>         skill = _as_mapping(skill, "environment.skills entry")
+>         skill_type = skill.get("type")
+>         if skill_type == "skill_reference":
+>             if not isinstance(skill.get("skill_id"), str):
+>                 raise ShellConfigurationError(
+>                     "skill_reference requires a string skill_id."
+>                 )
+>         elif skill_type == "inline":
+>             if not isinstance(skill.get("data"), str):
+>                 raise ShellConfigurationError(
+>                     "inline skill requires base64 zip data in its data field."
+>                 )
+>         else:
+>             raise ShellConfigurationError(
+>                 "Hosted shell skills must be skill_reference or inline."
+>             )
+> 
+>     return environment
+> 
+> 
+> def _extract_secret_values(environment: Mapping[str, Any]) -> list[str]:
+>     policy = environment.get("network_policy", {})
+>     if not isinstance(policy, Mapping):
+>         return []
+>     secrets = policy.get("domain_secrets", [])
+>     if not isinstance(secrets, list):
+>         return []
+>     return [
+>         item["value"]
+>         for item in secrets
+>         if isinstance(item, Mapping) and isinstance(item.get("value"), str)
+>     ]
+> 
+> 
+> def _response_items(response: Any) -> list[dict[str, Any]]:
+>     raw = _jsonable(response)
+>     if isinstance(raw, Mapping):
+>         output = raw.get("output", [])
+>         return output if isinstance(output, list) else []
+>     return []
+> 
+> 
+> def _artifact(
+>     *,
+>     kind: str,
+>     name: str,
+>     data: Any,
+>     metadata: Mapping[str, Any],
+> ) -> Artifact:
+>     """
+>     Centralize adaptation if your Artifact constructor uses different field names.
+> 
+>     This assumes the common Artifact(data=..., mime_type=..., metadata=...) shape.
+>     """
+>     return Artifact(
+>         name=name,
+>         kind=kind,
+>         data=data,
+>         mime_type="application/json",
+>         metadata=dict(metadata),
+>     )
+> 
+> 
+> def make_openai_shell_tool(
+>     client: Any,
+>     *,
+>     default_model: str,
+>     default_environment: Mapping[str, Any] | None = None,
+>     quality_prior: float | None = None,
+>     cost_estimate: float | None = None,
+> ) -> Tool:
+>     """
+>     Create a synchronous Tool backed by OpenAI's hosted Responses shell runtime.
+> 
+>     `client` is an initialized OpenAI client exposing `client.responses.create`.
+>     """
+>     settings = OpenAIShellToolConfig(
+>         default_model=default_model,
+>         default_environment=(
+>             dict(default_environment)
+>             if default_environment is not None
+>             else {"type": "container_auto"}
+>         ),
+>         quality_prior=quality_prior,
+>         cost_estimate=cost_estimate,
+>     )
+> 
+>     def invoke(invocation: ToolInvocation) -> ToolResult:
+>         arguments = _as_mapping(invocation.arguments, "arguments")
+>         supplied_config = _as_mapping(invocation.config, "config")
+> 
+>         user_input = arguments.get("input")
+>         if not isinstance(user_input, str) or not user_input.strip():
+>             raise ShellConfigurationError("arguments.input must be a non-empty string.")
+>         if len(user_input) > settings.max_input_characters:
+>             raise ShellConfigurationError(
+>                 f"arguments.input exceeds {settings.max_input_characters} characters."
+>             )
+> 
+>         model = arguments.get("model", supplied_config.get("model", settings.default_model))
+>         if not isinstance(model, str) or not model:
+>             raise ShellConfigurationError("model must be a non-empty string.")
+> 
+>         environment_config = supplied_config.get(
+>             "environment",
+>             settings.default_environment,
+>         )
+>         environment = _validate_environment(
+>             _as_mapping(environment_config, "config.environment")
+>         )
+>         secret_values = _extract_secret_values(environment)
+> 
+>         # Shell output is external/untrusted data. It is returned only as artifacts.
+>         response = client.responses.create(
+>             model=model,
+>             input=user_input,
+>             tools=[{"type": "shell", "environment": environment}],
+>         )
+> 
+>         raw_response = _redact_secrets(_jsonable(response), secret_values)
+>         items = _response_items(response)
+> 
+>         shell_calls = [
+>             item for item in items if item.get("type") == "shell_call"
+>         ]
+>         shell_outputs = [
+>             item for item in items if item.get("type") == "shell_call_output"
+>         ]
+> 
+>         artifacts = [
+>             _artifact(
+>                 kind="openai_shell_response",
+>                 name="openai-shell-response.json",
+>                 data=raw_response,
+>                 metadata={
+>                     "operation_id": invocation.operation_id,
+>                     "conversation_id": invocation.conversation_id,
+>                     "model": model,
+>                     "untrusted": True,
+>                 },
+>             )
+>         ]
+> 
+>         for index, output in enumerate(shell_outputs):
+>             artifacts.append(
+>                 _artifact(
+>                     kind="openai_shell_output",
+>                     name=f"shell-output-{index}.json",
+>                     data=output,
+>                     metadata={
+>                         "operation_id": invocation.operation_id,
+>                         "conversation_id": invocation.conversation_id,
+>                         "untrusted": True,
+>                     },
+>                 )
+>             )
+> 
+>         return ToolResult(
+>             artifacts=artifacts,
+>             metadata={
+>                 "model": model,
+>                 "environment_type": environment["type"],
+>                 "shell_call_count": len(shell_calls),
+>                 "shell_output_count": len(shell_outputs),
+>                 "response_id": raw_response.get("id")
+>                 if isinstance(raw_response, Mapping)
+>                 else None,
+>                 "untrusted_output": True,
+>             },
+>         )
+> 
+>     return Tool(
+>         name="openai_shell",
+>         description=(
+>             "Runs a task through OpenAI's hosted shell environment and returns "
+>             "untrusted structured shell outputs as artifacts."
+>         ),
+>         fn=invoke,
+>         config=settings,
+>         quality_prior=quality_prior,
+>         cost_estimate=cost_estimate,
+>         version="1",
+>     )
+> ```
+> 
+> This intentionally refuses `local` shell execution; model-generated host commands should only run through a dedicated sandbox and approval boundary.

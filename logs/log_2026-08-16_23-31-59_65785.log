@@ -1,0 +1,1287 @@
+**user**:
+> I have previously asked you to develop a stock growth prediction script, as part of a larger stock prediction system. Here was your proposal:
+> ```
+> ############################
+> # Arachne Stock Predictor  #
+> # Defines: arachnegrow     #
+> ############################
+> 
+> module ArachnePredictor
+> 
+> using DataFrames
+> using Statistics
+> using Dates
+> 
+> # ============================================================
+> # Configuration
+> # ============================================================
+> 
+> const MIN_HISTORY_GENERAL = 25
+> const MIN_HISTORY_LONG    = 80
+> 
+> const MOM_WINDOWS = [2, 5, 10, 20, 60]
+> const VOL_WINDOWS = [5, 20, 60]
+> const RANGE_WINDOWS = [5, 20]
+> 
+> const MAX_ABS_LOG_GROWTH_PER_DAY = 0.08   # clamp extreme implied daily forecast
+> const MAX_ABS_TOTAL_LOG_GROWTH   = 1.50   # clamp total horizon forecast
+> const EPS = 1e-8
+> 
+> # ============================================================
+> # Utility helpers
+> # ============================================================
+> 
+> """
+>     _safe_float(x) -> Union{Nothing,Float64}
+> 
+> Convert x to Float64 if possible and finite. Return nothing otherwise.
+> """
+> function _safe_float(x)
+>     if ismissing(x)
+>         return nothing
+>     end
+>     try
+>         v = Float64(x)
+>         return isfinite(v) ? v : nothing
+>     catch
+>         return nothing
+>     end
+> end
+> 
+> """
+>     _safe_date_vector(col) -> Vector{Date}
+> 
+> Attempt to convert a date column to Vector{Date}. Throws if impossible.
+> """
+> function _safe_date_vector(col)
+>     out = Date[]
+>     for x in col
+>         if x isa Date
+>             push!(out, x)
+>         elseif x isa DateTime
+>             push!(out, Date(x))
+>         else
+>             # last attempt: Date(string(x))
+>             push!(out, Date(x))
+>         end
+>     end
+>     return out
+> end
+> 
+> """
+>     _median_or_zero(v)
+> 
+> Median of finite values in v, or 0.0 if none.
+> """
+> function _median_or_zero(v)
+>     w = [x for x in v if isfinite(x)]
+>     return isempty(w) ? 0.0 : median(w)
+> end
+> 
+> """
+>     _mean_or_zero(v)
+> 
+> Mean of finite values in v, or 0.0 if none.
+> """
+> function _mean_or_zero(v)
+>     w = [x for x in v if isfinite(x)]
+>     return isempty(w) ? 0.0 : mean(w)
+> end
+> 
+> """
+>     _std_or_zero(v)
+> 
+> Std of finite values in v, or 0.0 if too short.
+> """
+> function _std_or_zero(v)
+>     w = [x for x in v if isfinite(x)]
+>     return length(w) < 2 ? 0.0 : std(w)
+> end
+> 
+> """
+>     _clamp(x, lo, hi)
+> 
+> Clamp scalar x to [lo, hi].
+> """
+> _clamp(x, lo, hi) = min(max(x, lo), hi)
+> 
+> # ============================================================
+> # Data loading and preprocessing
+> # ============================================================
+> 
+> """
+>     _get_price_panels()
+> 
+> Fetch high and low prices from Main, validate, and return:
+>     dates, tickers, high_df, low_df, mid_df
+> 
+> Assumes:
+> - DataFrames with a "date" column and ticker columns
+> - same shape and same column names
+> """
+> function _get_price_panels()
+>     high_df = Main.gethighprices()
+>     low_df  = Main.getlowprices()
+> 
+>     @assert isa(high_df, DataFrame) "gethighprices() must return a DataFrame"
+>     @assert isa(low_df, DataFrame)  "getlowprices() must return a DataFrame"
+>     @assert nrow(high_df) == nrow(low_df) "High/low tables must have same number of rows"
+>     @assert all(names(high_df) .== names(low_df)) "High/low tables must have same columns"
+>     @assert "date" in names(high_df) "Expected a \"date\" column"
+> 
+>     # date vector
+>     dates = _safe_date_vector(high_df[!, "date"])
+> 
+>     # tickers
+>     tickers = [String(c) for c in names(high_df) if c != "date"]
+> 
+>     # build midpoint df
+>     mid_df = DataFrame()
+>     mid_df[!, "date"] = dates
+> 
+>     for tk in tickers
+>         hcol = high_df[!, tk]
+>         lcol = low_df[!, tk]
+>         mcol = Vector{Union{Missing,Float64}}(undef, length(hcol))
+> 
+>         for i in eachindex(hcol)
+>             hv = _safe_float(hcol[i])
+>             lv = _safe_float(lcol[i])
+> 
+>             if hv === nothing || lv === nothing
+>                 mcol[i] = missing
+>             elseif hv <= 0.0 || lv <= 0.0
+>                 mcol[i] = missing
+>             else
+>                 # defend against inverted high/low
+>                 hh = max(hv, lv)
+>                 ll = min(hv, lv)
+>                 mcol[i] = 0.5 * (hh + ll)
+>             end
+>         end
+> 
+>         mid_df[!, tk] = mcol
+>     end
+> 
+>     return dates, tickers, high_df, low_df, mid_df
+> end
+> 
+> """
+>     _extract_valid_series(mid_col, high_col, low_col)
+> 
+> From aligned column vectors containing missings, extract valid observations:
+> - dates are ignored here; only values are returned
+> 
+> Returns:
+>     mid::Vector{Float64}
+>     high::Vector{Float64}
+>     low::Vector{Float64}
+> 
+> Only rows with finite, positive high/low/mid are retained.
+> """
+> function _extract_valid_series(mid_col, high_col, low_col)
+>     mid  = Float64[]
+>     high = Float64[]
+>     low  = Float64[]
+> 
+>     n = min(length(mid_col), min(length(high_col), length(low_col)))
+>     for i in 1:n
+>         mv = _safe_float(mid_col[i])
+>         hv = _safe_float(high_col[i])
+>         lv = _safe_float(low_col[i])
+> 
+>         if mv === nothing || hv === nothing || lv === nothing
+>             continue
+>         end
+>         if mv <= 0.0 || hv <= 0.0 || lv <= 0.0
+>             continue
+>         end
+> 
+>         hh = max(hv, lv)
+>         ll = min(hv, lv)
+>         mm = 0.5 * (hh + ll)
+> 
+>         if !isfinite(mm) || mm <= 0.0
+>             continue
+>         end
+> 
+>         push!(mid, mm)
+>         push!(high, hh)
+>         push!(low, ll)
+>     end
+> 
+>     return mid, high, low
+> end
+> 
+> """
+>     _last_valid_price(col) -> Union{Nothing,Float64}
+> 
+> Return last finite positive value in a price column, or nothing.
+> """
+> function _last_valid_price(col)
+>     for idx in Iterators.reverse(eachindex(col))
+>         v = _safe_float(col[idx])
+>         if v !== nothing && v > 0.0
+>             return v
+>         end
+>     end
+>     return nothing
+> end
+> 
+> # ============================================================
+> # Feature calculations
+> # ============================================================
+> 
+> """
+>     _log_returns(prices::Vector{Float64}) -> Vector{Float64}
+> 
+> Compute adjacent log returns.
+> """
+> function _log_returns(prices::Vector{Float64})
+>     if length(prices) < 2
+>         return Float64[]
+>     end
+>     lp = log.(prices)
+>     r = diff(lp)
+>     return [x for x in r if isfinite(x)]
+> end
+> 
+> """
+>     _window_log_return(prices::Vector{Float64}, k::Int) -> Float64
+> 
+> Return log(prices[end] / prices[end-k]) if enough history, else 0.0.
+> Requires at least k+1 prices.
+> """
+> function _window_log_return(prices::Vector{Float64}, k::Int)
+>     if length(prices) < k + 1
+>         return 0.0
+>     end
+>     p0 = prices[end-k]
+>     p1 = prices[end]
+>     if !(isfinite(p0) && isfinite(p1) && p0 > 0.0 && p1 > 0.0)
+>         return 0.0
+>     end
+>     val = log(p1) - log(p0)
+>     return isfinite(val) ? val : 0.0
+> end
+> 
+> """
+>     _window_volatility(rets::Vector{Float64}, k::Int) -> Float64
+> 
+> Std of last k returns if available, else std of available if at least 2, else 0.0.
+> """
+> function _window_volatility(rets::Vector{Float64}, k::Int)
+>     if length(rets) >= k
+>         s = std(view(rets, length(rets)-k+1:length(rets)))
+>         return isfinite(s) ? s : 0.0
+>     elseif length(rets) >= 2
+>         s = std(rets)
+>         return isfinite(s) ? s : 0.0
+>     else
+>         return 0.0
+>     end
+> end
+> 
+> """
+>     _range_series(high::Vector{Float64}, low::Vector{Float64}, mid::Vector{Float64}) -> Vector{Float64}
+> 
+> Compute daily relative range: (high - low) / mid
+> """
+> function _range_series(high::Vector{Float64}, low::Vector{Float64}, mid::Vector{Float64})
+>     n = min(length(high), min(length(low), length(mid)))
+>     out = Float64[]
+>     sizehint!(out, n)
+>     for i in 1:n
+>         denom = mid[i]
+>         if denom > 0.0 && isfinite(denom)
+>             val = (high[i] - low[i]) / denom
+>             if isfinite(val) && val >= 0.0
+>                 push!(out, val)
+>             end
+>         end
+>     end
+>     return out
+> end
+> 
+> """
+>     _rolling_mean_last(v::Vector{Float64}, k::Int) -> Float64
+> 
+> Mean of last k values if available, else mean of all if nonempty, else 0.0.
+> """
+> function _rolling_mean_last(v::Vector{Float64}, k::Int)
+>     if isempty(v)
+>         return 0.0
+>     elseif length(v) >= k
+>         m = mean(view(v, length(v)-k+1:length(v)))
+>         return isfinite(m) ? m : 0.0
+>     else
+>         m = mean(v)
+>         return isfinite(m) ? m : 0.0
+>     end
+> end
+> 
+> """
+>     _moving_average_gap(prices::Vector{Float64}, k::Int) -> Float64
+> 
+> Compute:
+>     log(P_t) - mean(log(P_{t-k+1:t}))
+> using the last k observations if available.
+> Returns 0.0 if insufficient data.
+> """
+> function _moving_average_gap(prices::Vector{Float64}, k::Int)
+>     if length(prices) < k
+>         return 0.0
+>     end
+>     lp = log.(prices)
+>     cur = lp[end]
+>     ma = mean(view(lp, length(lp)-k+1:length(lp)))
+>     val = cur - ma
+>     return isfinite(val) ? val : 0.0
+> end
+> 
+> """
+>     _reversion_zscore(prices::Vector{Float64}, rets::Vector{Float64}, k::Int) -> Float64
+> 
+> A simple mean-reversion indicator:
+>     (log(P_t) - mean(log recent prices))) / recent volatility
+> 
+> Positive means "above trend" and thus tends toward negative forecast contribution.
+> """
+> function _reversion_zscore(prices::Vector{Float64}, rets::Vector{Float64}, k::Int)
+>     if length(prices) < k || length(rets) < 2
+>         return 0.0
+>     end
+>     gap = _moving_average_gap(prices, k)
+>     vol = _window_volatility(rets, min(k-1, length(rets)))
+>     if vol <= EPS
+>         return 0.0
+>     end
+>     z = gap / vol
+>     return isfinite(z) ? z : 0.0
+> end
+> 
+> # ============================================================
+> # Market-level features
+> # ============================================================
+> 
+> """
+>     _cross_sectional_market_returns(mid_df, tickers)
+> 
+> Construct an equal-weight "market" daily log-return series from available ticker midpoints.
+> 
+> Method:
+> - for each date transition t-1 -> t
+> - compute log-return for each stock with valid prices on both dates
+> - take equal-weight average across available stocks
+> - skip transition if too few valid names
+> 
+> Returns:
+>     market_rets::Vector{Float64}
+> """
+> function _cross_sectional_market_returns(mid_df::DataFrame, tickers::Vector{String})
+>     n = nrow(mid_df)
+>     if n < 2
+>         return Float64[]
+>     end
+> 
+>     out = Float64[]
+>     sizehint!(out, n - 1)
+> 
+>     for t in 2:n
+>         rs = Float64[]
+>         for tk in tickers
+>             p0 = _safe_float(mid_df[t-1, tk])
+>             p1 = _safe_float(mid_df[t, tk])
+>             if p0 === nothing || p1 === nothing || p0 <= 0.0 || p1 <= 0.0
+>                 continue
+>             end
+>             r = log(p1) - log(p0)
+>             if isfinite(r)
+>                 push!(rs, r)
+>             end
+>         end
+> 
+>         if length(rs) >= 3
+>             push!(out, mean(rs))
+>         end
+>     end
+> 
+>     return out
+> end
+> 
+> """
+>     _market_state(market_rets::Vector{Float64}) -> NamedTuple
+> 
+> Return simple regime indicators:
+> - short momentum
+> - medium momentum
+> - volatility
+> """
+> function _market_state(market_rets::Vector{Float64})
+>     if isempty(market_rets)
+>         return (mom5 = 0.0, mom20 = 0.0, vol20 = 0.0)
+>     end
+> 
+>     mom5 = length(market_rets) >= 5  ? sum(view(market_rets, length(market_rets)-4:length(market_rets))) : sum(market_rets)
+>     mom20 = length(market_rets) >= 20 ? sum(view(market_rets, length(market_rets)-19:length(market_rets))) : sum(market_rets)
+>     vol20 = _window_volatility(market_rets, 20)
+> 
+>     return (
+>         mom5 = isfinite(mom5) ? mom5 : 0.0,
+>         mom20 = isfinite(mom20) ? mom20 : 0.0,
+>         vol20 = isfinite(vol20) ? vol20 : 0.0
+>     )
+> end
+> 
+> # ============================================================
+> # Forecast logic
+> # ============================================================
+> 
+> """
+>     _stock_forecast_loggrowth(mid, high, low, nday, market_state)
+> 
+> Produce predicted log-growth over nday for one stock.
+> 
+> This combines:
+> - momentum
+> - mean reversion
+> - market-relative trend
+> - volatility penalty
+> - range-based stress penalty
+> 
+> Returns:
+>     forecast_log_growth::Float64
+> """
+> function _stock_forecast_loggrowth(
+>     mid::Vector{Float64},
+>     high::Vector{Float64},
+>     low::Vector{Float64},
+>     nday::Int,
+>     market_state
+> )
+>     # Hard fallback on insufficient history
+>     if length(mid) < 6
+>         return 0.0
+>     end
+> 
+>     rets = _log_returns(mid)
+>     if isempty(rets)
+>         return 0.0
+>     end
+> 
+>     # -----------------------
+>     # Core features
+>     # -----------------------
+>     mom2  = _window_log_return(mid, 2)
+>     mom5  = _window_log_return(mid, 5)
+>     mom10 = _window_log_return(mid, 10)
+>     mom20 = _window_log_return(mid, 20)
+>     mom60 = _window_log_return(mid, 60)
+> 
+>     vol5  = _window_volatility(rets, 5)
+>     vol20 = _window_volatility(rets, 20)
+>     vol60 = _window_volatility(rets, 60)
+> 
+>     rev20 = _reversion_zscore(mid, rets, 20)
+>     rev60 = _reversion_zscore(mid, rets, 60)
+> 
+>     rg = _range_series(high, low, mid)
+>     range5  = _rolling_mean_last(rg, 5)
+>     range20 = _rolling_mean_last(rg, 20)
+> 
+>     ma_gap20 = _moving_average_gap(mid, 20)
+>     ma_gap60 = _moving_average_gap(mid, 60)
+> 
+>     # -----------------------
+>     # Adaptive weighting by horizon
+>     # -----------------------
+>     # Short horizons: more reversion
+>     # Medium horizons: mixed
+>     # Longer horizons: more momentum
+>     trend_weight =
+>         nday <= 3  ? 0.35 :
+>         nday <= 10 ? 0.55 :
+>                      0.75
+> 
+>     reversion_weight =
+>         nday <= 3  ? 0.65 :
+>         nday <= 10 ? 0.45 :
+>                      0.25
+> 
+>     # -----------------------
+>     # Momentum specialist
+>     # -----------------------
+>     # Blend short and medium momentum, normalized by horizon
+>     trend_signal =
+>         0.30 * mom2  / max(2, nday) +
+>         0.80 * mom5  / max(5, nday) +
+>         0.90 * mom10 / max(10, nday) +
+>         0.70 * mom20 / max(20, nday) +
+>         0.45 * mom60 / max(60, nday)
+> 
+>     # -----------------------
+>     # Mean-reversion specialist
+>     # -----------------------
+>     reversion_signal =
+>         -0.030 * rev20 -
+>         -0.000 * 0.0 # placeholder so structure is easy to edit
+>     reversion_signal += -0.018 * rev60
+>     reversion_signal += -0.25 * ma_gap20
+>     reversion_signal += -0.10 * ma_gap60
+> 
+>     # -----------------------
+>     # Volatility/range adjustment
+>     # -----------------------
+>     # Penalize continuation forecast when instability is high.
+>     instability_penalty =
+>         0.30 * vol5 +
+>         0.45 * vol20 +
+>         0.25 * range5 +
+>         0.20 * range20
+> 
+>     # Convert into a damping multiplier in [0.35, 1.0]
+>     damp = 1.0 / (1.0 + 8.0 * instability_penalty)
+>     damp = _clamp(damp, 0.35, 1.0)
+> 
+>     # -----------------------
+>     # Market-relative regime adjustment
+>     # -----------------------
+>     # If market momentum is strong, favor trend slightly more.
+>     market_boost = 0.0
+>     if market_state.mom20 > 0
+>         market_boost += 0.10
+>     elseif market_state.mom20 < 0
+>         market_boost -= 0.05
+>     end
+> 
+>     if market_state.vol20 > 0.025
+>         # choppier market: downweight trend
+>         market_boost -= 0.10
+>     end
+> 
+>     tw = _clamp(trend_weight + market_boost, 0.20, 0.90)
+>     rw = _clamp(1.0 - tw, 0.10, 0.80)
+> 
+>     # -----------------------
+>     # Base daily expected log-return
+>     # -----------------------
+>     daily_forecast =
+>         damp * (tw * trend_signal + rw * reversion_signal)
+> 
+>     # Small long-run drift fallback if everything is near zero
+>     # but only when we have enough history
+>     if length(rets) >= 40
+>         drift = _mean_or_zero(view(rets, max(1, length(rets)-59):length(rets)))
+>         daily_forecast += 0.10 * drift
+>     end
+> 
+>     if !isfinite(daily_forecast)
+>         daily_forecast = 0.0
+>     end
+> 
+>     # Clamp daily forecast
+>     daily_forecast = _clamp(
+>         daily_forecast,
+>         -MAX_ABS_LOG_GROWTH_PER_DAY,
+>          MAX_ABS_LOG_GROWTH_PER_DAY
+>     )
+> 
+>     total_forecast = daily_forecast * nday
+> 
+>     # Final clamp
+>     total_forecast = _clamp(
+>         total_forecast,
+>         -MAX_ABS_TOTAL_LOG_GROWTH,
+>          MAX_ABS_TOTAL_LOG_GROWTH
+>     )
+> 
+>     return isfinite(total_forecast) ? total_forecast : 0.0
+> end
+> 
+> # ============================================================
+> # Cross-sectional shrinkage
+> # ============================================================
+> 
+> """
+>     _shrink_forecasts!(fc::Dict{String,Float64})
+> 
+> Shrink extreme forecasts toward the cross-sectional center.
+> This reduces overreaction for noisy names.
+> 
+> Method:
+> - center = median forecast
+> - each forecast becomes:
+>     center + λ * (f - center)
+> - λ depends on cross-sectional dispersion
+> """
+> function _shrink_forecasts!(fc::Dict{String,Float64})
+>     if isempty(fc)
+>         return fc
+>     end
+> 
+>     vals = collect(values(fc))
+>     finite_vals = [v for v in vals if isfinite(v)]
+>     if isempty(finite_vals)
+>         for k in keys(fc)
+>             fc[k] = 0.0
+>         end
+>         return fc
+>     end
+> 
+>     center = median(finite_vals)
+>     disp = _std_or_zero(finite_vals)
+> 
+>     λ =
+>         disp < 0.01 ? 0.55 :
+>         disp < 0.03 ? 0.70 :
+>         disp < 0.08 ? 0.82 :
+>                       0.90
+> 
+>     for (k, v) in fc
+>         if !isfinite(v)
+>             fc[k] = 0.0
+>         else
+>             shrunk = center + λ * (v - center)
+>             fc[k] = isfinite(shrunk) ? shrunk : 0.0
+>         end
+>     end
+> 
+>     return fc
+> end
+> 
+> """
+>     _zero_tiny_forecasts!(fc; tol=1e-6)
+> 
+> Set tiny forecasts to exactly zero.
+> """
+> function _zero_tiny_forecasts!(fc::Dict{String,Float64}; tol::Float64=1e-6)
+>     for (k, v) in fc
+>         if !isfinite(v) || abs(v) < tol
+>             fc[k] = 0.0
+>         end
+>     end
+>     return fc
+> end
+> 
+> # ============================================================
+> # Public entry point
+> # ============================================================
+> 
+> """
+>     arachnegrow(nday::Integer) -> Dict{String,Float64}
+> 
+> Predict log-growth of each tracked stock over `nday` days into the future.
+> 
+> Output:
+>     Dict(ticker => predicted log growth)
+> 
+> where predicted log growth is approximately:
+>     log(P̂_{t+nday}) - log(P_t)
+> 
+> Model summary:
+> - Uses midpoint prices from high/low data
+> - Builds trend, reversion, volatility, and range-based features
+> - Adjusts by simple market regime
+> - Applies cross-sectional shrinkage
+> - Includes extensive fallback behavior for missing/short histories
+> """
+> function arachnegrow(nday::Integer)
+>     if nday < 1
+>         error("arachnegrow(nday): nday must be ≥ 1")
+>     end
+> 
+>     dates, tickers, high_df, low_df, mid_df = _get_price_panels()
+> 
+>     # Defensive fallback if no tickers
+>     if isempty(tickers)
+>         return Dict{String,Float64}()
+>     end
+> 
+>     # Market regime from panel-level equal-weight market returns
+>     market_rets = Float64[]
+>     market_state = (mom5 = 0.0, mom20 = 0.0, vol20 = 0.0)
+>     try
+>         market_rets = _cross_sectional_market_returns(mid_df, tickers)
+>         market_state = _market_state(market_rets)
+>     catch
+>         # fallback to neutral market state
+>         market_state = (mom5 = 0.0, mom20 = 0.0, vol20 = 0.0)
+>     end
+> 
+>     forecasts = Dict{String,Float64}()
+> 
+>     for tk in tickers
+>         # Default fallback
+>         forecasts[tk] = 0.0
+> 
+>         # Robust column access
+>         if !(tk in names(mid_df)) || !(tk in names(high_df)) || !(tk in names(low_df))
+>             continue
+>         end
+> 
+>         try
+>             mid_col  = mid_df[!, tk]
+>             high_col = high_df[!, tk]
+>             low_col  = low_df[!, tk]
+> 
+>             # Extract valid aligned series
+>             mid, high, low = _extract_valid_series(mid_col, high_col, low_col)
+> 
+>             # Short-history fallback
+>             if length(mid) < MIN_HISTORY_GENERAL
+>                 if length(mid) >= 6
+>                     # weak fallback based on short-horizon momentum only
+>                     short_mom = _window_log_return(mid, min(5, length(mid)-1))
+>                     pred = 0.25 * short_mom * nday / max(1, min(5, length(mid)-1))
+>                     pred = _clamp(pred, -0.10, 0.10)
+>                     forecasts[tk] = isfinite(pred) ? pred : 0.0
+>                 else
+>                     forecasts[tk] = 0.0
+>                 end
+>                 continue
+>             end
+> 
+>             pred = _stock_forecast_loggrowth(mid, high, low, nday, market_state)
+> 
+>             # Extra sanity check: compare against recent realized volatility
+>             rets = _log_returns(mid)
+>             recent_vol = _window_volatility(rets, 20)
+> 
+>             if recent_vol > 0.0 && isfinite(pred)
+>                 # prevent absurd forecasts relative to historical volatility
+>                 max_reasonable = max(0.04, 4.0 * recent_vol * sqrt(nday))
+>                 pred = _clamp(pred, -max_reasonable, max_reasonable)
+>             end
+> 
+>             forecasts[tk] = isfinite(pred) ? pred : 0.0
+> 
+>         catch
+>             # silent safe fallback for this ticker
+>             forecasts[tk] = 0.0
+>         end
+>     end
+> 
+>     # Cross-sectional cleanup
+>     _shrink_forecasts!(forecasts)
+>     _zero_tiny_forecasts!(forecasts)
+> 
+>     # Final pass: guarantee finite values only
+>     for (k, v) in forecasts
+>         if !isfinite(v)
+>             forecasts[k] = 0.0
+>         end
+>     end
+> 
+>     return forecasts
+> end
+> 
+> end # module ArachnePredictor
+> 
+> using .ArachnePredictor: arachnegrow
+> ```
+> 
+> I would now like to produced an improved version of this. Here is what you previously proposed as the path:
+> ```
+> toy drift model
+> to
+> modular price-action ensemble
+> to, later,
+> full alpha factory with external data feeds
+> When you want to revisit it, I’d suggest one of these next steps:
+> 
+> Adaptive model weighting
+> 
+> let momentum/reversion specialists earn trust over time
+> Cross-sectional ranking
+> 
+> often better than raw return prediction for stock selection
+> External data ingestion
+> 
+> SEC filings, news, sentiment, insider trades, options, supply-chain signals
+> Backtesting harness
+> 
+> the most important next practical step, if not already built
+> walk-forward, no leakage, per-horizon scoring
+> Meta-ensemble competition
+> 
+> let multiple Arachne variants compete inside your framework
+> And yes—new ideas later is exactly the right philosophy here. These systems should evolve empirically, not dogmatically.
+> 
+> When you’re ready, I can help with:
+> 
+> a cleaner v1.11 implementation,
+> a backtest/evaluation framework in Julia,
+> or a much more ambitious data-collection architecture.
+> ```
+> 
+> What do you propose as a next version iteration?
+**assistant**:
+> I recommend **V1.12: a walk-forward backtesting and evaluation harness**, before changing the forecasting logic.
+> 
+> The current model has many reasonable heuristics, but no empirical basis yet for deciding whether any feature, weight, or later model variant actually improves forecasts.
+> 
+> Core scope:
+> 
+> 1. **Historical cutoffs / walk-forward simulation**  
+>    For each eligible historical date $t$, expose data only through $t$, run `arachnegrow(nday)`, then compare predictions against realized midpoint log returns through $t + nday$.
+> 
+> 2. **Strict no-leakage data interface**  
+>    Refactor the predictor slightly so it can accept explicitly truncated `high_df` / `low_df`, rather than always calling `Main.gethighprices()`. The production entry point remains convenient, while the evaluator controls the information set.
+> 
+> 3. **Per-horizon metrics**  
+>    For each `nday`, record:
+>    - Pearson and Spearman cross-sectional correlation;
+>    - sign accuracy;
+>    - MSE / MAE of predicted log growth;
+>    - top-$k$ minus bottom-$k$ realized return spread;
+>    - coverage: number of names predicted and realized.
+> 
+> 4. **Portfolio-oriented evaluation**  
+>    Raw return calibration is difficult; ranking is often more actionable. Simulate equal-weight long top-$k$ forecasts, optionally market-neutral long–short portfolios, with configurable transaction-cost assumptions.
+> 
+> 5. **Detailed result logging**  
+>    Store one row per `(asof_date, ticker, horizon)` containing prediction, realization, rank, eligibility metadata, and model/version identifier. Aggregate summary tables should be reproducible and comparable across versions.
+> 
+> 6. **Baseline competitors**  
+>    Evaluate against simple baselines: zero forecast, recent momentum, mean reversion, and perhaps equal-weight market drift. A complex model must beat these out of sample.
+> 
+> 7. **Diagnostics and plots**  
+>    Add equity curves, rolling rank IC, forecast-vs-realized scatterplots, decile return charts, and prediction-distribution plots.
+> 
+> Suggested API:
+> 
+> ```julia
+> results = arachnebacktest(
+>     horizons = [1, 5, 10, 20],
+>     start_date = Date(2020, 1, 1),
+>     rebalance_every = 1,
+>     topk = 20,
+>     model_id = "v1.11"
+> )
+> 
+> summary = summarize_backtest(results)
+> plot_equity(results; horizon=5, topk=20)
+> ```
+> 
+> Only after this exists would I pursue adaptive specialist weighting or revise signal formulas. It turns those choices from attractive stories into testable hypotheses.
+**user**:
+> Let's think about this in two lanes.
+> 1. The broader system-- which includes multiple simple algorithms-- should have this same backtesting functionality. It already has one version of it: predictions are recorded and then the various algorithms are evaluated on a per-stock basis as the data becomes available. This is then used to weight the algorithms. But what you're proposing is much more extensive from a diagnostic perspective.
+> 2. Developing a feedback loop for the Arachne system in particular. You could be specifically interested in some diagnostics that are not in the general system, but then you also need to write the code that reads in the diagnostics and makes decisions about them.
+> 
+> For 1, I think we should use the fact that every algorithm has a core `*grow(nday)` function, but other changes may be needed across the whole system.
+**assistant**:
+> Yes. **Lane 1 should become a system-level evaluation layer**, not embedded in Arachne’s predictor.
+> 
+> The common interface is the right foundation:
+> 
+> ```julia
+> algorithmsgrow(nday)::Dict{String,Float64}
+> ```
+> 
+> I would standardize this into an algorithm registry:
+> 
+> ```julia
+> register_algorithm!(
+>     id = "arachne_v1_11",
+>     grow = arachnegrow,
+>     output = :log_growth
+> )
+> ```
+> 
+> Then the shared system owns four responsibilities:
+> 
+> 1. **Prediction ledger**  
+>    On each run, call every registered `grow(nday)` and persist one record per:
+>    ```text
+>    asof_date, algorithm_id, ticker, horizon,
+>    prediction, prediction_type, data_cutoff, run_id
+>    ```
+>    `data_cutoff` matters: it makes the no-look-ahead contract auditable.
+> 
+> 2. **Outcome settlement**  
+>    Once date $t + h$ is observable, attach a consistently defined realized outcome:
+>    \[
+>    y_{i,t,h} = \log(P_{i,t+h}) - \log(P_{i,t})
+>    \]
+>    with a shared choice of price field, handling of missing observations, and a status such as `settled`, `unavailable`, or `invalid`.
+> 
+> 3. **Generic scoring**  
+>    Produce both per-stock and pooled algorithm metrics:
+>    - error: MAE, MSE;
+>    - direction: sign accuracy;
+>    - ranking: Spearman/Rank IC by rebalance date;
+>    - selection utility: top-$k$, bottom-$k$, and long–short realized spreads;
+>    - calibration: average realized return by prediction decile.
+> 
+> 4. **Weight learning**  
+>    The existing algorithm-weighting mechanism should consume settled predictions, preferably with:
+>    - recency decay;
+>    - horizon-specific weights;
+>    - shrinkage toward equal weights when evidence is sparse;
+>    - distinct objectives for raw accuracy versus cross-sectional selection.
+> 
+> The key architectural adjustment is to distinguish **prediction** from **evaluation policy**. Algorithms return forecasts only; the system decides how to record, settle, score, rank, and weight them.
+> 
+> For Lane 2, Arachne can emit optional structured diagnostics alongside its forecast—for example momentum/reversion components, volatility regime, forecast clamp status, and available-history length:
+> 
+> ```julia
+> arachneexplain(nday) -> DataFrame
+> ```
+> 
+> Those diagnostics should initially be recorded by the same ledger, but not alter behavior. Once enough history accumulates, Arachne can use them to learn conditional specialist weights—for example, whether its momentum component earns more trust than reversion in high-volatility regimes.
+**user**:
+> The code that records the results does it in terms of prices, rather than growth, which are just computed based on the most recent prices combined with the projected growth. It is this:
+> ```
+> projprice1 = cat([getprojprice(nday) for nday in 1:7]..., dims=3)
+> lagprices = cat([getlagprice(nday) for nday in 1:7]..., dims=3)
+> lassoprice = cat([getlassoprice(nday) for nday in 1:7]..., dims=3)
+> areprice = cat([arachneprice(nday) for nday in 1:7]..., dims=3)
+> 
+> projprice = cat(projprice1, lagprices, lassoprice, areprice, dims=1)
+> 
+> ## Save it all to a file
+> projpricedf = reshape(projprice, prod(size(projprice)[1:2]), size(projprice)[3])
+> stockscol = repeat(projstocks, inner=size(projprice)[1])
+> algorithms = permutedims(repeat(repeat(["KNN", "Lag", "Lso", "Are"], inner=5), outer=size(projprice)[2]))
+> 
+> savedf = DataFrame(Algorithm=vec(algorithms), Ticker=stockscol)
+> for oo in 1:size(projprice)[3]
+>     savedf[!, Dates.format(today() + Day(oo), "yyyy-mm-dd")] = projpricedf[:, oo]
+> end
+> CSV.write("projs/" * Dates.format(today(), "yyyymmdd") * ".csv", savedf,
+>           transform=(col, val) -> typeof(val) <: AbstractFloat ? @sprintf("%.2f", val) : val)
+> ```
+> 
+> Then we translate this into weights updated daily with this script:
+> ```
+> setwd("~/projects/justeco/stockings")
+> 
+> library(dplyr)
+> library(tidyr)
+> 
+> logwarn <- function(src, message, filename='log.csv') {
+>   # Define the current time
+>   now <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+> 
+>   # Create a data frame for the new log entry
+>   log_entry <- data.frame(Datetime=now, Source=src, Message=message, stringsAsFactors=FALSE)
+> 
+>   # Append to CSV, creating the file if it doesn't exist
+>   if (!file.exists(filename)) {
+>     write.csv(log_entry, filename, row.names=FALSE)
+>   } else {
+>     write.table(log_entry, filename, row.names=FALSE, col.names=FALSE, sep=",", append=TRUE)
+>   }
+> }
+> 
+> results <- data.frame()
+> for (histfile in list.files("data")) {
+>     df.hist <- tryCatch({
+>         read.csv(file.path("data", histfile))
+>     }, error=function(e) {
+>         logwarn("eval.R", paste("Cannot read file", file.path("data", histfile)))
+>         NULL
+>     })
+>     if (is.null(df.hist))
+>         next
+>     df.hist$histdate <- as.Date(df.hist$timestamp)
+>     df.hist$ticker <- ifelse(df.hist$ticker == T, "T",
+>                       ifelse(df.hist$ticker == F, "F", df.hist$ticker))
+> 
+>     df.combo <- data.frame()
+>     for (projfile in list.files("projs")) {
+>         df.proj <- read.csv(file.path("projs", projfile))
+> 
+>         print(c(histfile, projfile))
+> 
+>         rows <- df.proj %>% filter(Ticker == df.hist$ticker[1]) %>%
+>             mutate(projdate=as.Date(ISOdate(as.numeric(substring(projfile, 1, 4)),
+>                                             as.numeric(substring(projfile, 5, 6)),
+>                                             as.numeric(substring(projfile, 7, 8))))) %>%
+>             pivot_longer(cols=3:9) %>%
+>             mutate(foredate=as.Date(ISOdate(as.numeric(substring(name, 2, 5)),
+>                                             as.numeric(substring(name, 7, 8)),
+>                                             as.numeric(substring(name, 10, 11))))) %>%
+>             left_join(df.hist, by=c('foredate'='histdate')) %>%
+>             mutate(ahead=foredate - projdate) %>%
+>             group_by(Algorithm, projdate, ahead) %>%
+>             mutate(npreds=sum(!is.na(open)),
+>                    nuniqs=length(unique(value))) %>%
+>             filter(npreds > 0 & nuniqs > 3)
+> 
+>         if (nrow(rows) > 0) {
+>             rows2 <- rows %>%
+>                 group_by(Algorithm, projdate, ahead) %>%
+>                 summarize(npreds=mean(npreds),
+>                           skill=mean(approxfun(density(value, bw='SJ'), yleft=0, yright=0)(c(low, high))),
+>                           logskill=log(skill + 1))
+> 
+>             df.combo <- rbind(df.combo, rows2)
+>         }
+>     }
+> 
+>     if (nrow(df.combo) > 0) {
+>         df.combo2 <- df.combo %>%
+>             filter(npreds > 0) %>%
+>             mutate(howold=Sys.Date() - projdate) %>%
+>             group_by(Algorithm, ahead) %>%
+>             summarize(npreds=sum(npreds) / 5,
+>                       skill=sum((logskill / npreds) * exp(-as.numeric(howold) / 365.25)))
+> 
+>         results <- rbind(results, cbind(ticker=df.hist$ticker[1], df.combo2))
+>     }
+> }
+> 
+> results2 <- results %>% group_by(ticker, Algorithm) %>%
+>     summarize(npreds=sum(npreds), skill=sum(skill))
+> 
+> write.csv(results2, "weights.csv", row.names=F)
+> ```
+> 
+> I am looking for:
+>  - Improvements on the existing code.
+>  - You proposed additional diagnostic plots and whatnot. Let's not ignore those. In fact, I'm not sure I want to include any of that other stuff in the weights, like you're proposing here. Weights should be based on an empirical skill calculation, nothing more. But that doesn't mean we don't have a use for diagnostic plots. Those can help me figure out how to improve the system more deeply than just calculating the weights.
+**assistant**:
+> Yes: keep **weights** and **diagnostics** separate.
+> 
+> ## 1. Improve the shared prediction/evaluation pipeline
+> 
+> Your current wide price-file format works, but a long-form prediction ledger would make settlement and evaluation much safer:
+> 
+> ```text
+> run_id, asof_date, algorithm_id, ticker, horizon,
+> prediction_price, prediction_type, data_cutoff
+> ```
+> 
+> This preserves price forecasts—Arachne can still compute growth internally and `arachneprice(nday)` can convert it to price.
+> 
+> The evaluation layer then derives a common target only when needed:
+> 
+> \[
+> r^{\mathrm{real}}_{i,t,h}=\log(P_{i,t+h}/P_{i,t}), \qquad
+> r^{\mathrm{pred}}_{i,t,h}=\log(\hat P_{i,t,h}/P_{i,t}).
+> \]
+> 
+> Important improvements:
+> 
+> - Settle forecasts using a clearly defined field—e.g. future `close`, or retain `low/high` if the score is explicitly interval-oriented.
+> - Use the *actual next available trading observation* for a horizon, rather than assuming calendar date `$t+h$` exists.
+> - Preserve unsettled forecasts with `status = "pending"` rather than dropping them.
+> - Record the actual as-of price used for conversion, so results remain auditable if historical data are later revised.
+> - Make weights explicitly `(ticker, algorithm_id, horizon)` rather than silently mixing horizons.
+> 
+> ## 2. Repair the current skill calculation
+> 
+> There is a structural issue: after:
+> 
+> ```r
+> filter(Ticker == df.hist$ticker[1]) %>%
+> group_by(Algorithm, projdate, ahead)
+> ```
+> 
+> each group normally contains **one prediction**. `density(value)` therefore cannot be meaningfully estimated; indeed `nuniqs > 3` will usually remove everything.
+> 
+> If you want weights to remain based exclusively on empirical skill, I recommend scoring **historical forecast errors**, not the density of raw forecast prices.
+> 
+> For example, for every settled prediction calculate:
+> 
+> ```r
+> error_log = log(prediction_price / actual_future_price)
+> ```
+> 
+> Then, for each `(ticker, algorithm, horizon)`, estimate the recent density of `error_log` and use density at zero—or preferably a proper score such as negative absolute/log-squared error—as skill. Apply your existing exponential recency decay and normalize across algorithms afterward.
+> 
+> That is still purely empirical skill; it simply measures whether an algorithm historically forecast *this stock and horizon* accurately.
+> 
+> ## 3. Diagnostics: write them separately, never feed them into weights automatically
+> 
+> Create a `diagnostics/` output from settled forecasts:
+> 
+> - predicted versus realized log-growth scatterplots;
+> - rolling MAE and directional accuracy;
+> - rank IC / Spearman correlation across stocks per forecast date;
+> - realized returns by forecast decile;
+> - top-$k$ minus bottom-$k$ spread;
+> - calibration plots;
+> - forecast-error distributions by algorithm, horizon, ticker, and market regime.
+> 
+> These answer different questions: *Are weights justified? Is the model calibrated? Does it rank stocks usefully? When does it fail?*
+> 
+> For Arachne specifically, add an optional explanation ledger—trend signal, reversion signal, volatility, range stress, damping, clamp flags, history length, and market regime. Initially use it only to facet diagnostics. Only after evidence accumulates should it inform a new Arachne version’s behavior.
+**user**:
+> On #2, actually we usually have ~5 predictions. The idea is that each algorithm produces a distribution, not a single value. Its goal is to get the distribution right, not the prediction, since the prediction is fundamentally stochastic. Here, for example, is the LASSO prediction:
+> ```
+> function getlassoprice(nday)
+>     grows = cat(getlassogrow(nday)..., dims=2)
+>     last_non_missing = getcurrprices()
+>     transpose(last_non_missing .* transpose(exp.(grows)))
+> end
+> 
+> function getlassogrow(nday)
+>     xxs, yy, valid = getpredictors(1)
+>     lassodf = DataFrame(xxs, :auto)
+>     @assert size(xxs)[2] == size(highpricesdf)[2] + 3
+> 
+>     allgrow = []
+>     for xx in 4:size(xxs)[2]
+>         predictors = setdiff(names(lassodf), ["x$xx"; "yy"])
+>         formulastr = "yy ~ " * join(predictors, " + ")
+>         formulaexpr = Meta.parse("@formula($formulastr)")
+> 
+>         allboots = []
+>         for bs in 1:5
+>             indices = sample(1:nrow(lassodf), nrow(lassodf), replace=true)
+>             bootdf = lassodf[indices, :]
+> 
+>             bootdf[!, :yy] = [bootdf[1+nday:end, "x$xx"]; repeat([missing], nday)]
+> 
+>             m = fit(LassoModel, eval(formulaexpr), bootdf)
+>             preddf = DataFrame(yy', :auto)
+>             yhat = predict(m, preddf)
+>             push!(allboots, yhat[1])
+>         end
+> 
+>         push!(allgrow, allboots)
+>     end
+> 
+>     allgrow
+> end
+> ```
+> 
+> Can you offer specific edits and code for the diagnostics? If I need to adjust my function signature across all of the algorithms so that I can call these in an explicit backcasting setup, we can discuss that.
+**assistant**:
+> You are right: with five bootstrap forecasts, the object being evaluated is a **predictive distribution**. Your current density score is directionally sensible, but with only five draws, KDE with `bw="SJ"` is unstable—and evaluating density at `low` and `high` is not interval probability.
+> 
+> ## First: fix a likely LASSO bootstrap problem
+> 
+> You should create the horizon-shifted target **before** resampling. Currently, bootstrapping rows before shifting `yy` destroys temporal alignment.
+> 
+> ```julia
+> base = copy(lassodf)
+> target = "x$xx"
+> base[!, :yy] = vcat(base[1+nday:end, target], fill(missing, nday))
+> dropmissing!(base, [:yy])
+> 
+> for bs in 1:25  # ideally more than 5 for a distribution
+>     indices = sample(1:nrow(base), nrow(base), replace=true)
+>     bootdf = base[indices, :]
+>     m = fit(LassoModel, eval(formulaexpr), bootdf)
+>     push!(allboots, predict(m, preddf)[1])
+> end
+> ```
+> 
+> Five draws are adequate for a rough ensemble, but 25–100 will make distributional scoring and diagnostics much more meaningful.
+> 
+> ## Replace the R score with an interval log score
+> 
+> Treat the bootstrap predictions as a log-normal predictive distribution. Score the probability that it assigns to the subsequently observed `[low, high]` range.
+> 
+> ```r
+> interval_logscore <- function(predprice, low, high, sigma_floor=0.01) {
+>   x <- log(predprice[is.finite(predprice) & predprice > 0])
+>   if (length(x) < 2 || !is.finite(low) || !is.finite(high) || low <= 0 || high <= 0)
+>     return(NA_real_)
+> 
+>   mu <- mean(x)
+>   sigma <- max(sd(x), sigma_floor)
+> 
+>   p <- pnorm(log(max(low, high)), mu, sigma) -
+>        pnorm(log(min(low, high)), mu, sigma)
+> 
+>   log(max(p, 1e-12))
+> }
+> ```
+> 
+> Then replace the `density(...)` summary with:
+> 
+> ```r
+> rows2 <- rows %>%
+>   group_by(Algorithm, projdate, ahead) %>%
+>   summarize(
+>     npreds = sum(is.finite(value)),
+>     logskill = interval_logscore(value, first(low), first(high)),
+>     .groups = "drop"
+>   ) %>%
+>   filter(npreds >= 5, is.finite(logskill))
+> ```
+> 
+> Your later recency-weighted aggregation can remain conceptually unchanged. Higher `logskill` is better, and it remains an exclusively empirical basis for weights.
+> 
+> ## Add a separate settled-forecast diagnostics file
+> 
+> For each settled `(Algorithm, Ticker, projdate, ahead)` group, save:
+> 
+> ```r
+> diag <- rows %>%
+>   group_by(Algorithm, Ticker, projdate, ahead) %>%
+>   summarize(
+>     actual_mid = mean(c(first(low), first(high))),
+>     pred_mean = mean(value),
+>     pred_sd = sd(value),
+>     pred_lo = quantile(value, 0.1),
+>     pred_hi = quantile(value, 0.9),
+>     logskill = interval_logscore(value, first(low), first(high)),
+>     .groups = "drop"
+>   ) %>%
+>   mutate(
+>     actual_log = log(actual_mid),
+>     pred_log = log(pred_mean),
+>     error_log = pred_log - actual_log,
+>     covered_80 = actual_mid >= pred_lo & actual_mid <= pred_hi
+>   )
+> 
+> write.csv(diag, "diagnostics/settled_forecasts.csv", row.names=FALSE)
+> ```
+> 
+> Useful plots, explicitly excluded from weighting:
+> 
+> ```r
+> ggplot(diag, aes(pred_log, actual_log, colour=Algorithm)) +
+>   geom_point(alpha=.35) + geom_abline(slope=1) +
+>   facet_wrap(~ahead)
+> 
+> ggplot(diag, aes(Algorithm, error_log)) +
+>   geom_boxplot() + facet_wrap(~ahead)
+> 
+> diag %>% group_by(Algorithm, ahead) %>%
+>   summarize(coverage80=mean(covered_80), mean_logskill=mean(logskill))
+> ```
+> 
+> Finally, retain the raw bootstrap draws in the prediction files/ledger. They are the distribution; mean prices alone are insufficient for proper distributional evaluation.
+**user**:
+> Okay, I've implemented these changes. Can you now write up some notes for me to bring in next time on future improvements, e.g., to the Arachne algorithm?
+**assistant**:
+> ## Notes for next iteration
+> 
+> ### System / evaluation
+> - Preserve raw bootstrap draws for every algorithm; distributions, not point estimates, are the primary forecast product.
+> - Keep algorithm weights based only on settled, empirical proper scores (currently interval log score), with horizon-specific and ticker-specific histories.
+> - Review whether the realized target should remain daily `[low, high]`, or use a more explicit tradable target such as close-to-close return. The choice should match the intended decision.
+> - Add a minimum effective sample size and shrinkage toward equal weights for sparse `(ticker, algorithm, horizon)` histories.
+> - Ensure forecast horizons settle on the next available trading date, not simply a calendar date.
+> - Version and retain diagnostic ledgers so model variants can be compared fairly.
+> 
+> ### Diagnostics, not weighting
+> - Plot interval coverage by algorithm and horizon: nominal 80% intervals should contain realized outcomes roughly 80% of the time.
+> - Plot log score, absolute log error, and coverage through time to identify regime dependence.
+> - Compare cross-sectional usefulness: forecast-mean deciles versus realized return, rank correlation, and top-minus-bottom portfolio spread.
+> - Inspect sharpness versus calibration: narrow distributions are valuable only when coverage remains appropriate.
+> - Build an automated report that flags persistent undercoverage, unusually wide distributions, missing predictions, or deteriorating recent score.
+> 
+> ### Arachne V1.12 candidate: explainable specialist ensemble
+> - Refactor Arachne into separate, independently testable forecast specialists:
+>   - short-term mean reversion;
+>   - multi-window momentum;
+>   - volatility/range regime;
+>   - market-relative component;
+>   - neutral / historical-drift baseline.
+> - Have each specialist produce both a mean log-growth estimate and uncertainty estimate, then generate draws from their combined predictive distribution.
+> - Record an Arachne explanation row per ticker/horizon: specialist contributions, volatility, range measures, available-history length, market state, damping, and any clamp/fallback flags.
+> - Use those fields only to diagnose conditional failures first: e.g. does momentum fail after high-range days, or does reversion systematically understate uncertainty?
+> - After sufficient evidence, allow specialist weights and uncertainty scales to be learned from past proper scores by horizon and regime, with strong regularization and equal-weight fallback.
+> 
+> ### Technical cleanup
+> - Avoid silent `catch` blocks in Arachne; log ticker-level errors and fallback reasons.
+> - Do not compress time by dropping missing dates without recording elapsed trading/calendar days; return features should respect actual observation spacing.
+> - Replace hard-coded coefficients only when a walk-forward comparison demonstrates improvement over the prior version and simple baselines.

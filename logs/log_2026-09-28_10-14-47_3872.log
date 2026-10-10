@@ -1,0 +1,111 @@
+**user**:
+> With the LaTeX exam class, can I make a set of questions where for each one you choose one of two options (same two options for each question)? Actually, I'll have two options, and one should go to each one. I want something like the following setup:
+> Please assign each pair of attributes between "dynamic vulnerability" or "climate adaptation":
+>  - "Driven by income growth" - "Driven by warming"
+>  - According to revealed preferences: "Has 0 adaptation costs" - "Adaptation costs approximately equal adaptation benefits"
+>  - "Flattens whole dose-response curve" - "Flattens hot-side of does-response curve"
+>  - Traditionally: "Limited by an elasticity" - "Limited by a maximum level"
+**assistant**:
+> Yes. Make each pair a two-choice item, where each choice assigns both statements at once. That enforces one statement in each category.
+> 
+> ```latex
+> \documentclass[addpoints]{exam}
+> 
+> \newcommand{\classifypair}[2]{%
+>   \begin{choices}
+>     \CorrectChoice Dynamic vulnerability: #1; \quad
+>                    Climate adaptation: #2.
+>     \choice        Dynamic vulnerability: #2; \quad
+>                    Climate adaptation: #1.
+>   \end{choices}
+> }
+> 
+> \begin{document}
+> 
+> \begin{questions}
+> 
+> \question For each pair, assign one attribute to \emph{dynamic vulnerability}
+> and the other to \emph{climate adaptation}.
+> 
+> \begin{parts}
+> 
+> \part
+> \classifypair{Driven by income growth}{Driven by warming}
+> 
+> \part
+> \classifypair{Has zero adaptation costs}
+>               {Adaptation costs approximately equal adaptation benefits}
+> 
+> \part
+> \classifypair{Flattens the whole dose--response curve}
+>               {Flattens the hot-side of the dose--response curve}
+> 
+> \part
+> \classifypair{Limited by an elasticity}
+>               {Limited by a maximum level}
+> 
+> \end{parts}
+> 
+> \end{questions}
+> \end{document}
+> ```
+> 
+> `\CorrectChoice` prints normally for students, but marks the answer when compiling with `\printanswers`. If an item’s correct ordering differs, swap its two macro arguments.
+**user**:
+> I find that a bit tough to digest. Wouldn't it be better to make some kind of table and you have to put a symbol in each entry? Or perhaps a different conceit could work.
+**assistant**:
+> A small **assignment matrix** is clearer: students place one mark in each row *and* each column of each pair.
+> 
+> ```latex
+> \documentclass[addpoints]{exam}
+> \usepackage{amssymb} % for \square
+> \usepackage{booktabs}
+> 
+> \newcommand{\boxcell}{$\square$}
+> 
+> \begin{document}
+> 
+> \begin{questions}
+> \question
+> For each pair, place an X in one box in each row and each column.
+> This assigns one attribute to dynamic vulnerability and the other to
+> climate adaptation.
+> 
+> \begin{center}
+> \renewcommand{\arraystretch}{1.5}
+> \begin{tabular}{llcc}
+> \toprule
+> & & \multicolumn{2}{c}{Attribute} \\
+> \cmidrule(lr){3-4}
+> Pair & Category & 1 & 2 \\
+> \midrule
+> 
+> 1 & & Driven by income growth & Driven by warming \\
+>   & Dynamic vulnerability & \boxcell & \boxcell \\
+>   & Climate adaptation    & \boxcell & \boxcell \\
+> \midrule
+> 
+> 2 & & Has zero adaptation costs &
+>       Adaptation costs $\approx$ adaptation benefits \\
+>   & Dynamic vulnerability & \boxcell & \boxcell \\
+>   & Climate adaptation    & \boxcell & \boxcell \\
+> \midrule
+> 
+> 3 & & Flattens the whole dose--response curve &
+>       Flattens the hot-side of the dose--response curve \\
+>   & Dynamic vulnerability & \boxcell & \boxcell \\
+>   & Climate adaptation    & \boxcell & \boxcell \\
+> \midrule
+> 
+> 4 & & Limited by an elasticity & Limited by a maximum level \\
+>   & Dynamic vulnerability & \boxcell & \boxcell \\
+>   & Climate adaptation    & \boxcell & \boxcell \\
+> \bottomrule
+> \end{tabular}
+> \end{center}
+> 
+> \end{questions}
+> \end{document}
+> ```
+> 
+> This makes the intended constraint visually obvious: every pair gets exactly two marks, arranged diagonally. It also avoids making students parse two long, nearly identical answer sentences.

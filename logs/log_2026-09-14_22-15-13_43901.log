@@ -1,0 +1,230 @@
+**user**:
+> I have written up a theory section of a paper with notation I'm pretty happy with:
+> ```
+> We assume discrete time, $t = 0, \ldots, T$, with time steps of $\Delta t$ (our main results assume $\Delta t = $ 1 hour, and $T$ = 36). At time $t$, each EV $i$ has a state of charge $s_{it} \in [0, 1]$, which is not known with certainty at time $t-1$.
+> 
+> An individual EV solution consists of a real-time management function $f_i\left(t, s_{it}\right)$ which maps observed state of charge (SOC) to a charging decision. Charging decisions are denoted $q_{it}$, in units of kW, with positive values for charging and negative values for discharging. EV owners have an expected driving schedule, simplified to drive at $t_d$ and park at $t_p$ below, but may deviate from it.
+> 
+> The equation of motion for this system is
+> \[
+> s_{it} = \begin{cases}
+>     s_{i,t-1} + q_{it} \Delta t / C_i & \text{if $d_{it} = 0$} \\
+>     s_{i,t-1} - \Delta s & \text{if $s_{i,t-1} - \Delta s_{it} > s_{it}^\text{MIN}$} \\
+>     s_{it}^{MIN} & \text{otherwise}
+> \end{cases}
+> \]
+> where $C_i$ is the EV battery capacity, $\Delta s_{it}$ is a decline in the state of charge per timestep when driving, and $s_{it}^\text{MIN}$ is the minimum allowed state of charge.
+> 
+> In our analysis, we assume all cars are identical, and driver conditions are time-invariant, so $C_i = C$, $\Delta s_{it} = \Delta s$, and $s_{it}^\text{MIN} = s^\text{MIN}$. We maintain the $i$ and $t$ indices in this section for generality.
+> 
+> \subsection{Objective functions}
+> 
+> Multiple EVs can be aggregated to represent a single power provider to the grid (an ``aggregator''), and to offer grid services. An aggregator solution consists of the collection of management functions for its contributing EVs and a series of regulation services bids $r_t$, provided 24-hours in advance. The management functions only apply when the EV is plugged into a managed charging station. We define $M_{mt}$ as the set of EVs plgged into managed charging stations under Monte Carlo $m$ and time $t$.
+> 
+> The realized behavior of the EV owners consists of actual periods of use of the EV, $d_{it} = 1 \;\text{if $i \notin M_{it}$}$ and the SOC level of the EVs upon plugging back in, $s_{it}$ if $d_{i,t-1} = 1$. These are represented as a Monte Carlo, $\{ d_{mit}, s_{mis} \text{ for } s \in \{ t | d_{i,t-1} = 1 \} \}$. The real-time management function can then extend the SOC timeseries to all times, $s_{mit}$.
+> 
+> The evaluation criteria for an individual EV solution is a function $g_i\left(s_{mit}, q_{mit} \right)$. This function combines individual profit (mainly based on $q_{mit}$) with other utility (mainly based on $s_{mit}$). The total score is the expected value of this function across Monte Carlo draws. It is only evaluated during periods when the car is plugged in at a managed charging station.
+> 
+> The total evaluation of the aggregator behavior combines the sum of EV evaluations with an evaluation of the realized provision of regulatory services. That is,
+> \begin{equation}
+> \mathbb{E}_m \left[h\left(r_t, \{q^\text{REGMAX}_{mit}\}, \{q_{mit}\} \right) + \sum_{i \in M_{mt}} g_i\left(s_{mit}, q_{mit} \right)\right]
+> \label{eqn:objective}
+> \end{equation}
+> 
+> The $q^\text{REGMAX}_{mit}$ is the maximum regulation charging allowed for a given EV, accounting for the charging rate, and the constraints that the SOC never exceeds the SOC bounds in the service of regulation services.  Total regulation services can be distributed across EVs dynamically. Since the regulator guarantees that charging will be energy neutral over a period of $\tau$, this latter constraint conservatively modeled as a continuous charging (discharging) period of $\tau / 2$, followed by a discharging (charging) period. We require that $s_{mit} + q \frac{\tau}{2} \frac{1}{E}$ does not exceed these bounds.
+> 
+> \begin{align*}
+> q^\text{REGMAX}_{mit} = \min\Big(&q^\text{MAX}_i, \\
+> & (s^\text{MAX}_{it} - s_{mit})\frac{2 C_i}{\tau} \\
+> & (s_{mit} - s^\text{MIN}_{it})\frac{2 C_i}{\tau}\Big)
+> \end{align*}
+> for an EV capacity of $C_i$.
+> 
+> The $h(\cdot)$ function is linear in $r_t$ as long as charging and discharging required by the grid is possible given the SOC and management charge decisions of all of the EVs. 
+> 
+> We define the core valuation functions $g(\cdot)$ and $h(\cdot)$ as follows:
+> \begin{align*}
+>     g_i(s_{mit}, q_{mit}) =& -c_t q_{mit} \Delta t / E \,\left[q_{mit} > 0\right] + & \;\text{(charging cost)} \\
+>     &-c_t q_{mit} \Delta t \,\left[q_{mit} < 0\right] + & \;\text{(discharge net-metering revenue)} \\
+>     &-p^\text{OOB}_t (s^\text{MIN}_{it} - s_{mit}) \nicefrac{b_i}{\Delta t} \,\left[s^\text{MIN}_{it} < s_{mit}\right] + & \;\text{(minimum SOC penalty)} \\
+>     &-p^\text{OOB}_t (s_{mit} - s^\text{MAX}_{it}) \nicefrac{b_i}{\Delta t} \,\left[s_{mit} > s^\text{MAX}_{it}\right] + & \;\text{(overcharge penalty)} \\
+>     &-p^\text{PRF}_t |s_{mit} - \bar{s}_{it}| & \;\text{(SOC preference)} \\
+>     h\left(r_t, \{q^\text{REGMAX}_{mit}\}, \{q_{mit}\} \right) =&p^\text{DEM} \max_t{\left(r_t + \sum_{i | q_{mit} > 0} q_{mit}\right)} + & \;\text{(demand charges)} \\
+>     &b_t r_t \Delta t \,\left[r_t \le \sum_{i \in M_{mt}} |q^\text{REGMAX}_{mit} - q_{mit}|\right] + & \;\text{(regulation services)} \\
+>     &-p^\text{DEF} r_t \Delta t \,\left[r_t > \sum_{i \in M_{mt}} |q^\text{REGMAX}_{mit} - q_{mit}|\right] & \;\text{(default penalty)} \\
+> \end{align*}
+> 
+> where energy retail prices are $c_t$, and vary by season and time of day (\SIrange{0.07242}{0.1720}{\$ / kW}); $E$ is the battery charging efficiency (\num{0.95}); $p^\text{DEM}$ is peak demand charges, based on 15 minute peak charging in a given month (\SI{18.73}{\$ / kW}).
+> ```
+> 
+> First, are there any inconsistencies or issues I should deal with there?
+**assistant**:
+> Yes—several issues are worth resolving before publication:
+> 
+> 1. **Time aggregation is missing.** Equation \eqref{eqn:objective} appears to evaluate only one $t$, but $g_i$, $h$, bids, and demand charges are time-series quantities. Likely you need $\sum_t$ (with demand charges retaining $\max_t$).
+> 
+> 2. **Management versus driving is conflated.** Defining $d_{it}=1$ iff $i\notin M_{it}$ makes “not at a managed charger” equivalent to driving. An EV could be parked at an unmanaged charger or unplugged. Define driving/availability separately from managed-station membership.
+> 
+> 3. **EoM conditions need explicit driving cases.** The latter two cases should state $d_{it}=1$. Also, $\Delta s$ versus $\Delta s_{it}$ is inconsistent, and charging should enforce $s_{it}\le s^\mathrm{MAX}$.
+> 
+> 4. **Charging efficiency is inconsistent.** The EoM uses $q\Delta t/C$, while charging cost uses $q\Delta t/E$. If $q$ is grid-side power, SOC should generally change by $E q\Delta t/C$ when charging, and by $q\Delta t/(EC)$ when discharging (depending on your efficiency convention).
+> 
+> 5. **SOC penalty condition is reversed.** The minimum-SOC penalty should apply when
+>    \[
+>    s_{mit}<s^\mathrm{MIN}_{it},
+>    \]
+>    not when it is above the minimum. Also define $b_i$ and its units.
+> 
+> 6. **Regulation constraint has a dimensional error.** In the prose, SOC change should use battery capacity $C_i$, not efficiency $E$. Define $s^\mathrm{MAX}$ explicitly. More fundamentally, regulation capability should be expressed relative to a baseline $q_{mit}$, with separate up- and down-regulation margins; $|q^\mathrm{REGMAX}_{mit}-q_{mit}|$ is not a clear representation of available symmetric capacity.
+> 
+> 7. **Objective signs and units need checking.** If maximizing the objective, demand charges should enter negatively, unlike the current positive $p^\mathrm{DEM}\max_t(\cdot)$. Retail energy prices should be \$/kWh, not \$/kW.
+> 
+> 8. **Clarify bid timing and realized power.** Since $r_t$ is submitted 24 hours ahead, it should be non-anticipative with respect to Monte Carlo realizations. Also clarify whether demand charges apply to baseline charging, realized regulation activation, or a conservative committed peak.
+> 
+> Minor: “plgged” should be “plugged,” and use either $M_{mt}$ or $M_{it}$ consistently.
+**user**:
+> Great. I've made many of these changes, and others I'll need to look at more later. For now, I want you to help me with something else. Previous to writing up this analytical introduction, I had written the following math for the Bellman calculation:
+> ```
+> \subsubsection{Energy arbitrage}
+> 
+> The central Bellman equation for energy arbitrage is
+> \[
+> V_t\left(e, f_s, f_d\right) = \max_q \left[\mathbb{E}_i \left[V_{t+1}\left(T_{it}\left(e, f_s + q, f_d\right)\right)\right] + w_q\left(c_t, q\right) + w_e\left(f_s\right)\right]
+> \]
+> where
+> \begin{itemize}
+>     \item $V_t\left(e, f_s, f_d\right)$ is the value of being in state $(e, f_s, f_d)$ in time $t$. $e$ is the number of parked EVs ($e = \sum_i [d = 0]$).
+>     \item $q$ is the amount of charging (+) or discharging (-).
+>     \item $i$ indexes Monte Carlo simulation steps.
+>     \item $T_{it}(\cdot)$ is a given transition simulation step.
+>     \item $w_q\left(c_t, q\right)$ is the value of charging or discharging, given the retail price and efficiency.
+>     \item $w_e\left(e, f_s\right)$ is the value of being at a given SOC to the customer.
+> \end{itemize}
+> 
+> We define $w_q\left(c_t, q\right)$ in two pieces. The charging and discharging cost is defined in \lstinline{value_power_action}, and is applies the efficiency loss for charging:
+> \[
+> w_{q,1}\left(c_t, q\right) = \begin{cases}
+>     -c_t K q / E & \text{if $q > 0$} \\
+>     -c_t K q & \text{otherwise}
+> \end{cases}
+> \]
+> where $K$ is the vehicle capacity times the number of plugged in vehicles, translating from SOC changes to energy changes; and $E$ is the battery efficiency, currently set to 95\%. This embeds the assumption that discharged power is sold at the retail price.
+> 
+> Second, we impose a charging cost on the portion of the EV distribution below the minimum SOC threshold. This is $-c_t K (f_{s,\text{min}} - f_{s,\text{below}}) P / E$, where $P$ is the portion of the plugged-in EVs below the threshold.
+> 
+> We define $w_e\left(e, f_s\right)$ as a function of the current SOC.
+> \[
+> w_e\left(f_s\right) = \begin{cases}
+>     -\infty & \text{if $f_s < f_{s,\text{min}}$} \\
+>     e \left(W_\text{above} (1 - P) \left(\frac{f_s - f_{s,\text{min}}}{f_{s,\text{max}} - f_{s,\text{min}}}\right)^R - W_\text{below} P\right) & \text{otherwise}
+> \end{cases}
+> \]
+> where $W_\text{above}$ and $W_\text{above}$ weight the per-timestep valuation of SOC, and $R$ controls the elasticity of valuation with respect to the SOC. $f_{s,\text{max}}$ is set to 95\%, so that it is not incentivized to drive SOC above levels that will be healthy for the battery.
+> 
+> Supporting functions for the optimization are in \verb+src/optutils.jl+. The valuation functions are defined in \verb+src/value.jl+.
+> 
+> \subsubsection{Regulation range}
+> 
+> Under the the regulation range methods (\verb+version2.jl+ and \verb+version3.jl+), the total value of all states under a given regulation range is
+> \[
+> W_t(r_t) = \int_{e, f_s, f_d} p_t\left(e, f_s, f_d\right) \left(V_t\left(e, f_s, f_d\right) + r_t b_t (1 - F_t\left(e, f_s, f_d\right)\right)
+> \]
+> where
+> \begin{itemize}
+>     \item $r_t$ is the proposed regulation range for period $t$.
+>     \item $p_t\left(e, f_s, f_d\right)$ is the probability of being in a given state.
+>     \item $b_t$ is the projected regulation market clearing price.
+>     \item $F_t\left(e, f_s, f_d\right)$ is the probability that this or a future state will result in a failure of providing the regulation range amount.
+> \end{itemize}
+> 
+> In addition, \verb+version3.jl+ has a propensity for discharging cars just before 9am, under the normal value functions. This then allows it to keep them plugged in, giving allowing it to provide a regulation range during the day. We add an additional penalty for allowing EVs to go below the charging threshold, to address this.
+> ```
+> 
+> I would like to now translate this into using the notation above, and ideally to simplify it by the fact that I've already defined the objective function. But I am also open to backward-fertilization, where I improve my previous section with some of the concepts in this section. Can you help me to update this section's LaTeX?
+**assistant**:
+> Here is a cleaner replacement that treats the earlier Bellman formulation as a computational representation of the objective already defined above.
+> 
+> ```latex
+> \subsubsection{Dynamic program for energy arbitrage}
+> 
+> For computation, we summarize the managed fleet at time $t$ by an aggregate state
+> \[
+> x_t = (e_t, f_{s,t}, f_{d,t}),
+> \]
+> where $e_t$ is the number of EVs connected to managed chargers, $f_{s,t}$ summarizes their SOC distribution, and $f_{d,t}$ summarizes anticipated departures or driving requirements. This is an approximation to the full individual-level state
+> \[
+> \{(s_{it}, d_{it})\}_{i=1}^N.
+> \]
+> 
+> Let $\mathbf q_t = \{q_{it}\}_{i \in M_t}$ denote the vector of managed charging decisions, with feasible set $\mathcal Q_t(x_t)$. The transition
+> \[
+> x_{t+1} = \mathcal T_t(x_t,\mathbf q_t,\xi_{t+1})
+> \]
+> captures both battery dynamics and random deviations from expected owner behavior, where $\xi_{t+1}$ is a Monte Carlo innovation.
+> 
+> For energy arbitrage alone, the Bellman equation is
+> \[
+> V_t(x_t)
+> =
+> \max_{\mathbf q_t \in \mathcal Q_t(x_t)}
+> \left\{
+> \sum_{i \in M_t} g_i(s_{it},q_{it})
+> +
+> \mathbb E_{\xi_{t+1}}
+> \left[
+> V_{t+1}\!\left(
+> \mathcal T_t(x_t,\mathbf q_t,\xi_{t+1})
+> \right)
+> \right]
+> \right\},
+> \]
+> with terminal condition $V_{T+1}(x)=0$.
+> 
+> Thus, the previous charging-value function $w_q(\cdot)$ and SOC-value
+> function $w_e(\cdot)$ are incorporated directly in $g_i(\cdot)$.
+> In particular, energy purchase costs, discharge revenue, penalties for
+> violating SOC bounds, and preferences for SOC near $\bar{s}_{it}$ are
+> all represented by the corresponding terms of $g_i$.
+> ```
+> 
+> Then I would replace the regulation section with:
+> 
+> ```latex
+> \subsubsection{Regulation capacity}
+> 
+> For a proposed regulation bid sequence $\mathbf r=\{r_t\}_{t=0}^T$,
+> the dynamic program includes the realized value of regulation provision:
+> \[
+> V_t^{\mathbf r}(x_t)
+> =
+> \max_{\mathbf q_t \in \mathcal Q_t(x_t)}
+> \left\{
+> h\left(
+> r_t,
+> \{q^\mathrm{REGMAX}_{it}\}_{i\in M_t},
+> \{q_{it}\}_{i\in M_t}
+> \right)
+> +
+> \sum_{i\in M_t} g_i(s_{it},q_{it})
+> +
+> \mathbb E_{\xi_{t+1}}
+> \left[
+> V_{t+1}^{\mathbf r}\!\left(
+> \mathcal T_t(x_t,\mathbf q_t,\xi_{t+1})
+> \right)
+> \right]
+> \right\}.
+> \]
+> 
+> Bids are selected before the relevant uncertainty is realized. Their
+> ex ante value is therefore
+> \[
+> W_0(\mathbf r)=\mathbb E\left[V_0^{\mathbf r}(X_0)\right],
+> \]
+> and the aggregator selects
+> \[
+> \mathbf r^* \in \arg\max_{\mathbf r \in \mathcal R} W_0(\mathbf r).
+> \]
+> ```
+> 
+> This eliminates the older $F_t(\cdot)$ failure-probability term: default risk is now represented directly and more generally by the default-penalty component of $h(\cdot)$.

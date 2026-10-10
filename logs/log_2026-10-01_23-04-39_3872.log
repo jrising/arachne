@@ -1,0 +1,355 @@
+**user**:
+> I have started a plan to build an abstraction around model and tool selection in my AI system. Here is the contract for tools:
+> """
+> Tool protocol and normalized typed tool-result contract.
+> 
+> Tools are executable capabilities. In the initial synchronous system they may
+> be invoked directly by a responder. In the workflow system they are executed
+> as Operations and yield Artifacts. Tool interfaces should therefore avoid
+> assuming that their primary result is user-visible text.
+> 
+> Expected tool callable shape:
+> 
+> ToolCallable = Callable[
+>     [ToolInvocation],
+>     ToolResult,
+> ]
+> 
+> @dataclass(frozen=True)
+> class ToolInvocation:
+>     operation_id: str | None
+>     conversation_id: str
+>     arguments: Mapping[str, Any]
+>     config: Mapping[str, Any]
+>     context: PlannerContext | None
+>     provenance_requirements: Mapping[str, Any]
+> 
+> @dataclass
+> class Tool:
+>     name: str
+>     description: str
+>     fn: ToolCallable | Callable[..., Any]
+>     config: ToolConfig
+>     quality_prior: float | None = None
+>     cost_estimate: float | None = None
+>     version: str = "1"
+> 
+> Compatibility:
+> - registry.py may accept legacy functions such as
+>   `fn(prompt, config) -> str`.
+> - tools/base.py normalizes such outputs to ToolResult/Artifact.
+> - Tool configuration defaults and allowed discrete options are validated here.
+> 
+> Caller:
+> - responders.py or workflow/workers.py invokes:
+>       result = tool.fn(invocation)
+> - the caller persists raw temporary output as appropriate, converts relevant
+>   materials to artifacts/source excerpts, and never blindly injects untrusted
+>   tool text into system instructions.
+> """
+> 
+> Now, here is the documentation for a tool available through OpenAI:
+> ## File search
+> 
+> `file_search` runs semantic and keyword search over files you have uploaded to one or more vector stores, returning a `file_search_call` item and `file_citation` annotations. You must create the vector store and add files first (`client.vector_stores.create`, then `client.vector_stores.files.create`).
+> 
+> ```python
+> resp = client.responses.create(
+>     model="gpt-6-astra",
+>     input="What do our IAM runs assume for the discount rate?",
+>     tools=[{
+>         "type": "file_search",
+>         "vector_store_ids": ["vs_abc123"],
+>         "max_num_results": 5,
+>         "filters": {"type": "in", "key": "category", "value": ["paper", "appendix"]},
+>     }],
+>     include=["file_search_call.results"],
+> )
+> ```
+> 
+> | Option | Values / range | Notes |
+> | --- | --- | --- |
+> | `vector_store_ids` | list of IDs (required) | Stores to search |
+> | `max_num_results` | integer | Fewer results = lower cost and latency, possibly lower quality |
+> | `filters` | comparison filter on file attributes (e.g. `type: "in"`, `key`, `value`) | Attributes are set per file; full operator list is in the [retrieval guide](https://developers.openai.com/api/docs/guides/retrieval) |
+> 
+> Search results are not returned by default; add `include: ["file_search_call.results"]` to see them. Supported formats include PDF, DOCX, PPTX, MD, TXT, TEX, HTML, JSON and common source-code files. Rate limits run 100 to 1,000 requests per minute depending on tier.
+> 
+> Can you construct a full tool implementation for this?
+**assistant**:
+> ```python
+> # tools/openai_file_search.py
+> from __future__ import annotations
+> 
+> from dataclasses import dataclass, field
+> from typing import Any, Callable, Mapping, Sequence
+> 
+> 
+> @dataclass(frozen=True)
+> class Artifact:
+>     kind: str
+>     content: Any
+>     metadata: Mapping[str, Any] = field(default_factory=dict)
+> 
+> 
+> @dataclass
+> class ToolResult:
+>     ok: bool
+>     artifacts: list[Artifact] = field(default_factory=list)
+>     data: Mapping[str, Any] = field(default_factory=dict)
+>     error: str | None = None
+> 
+> 
+> @dataclass(frozen=True)
+> class ToolInvocation:
+>     operation_id: str | None
+>     conversation_id: str
+>     arguments: Mapping[str, Any]
+>     config: Mapping[str, Any]
+>     context: Any | None
+>     provenance_requirements: Mapping[str, Any]
+> 
+> 
+> @dataclass
+> class Tool:
+>     name: str
+>     description: str
+>     fn: Callable[[ToolInvocation], ToolResult]
+>     config: Mapping[str, Any]
+>     quality_prior: float | None = None
+>     cost_estimate: float | None = None
+>     version: str = "1"
+> 
+> 
+> def _get(value: Any, key: str, default: Any = None) -> Any:
+>     """Read either OpenAI SDK objects or JSON-like dictionaries."""
+>     if isinstance(value, Mapping):
+>         return value.get(key, default)
+>     return getattr(value, key, default)
+> 
+> 
+> def _as_dict(value: Any) -> Any:
+>     if hasattr(value, "model_dump"):
+>         return value.model_dump(mode="json")
+>     if isinstance(value, list):
+>         return [_as_dict(v) for v in value]
+>     if isinstance(value, Mapping):
+>         return {k: _as_dict(v) for k, v in value.items()}
+>     return value
+> 
+> 
+> def make_openai_file_search_tool(client: Any) -> Tool:
+>     """
+>     Returns a planner Tool backed by OpenAI Responses file_search.
+> 
+>     Invocation arguments:
+>       query: str                         Required.
+>       model: str                         Optional override.
+>       vector_store_ids: list[str]        Optional override if policy permits.
+>       max_num_results: int               Optional, bounded by config.
+>       filters: dict                      Optional OpenAI retrieval filter.
+> 
+>     The returned excerpts are evidence artifacts, not trusted instructions.
+>     """
+> 
+>     defaults = {
+>         "model": "gpt-6-astra",
+>         "vector_store_ids": [],
+>         "max_num_results": 5,
+>         "max_num_results_limit": 20,
+>         "allow_invocation_store_override": False,
+>         "allow_invocation_filter_override": True,
+>     }
+> 
+>     def run(invocation: ToolInvocation) -> ToolResult:
+>         cfg = {**defaults, **dict(invocation.config)}
+>         args = dict(invocation.arguments)
+> 
+>         query = args.get("query")
+>         if not isinstance(query, str) or not query.strip():
+>             return ToolResult(ok=False, error="file_search requires a non-empty 'query'.")
+> 
+>         store_ids = cfg["vector_store_ids"]
+>         if cfg["allow_invocation_store_override"] and "vector_store_ids" in args:
+>             store_ids = args["vector_store_ids"]
+> 
+>         if not isinstance(store_ids, Sequence) or isinstance(store_ids, str) or not store_ids:
+>             return ToolResult(ok=False, error="No vector_store_ids were configured.")
+> 
+>         max_results = args.get("max_num_results", cfg["max_num_results"])
+>         if not isinstance(max_results, int) or not 1 <= max_results <= cfg["max_num_results_limit"]:
+>             return ToolResult(
+>                 ok=False,
+>                 error=f"max_num_results must be 1–{cfg['max_num_results_limit']}.",
+>             )
+> 
+>         search_tool: dict[str, Any] = {
+>             "type": "file_search",
+>             "vector_store_ids": list(store_ids),
+>             "max_num_results": max_results,
+>         }
+>         if cfg["allow_invocation_filter_override"] and args.get("filters") is not None:
+>             search_tool["filters"] = args["filters"]
+>         elif cfg.get("filters") is not None:
+>             search_tool["filters"] = cfg["filters"]
+> 
+>         try:
+>             response = client.responses.create(
+>                 model=args.get("model", cfg["model"]),
+>                 input=query,
+>                 tools=[search_tool],
+>                 include=["file_search_call.results"],
+>                 metadata={
+>                     "conversation_id": invocation.conversation_id,
+>                     "operation_id": invocation.operation_id or "",
+>                 },
+>             )
+>         except Exception as exc:
+>             return ToolResult(ok=False, error=f"OpenAI file search failed: {exc!s}")
+> 
+>         raw = _as_dict(response)
+>         artifacts: list[Artifact] = []
+>         citations: list[dict[str, Any]] = []
+>         search_results: list[dict[str, Any]] = []
+> 
+>         for item in _get(response, "output", []) or []:
+>             item_type = _get(item, "type")
+> 
+>             if item_type == "file_search_call":
+>                 for result in _get(item, "results", []) or []:
+>                     result_dict = _as_dict(result)
+>                     search_results.append(result_dict)
+> 
+>                     # Results may expose text/content depending on API version.
+>                     excerpt = (
+>                         _get(result, "text")
+>                         or _get(result, "content")
+>                         or _get(result, "snippet")
+>                     )
+>                     if excerpt:
+>                         artifacts.append(
+>                             Artifact(
+>                                 kind="source_excerpt",
+>                                 content=str(excerpt),
+>                                 metadata={
+>                                     "file_id": _get(result, "file_id"),
+>                                     "filename": _get(result, "filename"),
+>                                     "score": _get(result, "score"),
+>                                     "source": "openai.file_search",
+>                                 },
+>                             )
+>                         )
+> 
+>             if item_type == "message":
+>                 for content in _get(item, "content", []) or []:
+>                     for annotation in _get(content, "annotations", []) or []:
+>                         if _get(annotation, "type") == "file_citation":
+>                             citations.append(_as_dict(annotation))
+> 
+>         output_text = _get(response, "output_text", "")
+>         if output_text:
+>             artifacts.append(
+>                 Artifact(
+>                     kind="model_text",
+>                     content=output_text,
+>                     metadata={"trusted_as_instruction": False, "source": "openai.responses"},
+>                 )
+>             )
+> 
+>         return ToolResult(
+>             ok=True,
+>             artifacts=artifacts,
+>             data={
+>                 "response_id": _get(response, "id"),
+>                 "query": query,
+>                 "citations": citations,
+>                 "search_results": search_results,
+>                 "raw_response": raw,
+>             },
+>         )
+> 
+>     return Tool(
+>         name="openai.file-search",
+>         description="Search configured OpenAI vector stores and return evidence excerpts and citations.",
+>         fn=run,
+>         config=defaults,
+>         quality_prior=0.85,
+>         cost_estimate=0.01,
+>         version="1",
+>     )
+> ```
+> 
+> Register it once with an injected OpenAI client:
+> 
+> ```python
+> registry.register(make_openai_file_search_tool(client))
+> ```
+> 
+> The caller should persist `result.data["raw_response"]` separately and treat `source_excerpt` and `model_text` artifacts as untrusted external content.
+**user**:
+> Can you start off the file with a docstring, describing the tool and its usage (including the points you put at the bottom)?
+**assistant**:
+> ```python
+> """
+> OpenAI Responses API file-search tool.
+> 
+> This tool searches one or more pre-configured OpenAI vector stores using the
+> Responses API `file_search` capability. It returns normalized `ToolResult`
+> objects containing evidence excerpts, file citations, structured search result
+> metadata, and the raw OpenAI response for durable persistence.
+> 
+> Usage
+> -----
+> Create vector stores and add files through the OpenAI API before invoking this
+> tool. Then construct and register it with an authenticated OpenAI client:
+> 
+>     from openai import OpenAI
+> 
+>     client = OpenAI()
+>     registry.register(make_openai_file_search_tool(client))
+> 
+> Invoke it through the standard normalized tool protocol:
+> 
+>     result = tool.fn(ToolInvocation(
+>         operation_id="op_123",
+>         conversation_id="conversation_456",
+>         arguments={
+>             "query": "What discount rate do our IAM runs assume?",
+>             "max_num_results": 5,
+>             # Optional, only when enabled in tool config:
+>             # "vector_store_ids": ["vs_abc123"],
+>             # "filters": {
+>             #     "type": "in",
+>             #     "key": "category",
+>             #     "value": ["paper", "appendix"],
+>             # },
+>         },
+>         config={
+>             "vector_store_ids": ["vs_abc123"],
+>             "model": "gpt-6-astra",
+>         },
+>         context=None,
+>         provenance_requirements={},
+>     ))
+> 
+> Configuration
+> -------------
+> `vector_store_ids` should normally be configured by the planner or registry,
+> rather than supplied by an invocation. Set
+> `allow_invocation_store_override=True` only when callers are authorized to
+> select arbitrary stores. `max_num_results` is bounded by
+> `max_num_results_limit` to control cost and latency.
+> 
+> Security and persistence
+> ------------------------
+> Search excerpts, citations, model-generated text, and all other OpenAI output
+> are untrusted external content. Callers must never inject them into system
+> instructions or otherwise grant them authority.
+> 
+> The tool emits `source_excerpt` artifacts for retrieved evidence and a
+> `model_text` artifact when the API returns output text. The caller should
+> persist `result.data["raw_response"]` separately as temporary/audit material,
+> then selectively promote relevant excerpts and citations into durable
+> artifacts or source records.
+> """
+> ```

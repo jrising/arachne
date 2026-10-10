@@ -1,0 +1,49 @@
+**user**:
+> How do I resolve this:
+> PyError (PyImport_ImportModule) <class 'ValueError'>
+> ValueError('numpy.dtype size changed, may indicate binary incompatibility. Expected 96 from C header, got 88 from PyObject')
+**assistant**:
+> This means a compiled package (often `pandas`, `scipy`, or a custom extension) was built against a different NumPy version than the one currently installed.
+> 
+> For **Julia `PyCall` using its default Conda environment**, the cleanest fix is:
+> 
+> ```julia
+> using Conda
+> 
+> Conda.runconda(`remove -y numpy pandas`)
+> Conda.runconda(`clean --all -y`)
+> Conda.runconda(`install -y numpy pandas`)
+> ```
+> 
+> Then rebuild PyCall and restart Julia:
+> 
+> ```julia
+> using Pkg
+> Pkg.build("PyCall")
+> ```
+> 
+> If it still fails, reset PyCall’s managed environment completely:
+> 
+> ```julia
+> using Conda
+> rm(Conda.ROOTENV; recursive=true, force=true)
+> 
+> using Pkg
+> Pkg.build("PyCall")
+> ```
+> 
+> Then reinstall the Python packages you need:
+> 
+> ```julia
+> using Conda
+> Conda.add("numpy")
+> Conda.add("pandas")
+> ```
+> 
+> If PyCall is configured to use a **system Python or virtualenv** rather than Conda, activate that same environment and reinstall NumPy plus the failing compiled package together:
+> 
+> ```bash
+> python -m pip install --upgrade --force-reinstall --no-cache-dir numpy pandas
+> ```
+> 
+> Avoid mixing `pip` and `conda` for core compiled packages in the same environment unless necessary.

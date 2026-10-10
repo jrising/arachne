@@ -1,0 +1,34 @@
+**user**:
+> Is there a way in facet_grid to make one row narrower (less tall) than the others, even though it covers the same span of values?
+**assistant**:
+> Not with base `facet_grid()` alone: panel row heights are either equal or determined by free scale ranges via `space = "free_y"`.
+> 
+> For explicit relative heights, use **forcepanelsizes**:
+> 
+> ```r
+> library(ggplot2)
+> library(forcepanelsizes)
+> 
+> p <- ggplot(df, aes(x, y)) +
+>   geom_point() +
+>   facet_grid(row.facet ~ ., scales = "free_y")
+> 
+> force_panelsizes(
+>   p,
+>   rows = c(1, 3, 3)   # first facet row is one-third as tall
+> )
+> ```
+> 
+> The values are relative heights, in the displayed facet-row order. For exact grid units:
+> 
+> ```r
+> force_panelsizes(p, rows = grid::unit(c(1, 3, 3), "null"))
+> ```
+> 
+> If you need panel height to reflect the data range automatically, use:
+> 
+> ```r
+> facet_grid(row.facet ~ ., scales = "free_y", space = "free_y")
+> ```
+> 
+> —but that will not shrink a row whose y-span is identical to the others.

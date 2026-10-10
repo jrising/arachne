@@ -1,0 +1,209 @@
+**user**:
+> Can you write a python function which generates a http request like the following:
+> Post: https://image-generation.perchance.org/api/generate?userKey=63f9da36d5f4d397ee9e79c9b3251d2065b3f079b3517f56e7bee9a8aa161854&requestId=0.40413320112715856&adAccessCode=&__cacheBust=0.33240447934105943
+> (The userKey should be exactly that, the requestId and cacheBust I think are random numbers).
+> With the payload:
+> `{"prompt": PROMPT,"negativePrompt":"","seed":-1,"resolution":"768x768","guidanceScale":7,"channel":"ai-text-to-image-generator","subChannel":"public","userKey":"63f9da36d5f4d397ee9e79c9b3251d2065b3f079b3517f56e7bee9a8aa161854","adAccessCode":"","requestId":"0.40413320112715856"}`
+> where PROMPT is passed in as an argument to the function?
+**assistant**:
+> ```python
+> import random
+> import requests
+> 
+> USER_KEY = "63f9da36d5f4d397ee9e79c9b3251d2065b3f079b3517f56e7bee9a8aa161854"
+> API_URL = "https://image-generation.perchance.org/api/generate"
+> 
+> def generate_image(prompt: str) -> requests.Response:
+>     request_id = str(random.random())
+>     cache_bust = str(random.random())
+> 
+>     params = {
+>         "userKey": USER_KEY,
+>         "requestId": request_id,
+>         "adAccessCode": "",
+>         "__cacheBust": cache_bust,
+>     }
+> 
+>     payload = {
+>         "prompt": prompt,
+>         "negativePrompt": "",
+>         "seed": -1,
+>         "resolution": "768x768",
+>         "guidanceScale": 7,
+>         "channel": "ai-text-to-image-generator",
+>         "subChannel": "public",
+>         "userKey": USER_KEY,
+>         "adAccessCode": "",
+>         "requestId": request_id,
+>     }
+> 
+>     response = requests.post(
+>         API_URL,
+>         params=params,
+>         json=payload,
+>         headers={
+>             "Content-Type": "application/json",
+>             "Accept": "application/json",
+>         },
+>         timeout=120,
+>     )
+>     response.raise_for_status()
+>     return response
+> 
+> 
+> # Example
+> response = generate_image("A cinematic watercolor painting of Newark, Delaware at sunset")
+> print(response.status_code)
+> print(response.json())
+> ```
+> 
+> `request_id` is generated once and used consistently in both the URL query parameters and JSON payload.
+**user**:
+> Let's go a step further. The result, on success, will look like this:
+> ```
+> {
+>   "status": "success",
+>   "imageId": "816e33ac2386a840b69d5fcdcf5c0773ab78316c5b55ec646f02144c192de768",
+>   "fileExtension": "jpeg",
+>   "seed": 1026363095,
+>   "prompt": PROMPT,
+>   "width": 768,
+>   "height": 768,
+>   "guidanceScale": 7,
+>   "negativePrompt": "",
+>   "maybeNsfw": true,
+>   "imageDownloadUrl": "/api/downloadTemporaryImageViaProxy?t=v1.EjUbImN52cVm36wT.ks4ruoRmx7tei-x9d_SqQlLMsY_68jhoVislM7DmZ_MGWWskVg5VH9qSFhPuAoMUnNc_Y5tAAEbJgqcUU2qyVpZS0TYzdVToTJNXxs1D_VP_74oSd2UncRH07UXK6Ogen32EtwdjYNhE5DkO-C2SbEnx1OLBM5YfUnxVj-XR4v41_ohtwiagK6ZKbK9EPECC_Gz5L8HG2KdO1IDCHWZdEldyHWT57XudDiLq9Cfkobp_A-UZPThedyMVFzKn0CG05fdJcf-X78aIZWRA1f80D_9rc4YaXHQf-9ljTrsD5T-resZcT1U"
+> }
+> ```
+> And the return value of the function should be the URL, with the domain name "https://image-generation.perchance.org/".
+> I
+**assistant**:
+> ```python
+> import random
+> from urllib.parse import urljoin
+> 
+> import requests
+> 
+> ORIGIN = "https://image-generation.perchance.org"
+> API_URL = f"{ORIGIN}/api/generate"
+> USER_KEY = "63f9da36d5f4d397ee9e79c9b3251d2065b3f079b3517f56e7bee9a8aa161854"
+> 
+> 
+> def generate_image(prompt: str) -> str:
+>     """Generate an image and return its temporary download URL."""
+>     request_id = str(random.random())
+> 
+>     response = requests.post(
+>         API_URL,
+>         params={
+>             "userKey": USER_KEY,
+>             "requestId": request_id,
+>             "adAccessCode": "",
+>             "__cacheBust": str(random.random()),
+>         },
+>         json={
+>             "prompt": prompt,
+>             "negativePrompt": "",
+>             "seed": -1,
+>             "resolution": "768x768",
+>             "guidanceScale": 7,
+>             "channel": "ai-text-to-image-generator",
+>             "subChannel": "public",
+>             "userKey": USER_KEY,
+>             "adAccessCode": "",
+>             "requestId": request_id,
+>         },
+>         timeout=120,
+>     )
+>     response.raise_for_status()
+> 
+>     result = response.json()
+>     if result.get("status") != "success" or not result.get("imageDownloadUrl"):
+>         raise RuntimeError(f"Image generation failed: {result}")
+> 
+>     return urljoin(ORIGIN, result["imageDownloadUrl"])
+> 
+> 
+> # Example
+> image_url = generate_image("A cyberpunk spider weaving glowing silk in space")
+> print(image_url)
+> ```
+> 
+> This returns a URL such as:
+> 
+> ```text
+> https://image-generation.perchance.org/api/downloadTemporaryImageViaProxy?t=...
+> ```
+**user**:
+> When I try this, I get:
+> requests.exceptions.HTTPError: 403 Client Error: Forbidden for url: https://image-generation.perchance.org/api/generate?userKey=63f9da36d5f4d397ee9e79c9b3251d2065b3f079b3517f56e7bee9a8aa161854&requestId=0.6589416312563877&adAccessCode=&__cacheBust=0.8801539065396609
+> 
+> Could it be that it appears different to the server from the code rather than from a browser? The only thing I notice in the request headers I didn't mention is a referrer policy "strict-origin-when-cross-origin".
+**assistant**:
+> Yes. A 403 commonly means the service expects a browser session, valid cookies, an allowed `Origin`/`Referer`, or a current UI-generated key.
+> 
+> `strict-origin-when-cross-origin` is a **browser referrer policy**, not normally a request header you should send. It controls what `Referer` the browser sends.
+> 
+> Try establishing a session and sending the page origin as the referrer (replace `PAGE_URL` with the actual Perchance generator page you used):
+> 
+> ```python
+> import random
+> from urllib.parse import urljoin
+> import requests
+> 
+> ORIGIN = "https://image-generation.perchance.org"
+> API_URL = f"{ORIGIN}/api/generate"
+> PAGE_URL = "https://perchance.org/ai-text-to-image-generator"
+> USER_KEY = "63f9da36d5f4d397ee9e79c9b3251d2065b3f079b3517f56e7bee9a8aa161854"
+> 
+> def generate_image(prompt: str) -> str:
+>     request_id = str(random.random())
+> 
+>     with requests.Session() as session:
+>         session.headers.update({
+>             "User-Agent": (
+>                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+>                 "AppleWebKit/537.36 (KHTML, like Gecko) "
+>                 "Chrome/131.0.0.0 Safari/537.36"
+>             ),
+>             "Accept": "application/json, text/plain, */*",
+>             "Origin": "https://perchance.org",
+>             "Referer": PAGE_URL,
+>         })
+> 
+>         # Obtain any cookies the service gives ordinary visitors.
+>         session.get(PAGE_URL, timeout=30).raise_for_status()
+> 
+>         response = session.post(
+>             API_URL,
+>             params={
+>                 "userKey": USER_KEY,
+>                 "requestId": request_id,
+>                 "adAccessCode": "",
+>                 "__cacheBust": str(random.random()),
+>             },
+>             json={
+>                 "prompt": prompt,
+>                 "negativePrompt": "",
+>                 "seed": -1,
+>                 "resolution": "768x768",
+>                 "guidanceScale": 7,
+>                 "channel": "ai-text-to-image-generator",
+>                 "subChannel": "public",
+>                 "userKey": USER_KEY,
+>                 "adAccessCode": "",
+>                 "requestId": request_id,
+>             },
+>             timeout=120,
+>         )
+> 
+>         if not response.ok:
+>             raise RuntimeError(
+>                 f"Generation failed ({response.status_code}): {response.text[:1000]}"
+>             )
+> 
+>         data = response.json()
+>         return urljoin(ORIGIN, data["imageDownloadUrl"])
+> ```
+> 
+> If this still returns 403, inspect the successful browser request in DevTools → Network → **Copy as cURL**, and compare its request body, cookies, `Origin`, and `Referer`. In particular, the copied `userKey` may be short-lived or session-bound. If Perchance uses browser/JavaScript anti-bot validation, `requests` cannot reproduce that reliably; use their supported API if available, or browser automation with your own session.

@@ -1,0 +1,496 @@
+**user**:
+> I have started a plan to build an abstraction around model and tool selection in my AI system. Here is the contract for tools:
+> """
+> Tool protocol and normalized typed tool-result contract.
+> 
+> Tools are executable capabilities. In the initial synchronous system they may
+> be invoked directly by a responder. In the workflow system they are executed
+> as Operations and yield Artifacts. Tool interfaces should therefore avoid
+> assuming that their primary result is user-visible text.
+> 
+> Expected tool callable shape:
+> 
+> ToolCallable = Callable[
+>     [ToolInvocation],
+>     ToolResult,
+> ]
+> 
+> @dataclass(frozen=True)
+> class ToolInvocation:
+>     operation_id: str | None
+>     conversation_id: str
+>     arguments: Mapping[str, Any]
+>     config: Mapping[str, Any]
+>     context: PlannerContext | None
+>     provenance_requirements: Mapping[str, Any]
+> 
+> @dataclass
+> class Tool:
+>     name: str
+>     description: str
+>     fn: ToolCallable | Callable[..., Any]
+>     config: ToolConfig
+>     quality_prior: float | None = None
+>     cost_estimate: float | None = None
+>     version: str = "1"
+> 
+> Compatibility:
+> - registry.py may accept legacy functions such as
+>   `fn(prompt, config) -> str`.
+> - tools/base.py normalizes such outputs to ToolResult/Artifact.
+> - Tool configuration defaults and allowed discrete options are validated here.
+> 
+> Caller:
+> - responders.py or workflow/workers.py invokes:
+>       result = tool.fn(invocation)
+> - the caller persists raw temporary output as appropriate, converts relevant
+>   materials to artifacts/source excerpts, and never blindly injects untrusted
+>   tool text into system instructions.
+> """
+> 
+> Now, here is the documentation for a tool available through OpenAI:
+> ## Web search
+> 
+> `web_search` lets the model search and open pages, returning a `web_search_call` item plus a message with `url_citation` annotations. The older `web_search_preview` still works but ignores the newer options.
+> 
+> ```python
+> resp = client.responses.create(
+>     model="gpt-6-astra",
+>     tools=[{
+>         "type": "web_search",
+>         "search_context_size": "high",
+>         "filters": {"allowed_domains": ["www.who.int", "www.cdc.gov"]},
+>         "user_location": {"type": "approximate", "country": "CA",
+>                           "city": "Toronto", "region": "Ontario",
+>                           "timezone": "America/Toronto"},
+>         "external_web_access": True,
+>     }],
+>     include=["web_search_call.action.sources"],
+>     input="Latest WHO guidance on heat-health action plans?",
+> )
+> ```
+> 
+> | Option | Values / range | Default |
+> | --- | --- | --- |
+> | `search_context_size` | `low`, `medium`, `high` | `medium` |
+> | `filters.allowed_domains` | up to 100 domains, no `https://` prefix; subdomains included | none |
+> | `filters.blocked_domains` | up to 100 domains | none |
+> | `user_location` | `type: "approximate"` + `country` (ISO 2-letter), `city`, `region` (free text), `timezone` (IANA) | none |
+> | `external_web_access` | `true` live fetch, `false` cache/index only | `true` |
+> | `return_token_budget` | `default` or `unlimited` (GPT-5+ reasoning models only) | `default` |
+> | `search_content_types` | `["text"]`, `["image"]`, or both | text |
+> | `image_settings` | `max_results` (positive int), `caption` (bool) | none |
+> 
+> Related `include` values: `web_search_call.action.sources` (every URL consulted) and `web_search_call.results` (raw results, including image results). The search context window is capped at 128k tokens regardless of model. Use `tool_choice: "required"` to force a search; for multi-minute research runs, set `background: true`.
+> 
+> Can you construct a full tool implementation for ths?
+**assistant**:
+> ```python
+> # tools/openai_web_search.py
+> from __future__ import annotations
+> 
+> import json
+> import re
+> from dataclasses import dataclass, field
+> from typing import Any, Mapping, Sequence
+> from uuid import uuid4
+> 
+> from openai import OpenAI
+> 
+> from .base import Artifact, Tool, ToolInvocation, ToolResult, ToolConfig
+> 
+> 
+> _DOMAIN_RE = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$", re.I)
+> 
+> 
+> @dataclass(frozen=True)
+> class OpenAIWebSearchSettings:
+>     model: str = "gpt-6-astra"
+>     search_context_size: str = "medium"
+>     allowed_domains: tuple[str, ...] = ()
+>     blocked_domains: tuple[str, ...] = ()
+>     external_web_access: bool = True
+>     return_token_budget: str = "default"
+>     search_content_types: tuple[str, ...] = ("text",)
+>     image_max_results: int | None = None
+>     image_caption: bool = False
+>     force_search: bool = True
+>     include_raw_results: bool = False
+> 
+>     def to_openai_tool(self) -> dict[str, Any]:
+>         filters: dict[str, Any] = {}
+>         if self.allowed_domains:
+>             filters["allowed_domains"] = list(self.allowed_domains)
+>         if self.blocked_domains:
+>             filters["blocked_domains"] = list(self.blocked_domains)
+> 
+>         tool: dict[str, Any] = {
+>             "type": "web_search",
+>             "search_context_size": self.search_context_size,
+>             "external_web_access": self.external_web_access,
+>             "return_token_budget": self.return_token_budget,
+>             "search_content_types": list(self.search_content_types),
+>         }
+>         if filters:
+>             tool["filters"] = filters
+>         if self.image_max_results is not None:
+>             tool["image_settings"] = {
+>                 "max_results": self.image_max_results,
+>                 "caption": self.image_caption,
+>             }
+>         return tool
+> 
+> 
+> def _value(obj: Any, key: str, default: Any = None) -> Any:
+>     if isinstance(obj, Mapping):
+>         return obj.get(key, default)
+>     return getattr(obj, key, default)
+> 
+> 
+> def _dump(obj: Any) -> Any:
+>     if hasattr(obj, "model_dump"):
+>         return obj.model_dump(mode="json")
+>     if isinstance(obj, Mapping):
+>         return {str(k): _dump(v) for k, v in obj.items()}
+>     if isinstance(obj, (list, tuple)):
+>         return [_dump(v) for v in obj]
+>     return obj
+> 
+> 
+> def _validate_domains(domains: Sequence[str]) -> tuple[str, ...]:
+>     cleaned = tuple(dict.fromkeys(d.strip().lower() for d in domains if d.strip()))
+>     if len(cleaned) > 100:
+>         raise ValueError("OpenAI web search accepts at most 100 domains.")
+>     if any(not _DOMAIN_RE.fullmatch(domain) for domain in cleaned):
+>         raise ValueError("Domains must be bare hostnames, without https:// or paths.")
+>     return cleaned
+> 
+> 
+> def _settings(
+>     defaults: OpenAIWebSearchSettings,
+>     overrides: Mapping[str, Any],
+>     hard_allowed_domains: frozenset[str] | None,
+> ) -> OpenAIWebSearchSettings:
+>     allowed = _validate_domains(overrides.get("allowed_domains", defaults.allowed_domains))
+>     blocked = _validate_domains(overrides.get("blocked_domains", defaults.blocked_domains))
+> 
+>     if hard_allowed_domains is not None:
+>         allowed = tuple(domain for domain in allowed if domain in hard_allowed_domains)
+>         # A hard allow-list must remain active even if a caller supplies no filter.
+>         if not allowed:
+>             allowed = tuple(sorted(hard_allowed_domains))
+> 
+>     context = overrides.get("search_context_size", defaults.search_context_size)
+>     content_types = tuple(overrides.get("search_content_types", defaults.search_content_types))
+>     budget = overrides.get("return_token_budget", defaults.return_token_budget)
+> 
+>     if context not in {"low", "medium", "high"}:
+>         raise ValueError("search_context_size must be low, medium, or high.")
+>     if budget not in {"default", "unlimited"}:
+>         raise ValueError("Invalid return_token_budget.")
+>     if not set(content_types).issubset({"text", "image"}) or not content_types:
+>         raise ValueError("search_content_types must contain text and/or image.")
+> 
+>     return OpenAIWebSearchSettings(
+>         model=str(overrides.get("model", defaults.model)),
+>         search_context_size=context,
+>         allowed_domains=allowed,
+>         blocked_domains=blocked,
+>         external_web_access=bool(
+>             overrides.get("external_web_access", defaults.external_web_access)
+>         ),
+>         return_token_budget=budget,
+>         search_content_types=content_types,
+>         image_max_results=overrides.get("image_max_results", defaults.image_max_results),
+>         image_caption=bool(overrides.get("image_caption", defaults.image_caption)),
+>         force_search=bool(overrides.get("force_search", defaults.force_search)),
+>         include_raw_results=bool(
+>             overrides.get("include_raw_results", defaults.include_raw_results)
+>         ),
+>     )
+> 
+> 
+> def _extract_citations(response: Any) -> list[dict[str, Any]]:
+>     citations: list[dict[str, Any]] = []
+> 
+>     for item in (_value(response, "output", []) or []):
+>         if _value(item, "type") != "message":
+>             continue
+>         for content in (_value(item, "content", []) or []):
+>             for annotation in (_value(content, "annotations", []) or []):
+>                 if _value(annotation, "type") != "url_citation":
+>                     continue
+>                 citation = _dump(annotation)
+>                 citations.append({
+>                     "url": citation.get("url"),
+>                     "title": citation.get("title"),
+>                     "start_index": citation.get("start_index"),
+>                     "end_index": citation.get("end_index"),
+>                 })
+> 
+>     return citations
+> 
+> 
+> def _extract_sources(response: Any) -> list[dict[str, Any]]:
+>     sources: list[dict[str, Any]] = []
+>     seen: set[str] = set()
+> 
+>     for item in (_value(response, "output", []) or []):
+>         if _value(item, "type") != "web_search_call":
+>             continue
+>         action = _value(item, "action", {})
+>         for source in (_value(action, "sources", []) or []):
+>             source_dict = _dump(source)
+>             url = source_dict.get("url")
+>             if url and url not in seen:
+>                 seen.add(url)
+>                 sources.append(source_dict)
+> 
+>     return sources
+> 
+> 
+> def build_openai_web_search_tool(
+>     client: OpenAI,
+>     *,
+>     defaults: OpenAIWebSearchSettings = OpenAIWebSearchSettings(),
+>     hard_allowed_domains: Sequence[str] | None = None,
+> ) -> Tool:
+>     """
+>     `hard_allowed_domains` is a registry/operator policy. Invocation config
+>     cannot broaden it.
+>     """
+>     hard_allow = (
+>         frozenset(_validate_domains(hard_allowed_domains))
+>         if hard_allowed_domains is not None
+>         else None
+>     )
+> 
+>     def search(invocation: ToolInvocation) -> ToolResult:
+>         query = invocation.arguments.get("query")
+>         if not isinstance(query, str) or not query.strip():
+>             return ToolResult.failure(
+>                 code="invalid_arguments",
+>                 message="web_search requires a non-empty string argument: query",
+>             )
+> 
+>         try:
+>             settings = _settings(defaults, invocation.config, hard_allow)
+> 
+>             include = ["web_search_call.action.sources"]
+>             if settings.include_raw_results:
+**user**:
+> Please continue from where you left off.
+**assistant**:
+> ```python
+>                 include.append("web_search_call.results")
+> 
+>             request: dict[str, Any] = {
+>                 "model": settings.model,
+>                 "input": query.strip(),
+>                 "tools": [settings.to_openai_tool()],
+>                 "include": include,
+>             }
+>             if settings.force_search:
+>                 request["tool_choice"] = {"type": "web_search"}
+> 
+>             # Location is intentionally invocation/config data, never inferred.
+>             location = invocation.config.get("user_location")
+>             if location is not None:
+>                 if not isinstance(location, Mapping):
+>                     raise ValueError("user_location must be a mapping.")
+>                 if location.get("type") != "approximate":
+>                     raise ValueError("user_location.type must be 'approximate'.")
+>                 country = location.get("country")
+>                 if not isinstance(country, str) or len(country) != 2:
+>                     raise ValueError("user_location.country must be ISO-3166 alpha-2.")
+>                 request["tools"][0]["user_location"] = {
+>                     key: str(value)
+>                     for key, value in location.items()
+>                     if key in {"type", "country", "city", "region", "timezone"}
+>                     and value is not None
+>                 }
+> 
+>             response = client.responses.create(**request)
+> 
+>         except ValueError as exc:
+>             return ToolResult.failure(code="invalid_configuration", message=str(exc))
+>         except Exception as exc:
+>             # Do not expose provider internals or credentials in user-facing text.
+>             return ToolResult.failure(
+>                 code="provider_error",
+>                 message="OpenAI web search request failed.",
+>                 metadata={"exception_type": type(exc).__name__},
+>             )
+> 
+>         response_data = _dump(response)
+>         answer_text = _value(response, "output_text", "") or ""
+>         citations = _extract_citations(response)
+>         sources = _extract_sources(response)
+> 
+>         # These are data artifacts, not trusted instructions. Downstream responders
+>         # should quote/select evidence deliberately rather than prompt-injecting them.
+>         artifacts: list[Artifact] = [
+>             Artifact(
+>                 artifact_id=f"web-search-response-{uuid4()}",
+>                 kind="web_search_response",
+>                 mime_type="application/json",
+>                 data={
+>                     "query": query,
+>                     "answer_text": answer_text,
+>                     "citations": citations,
+>                     "sources": sources,
+>                     "model": settings.model,
+>                     "response_id": response_data.get("id"),
+>                 },
+>                 provenance={
+>                     "tool": "openai_web_search",
+>                     "operation_id": invocation.operation_id,
+>                     "conversation_id": invocation.conversation_id,
+>                     "external_web_access": settings.external_web_access,
+>                 },
+>             )
+>         ]
+> 
+>         for source in sources:
+>             url = source.get("url")
+>             if not url:
+>                 continue
+> 
+>             artifacts.append(
+>                 Artifact(
+>                     artifact_id=f"web-source-{uuid4()}",
+>                     kind="web_source",
+>                     mime_type="application/json",
+>                     data={
+>                         "url": url,
+>                         "title": source.get("title"),
+>                         # Preserve other provider fields, such as snippets, separately.
+>                         "source": source,
+>                     },
+>                     provenance={
+>                         "tool": "openai_web_search",
+>                         "operation_id": invocation.operation_id,
+>                         "conversation_id": invocation.conversation_id,
+>                     },
+>                 )
+>             )
+> 
+>         if settings.include_raw_results:
+>             artifacts.append(
+>                 Artifact(
+>                     artifact_id=f"web-search-raw-{uuid4()}",
+>                     kind="provider_response",
+>                     mime_type="application/json",
+>                     data=response_data,
+>                     provenance={
+>                         "tool": "openai_web_search",
+>                         "provider": "openai",
+>                         "operation_id": invocation.operation_id,
+>                     },
+>                 )
+>             )
+> 
+>         return ToolResult(
+>             status="success",
+>             artifacts=artifacts,
+>             data={
+>                 "query": query,
+>                 "answer_text": answer_text,
+>                 "citations": citations,
+>                 "source_count": len(sources),
+>                 "response_id": response_data.get("id"),
+>             },
+>         )
+> 
+>     return Tool(
+>         name="openai_web_search",
+>         description=(
+>             "Searches the web through OpenAI Responses API and returns structured "
+>             "answer, citation, source, and optional raw-response artifacts."
+>         ),
+>         fn=search,
+>         config=ToolConfig(
+>             defaults={
+>                 "model": defaults.model,
+>                 "search_context_size": defaults.search_context_size,
+>                 "external_web_access": defaults.external_web_access,
+>                 "search_content_types": list(defaults.search_content_types),
+>             },
+>             allowed_options={
+>                 "search_context_size": ("low", "medium", "high"),
+>                 "return_token_budget": ("default", "unlimited"),
+>             },
+>         ),
+>         quality_prior=0.8,
+>         cost_estimate=0.02,
+>         version="1",
+>     )
+> ```
+> 
+> This assumes your `Artifact` accepts `artifact_id`, `kind`, `mime_type`, `data`, and `provenance`, and `ToolResult` accepts `status`, `artifacts`, and `data`. If your normalized types use different field names, adapt only those constructor calls; the execution and safety boundary remain the same.
+**user**:
+> Can you also produce a docstring for the top of the file, describing the tool and its usage?
+**assistant**:
+> ```python
+> """
+> OpenAI Responses API web-search tool adapter.
+> 
+> This module implements the normalized ``ToolCallable`` protocol for OpenAI's
+> ``web_search`` Responses API tool. It accepts a ``ToolInvocation``, validates
+> per-invocation configuration, performs a web search, and returns structured
+> ``ToolResult``/``Artifact`` objects rather than treating provider-generated text
+> as trusted prompt content.
+> 
+> Usage::
+> 
+>     from openai import OpenAI
+>     from tools.openai_web_search import (
+>         OpenAIWebSearchSettings,
+>         build_openai_web_search_tool,
+>     )
+> 
+>     tool = build_openai_web_search_tool(
+>         OpenAI(),
+>         defaults=OpenAIWebSearchSettings(
+>             model="gpt-6-astra",
+>             search_context_size="high",
+>             external_web_access=True,
+>         ),
+>         # Optional operator policy: callers cannot widen this allow-list.
+>         hard_allowed_domains=["www.who.int", "www.cdc.gov"],
+>     )
+> 
+>     invocation = ToolInvocation(
+>         operation_id="op-123",
+>         conversation_id="conversation-456",
+>         arguments={"query": "Latest WHO guidance on heat-health action plans"},
+>         config={
+>             "search_context_size": "high",
+>             "user_location": {
+>                 "type": "approximate",
+>                 "country": "CA",
+>                 "city": "Toronto",
+>                 "region": "Ontario",
+>                 "timezone": "America/Toronto",
+>             },
+>         },
+>         context=None,
+>         provenance_requirements={},
+>     )
+> 
+>     result = tool.fn(invocation)
+> 
+> ``result`` contains a structured search-response artifact, one artifact per
+> consulted source, and optionally the raw provider response. Search answers,
+> snippets, source metadata, and raw results are untrusted external material:
+> callers should persist, inspect, cite, and selectively summarize them, but must
+> never inject them blindly into system instructions.
+> 
+> Supported invocation ``config`` keys include ``model``,
+> ``search_context_size``, ``allowed_domains``, ``blocked_domains``,
+> ``user_location``, ``external_web_access``, ``return_token_budget``,
+> ``search_content_types``, ``image_max_results``, ``image_caption``,
+> ``force_search``, and ``include_raw_results``. Domain lists contain bare
+> hostnames and are limited to 100 entries by the OpenAI API.
+> """
+> ```

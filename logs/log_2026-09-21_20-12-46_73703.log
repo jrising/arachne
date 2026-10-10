@@ -1,0 +1,123 @@
+**user**:
+> I have a static function in a C++ class, which creates an instance of class A, which derives from B. Then I try to access a function of B's on the object, and I get the error "no member named ...". What's going on?
+**assistant**:
+> `static` is almost certainly irrelevant. If `A` **publicly** derives from `B`, an `A` object has accessible public members of `B`:
+> 
+> ```cpp
+> class B {
+> public:
+>     void f();
+> };
+> 
+> class A : public B {};
+> 
+> void g() {
+>     A a;
+>     a.f();   // works
+> }
+> ```
+> 
+> Common reasons it fails:
+> 
+> 1. **The object’s declared type is not `A` (or `B`)**  
+>    The compiler uses the *static/declared* type, not the runtime type.
+> 
+>    ```cpp
+>    auto x = makeA();  // depends on makeA() return type
+>    x.f();
+>    ```
+> 
+>    If `makeA()` returns some unrelated type, `f()` is unavailable.
+> 
+> 2. **Inheritance is private by default for `class`**
+> 
+>    ```cpp
+>    class A : B {};  // private inheritance
+>    ```
+> 
+>    Use:
+> 
+>    ```cpp
+>    class A : public B {};
+>    ```
+> 
+>    Private inheritance usually produces an “inaccessible/private base” diagnostic, though.
+> 
+> 3. **`B::f()` is private or protected**
+> 
+>    ```cpp
+>    class B {
+>    protected:
+>        void f();
+>    };
+>    ```
+> 
+>    `A` can call it internally, but outside code cannot call `a.f()`.
+> 
+> 4. **A hides a base overload**
+> 
+>    ```cpp
+>    class B { public: void f(int); };
+>    class A : public B { public: void f(double); };
+>    ```
+> 
+>    Then `A::f(double)` hides `B::f(int)` during lookup. Restore it with:
+> 
+>    ```cpp
+>    class A : public B {
+>    public:
+>        using B::f;
+>        void f(double);
+>    };
+>    ```
+> 
+> If you share the declarations of `A`, `B`, the factory/static function, and the exact failing line, the cause should be immediately identifiable.
+**user**:
+> What's going on for this error?
+> non-const lvalue reference to type 'GeographicMap<bool>' cannot bind to a temporary
+>       of type 'GeographicMap<bool> *'
+**assistant**:
+> You are passing a **pointer** where the function expects a **reference to an object**.
+> 
+> For example, if:
+> 
+> ```cpp
+> GeographicMap<bool>* p = MatrixGeographicMap<bool>::loadDelimited(...);
+> ```
+> 
+> and a function expects:
+> 
+> ```cpp
+> void useMap(GeographicMap<bool>& map);
+> ```
+> 
+> then this fails:
+> 
+> ```cpp
+> useMap(MatrixGeographicMap<bool>::loadDelimited(...)); // wrong: passes GeographicMap<bool>*
+> ```
+> 
+> because `loadDelimited(...)` returns `GeographicMap<bool>*`, while `useMap` requires `GeographicMap<bool>&`.
+> 
+> Store the pointer and dereference it:
+> 
+> ```cpp
+> GeographicMap<bool>* p = MatrixGeographicMap<bool>::loadDelimited(...);
+> useMap(*p);
+> ```
+> 
+> or, if ownership is yours, preferably use a smart pointer:
+> 
+> ```cpp
+> std::unique_ptr<GeographicMap<bool>> p(
+>     MatrixGeographicMap<bool>::loadDelimited(...)
+> );
+> useMap(*p);
+> ```
+> 
+> The “temporary” wording refers to the pointer value returned directly by `loadDelimited`. But the essential issue is:
+> 
+> - expected: `GeographicMap<bool>&`
+> - supplied: `GeographicMap<bool>*`
+> 
+> Use `*pointer` for an object/reference, or change the receiving function to accept `GeographicMap<bool>*` if nullability and pointer semantics are intended.

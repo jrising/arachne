@@ -1,0 +1,210 @@
+**user**:
+> We are currently implementing a general LLM-authored JavaScript planning/execution system in an existing Python `planner/` package.
+> 
+> ===
+> GOAL
+> Replace the future DAG-centric planning idea with a constrained JavaScript plan language. An LLM can respond with normal visible text plus an optional fenced plan block:
+> 
+> ```plan
+> async function main(input) {
+>   // ordinary restricted async JavaScript
+> }
+> The JS program is the plan and is executed in a confined JS runtime. It may call registered planner tools and use simple control structures. This supports arbitrary general workflows, including loops, conditionals, retries, fan-out/fan-in concurrency, multi-step search → fetch URL → LLM synthesis, and bounded iterative refinement. We do NOT want task-specific classes such as PeopleDossierPlan.
+> 
+> TERMINOLOGY
+> 
+> “Plan” means JS source plus declared/validated limits.
+> “Execution/run” means one invocation of a plan, including tool calls, results, retries, timing, failures, and current waiting locations.
+> We are willing to give up static DAG construction. Dynamic execution traces and JS source are sufficient for introspection.
+> CURRENT ARCHITECTURE
+> The package already has:
+> 
+> planner/registry.py: versioned Registry for models/tools/plans. Tools have ToolSpec, executable fn, config, metadata.
+> planner/types.py: ToolInvocation, ToolResult, Artifact, PlannerContext, Response, ResponseRecord, etc.
+> planner/planner2.py: current synchronous Planner; selected responders execute registered models/tools.
+> planner/tools/openai_web_search.py: already implemented.
+> planner/tools/fetch_url.py: newly implemented registered fetch tool.
+> fetch_url must be registered normally using Planner.register_tool(**fetch_url_info).
+> IMPORTANT DESIGN DECISIONS
+> 
+> Do not hard-code a JS_API dictionary. The LLM-facing description of tools is generated from Registry.list_tools().
+> llm_text should ifself be a registered/plannable tool, not special undocumented magic. The runtime may need an adapter/executor to call them.
+> Give the planning LLM a clean text description of JS control helpers:
+> await parallelMap(items, {concurrency: 1..N}, async item => ...)
+> await retry({attempts: 1..N}, async attempt => ...)
+> ordinary arrays/objects, if, for...of, try/catch, functions, return.
+> Do not require the LLM to learn a large JSON DSL.
+> Extract plans from normal LLM output using exactly one ```plan ... ``` block. The visible reply is the text outside the block. Do NOT make the model put multiline JS into JSON.
+> JavaScript must never get filesystem/network/import/eval/process capabilities. Do not use Node vm as the security boundary.
+> Use a sandboxed subprocess/runtime (prefer QuickJS or Deno with no permissions; production should additionally use container/process CPU, memory, wall-time controls). Python is the host and owns:
+> tool resolution/execution;
+> budget enforcement;
+> persistence/tracing;
+> concurrency caps;
+> cancellation;
+> SSRF/tool safety policies.
+> Tool calls should return JSON-safe structured data / bounded artifact representations. Tool-originated content remains untrusted data, not instructions.
+> parallelMap should create actual concurrent host tool execution, limited by a Python semaphore; results stay input ordered.
+> retry only retries calls whose callback throws; enforce attempt limits.
+> Bound all execution: source size, wall time, total operations, max parallelism, recursion/loop behavior, output bytes, tool-specific costs/fetches/tokens. Initially conservative validation is acceptable, but use a real AST parser (Tree-sitter) before relying on static validation for security.
+> REQUESTED MODULES
+> Create/complete:
+> 
+> planner/javascript/
+>   __init__.py
+>   api.py       # registry-derived JS function manifest and prompt text
+>   plan.py or runtime.py  # JavaScriptPlan + fenced-plan extraction
+>   validate.py  # source validation
+>   runtime.py   # JavaScriptRuntime.execute fully implemented
+>   worker.js    # actual JS JSON-RPC execution bridge
+> API EXPECTATIONS
+> 
+> javascript_tools(registry) returns JS-exposed function metadata derived from registry entries.
+> javascript_prompt(registry) returns planner instructions: available registry-derived tools and control-helper documentation.
+> extract_plan(model_text) returns (visible_text, JavaScriptPlan | None), rejects multiple plan blocks.
+> JavaScriptPlan has source and limits such as:
+> max_wall_time_s, max_operations, max_parallelism, max_loop_iterations / related budgets.
+> JavaScriptRuntime.execute(plan, input, context=...) must be implemented, not left as a stub.
+> Runtime should use line-delimited JSON-RPC between Python and worker.js.
+> JS worker sends host-call requests; Python resolves JS function name to a pinned registry tool and invokes the registered callable with ToolInvocation.
+> The runtime must serialize ToolResult into a safe bounded JSON result for JS.
+> Execution trace should record tool calls, states, timing, errors, and ideally logical worker location/call IDs so later introspection can say what is waiting/running.
+> Avoid assuming every tool has the same raw callable signature; establish a clean typed tool-executor adapter around ToolInvocation.
+> TIE INTO PLANNER
+> Extend Planner incrementally:
+> 
+> Add a planner method / internal flow that obtains a direct planning LLM response using a prompt containing javascript_prompt(self.registry).
+> Parse visible response + optional plan block.
+> Persist the initial ResponseRecord before visible output.
+> Return/persist the visible response honestly (e.g. research is being performed) and execute the JS plan. Initially synchronous is acceptable; later it can return through poll().
+> Store plan source and execution trace associated with response ID. Planner.explain(response_id) should eventually show JS source, tool trace, limits, completion/failure, and final result.
+> Do not break current chat_response / stream_response, legacy context behavior, or existing registered tools.
+> Maintain streaming lifecycle requirements: preallocate ID; mark visible output only after nonempty chunk; final metrics on exhaustion/failure; never silently retry after visible output.
+> FIRST PRACTICAL USE CASE
+> Given an itinerary with names, the LLM should be capable of writing JS that:
+> 
+> extracts people;
+> searches possible affiliations;
+> parallelMaps people;
+> searches each person;
+> fetches promising URLs through web.fetchUrl;
+> asks registered llm_text to generate cited person notes or a refined query;
+> uses bounded retries;
+> asks llm_text to synthesize the final cheat sheet.
+> This is illustrative only; do not implement a special people-dossier planner.
+> IMPLEMENTATION STYLE
+> Please inspect and reconcile exact existing imports/types rather than inventing incompatible duplicate models. Provide concrete code patches/files, not only architecture. Start with a minimal working JSON-RPC implementation and tests using a fake JS runtime/tool executor if Deno/QuickJS is unavailable in CI.
+> ===
+> 
+> Now, I have a couple of thoughts that might require some broader changes. Currently, the kind of javascript that might be written for my example case includes the use of `retry`, because you might not get good data on a person from that first search/link. But I think a better way to think about this is that the llm call that would be used the end of a search-and-retrieval for a given person has the opportunity to set out a new set of operations-- which may look like a retry of the first, but perhaps with different search terms, or perhaps a different set of tools.
+> 
+> This means, (1) that maybe retry is unnecessary (its use always seemed a bit ill-defined to me), and (2) that there's real recursion here: each llm call has the potential to ask for another javascript algorithm.
+> 
+> "Rewriting" a single javascript algorithm sounds messy, so we just need to make sure we can have multiple parallel different algorithms going.
+> 
+> Also, please note that the llm_text call should be model agnostic. If a specific model is asked for by the javascript, then fine, but otherwise it should go into whatever our normal logic is for choosing a model from across the ones that are registered.
+> 
+> And finally, we need some kind of record of all the things that went into this execution process: which models were used at all points, which tool arguments were used. Because when we then thumbs-up/down that final outcome, it should backpropogate to all the components that went into it.
+> 
+> Also, are we sure javascript is the right tool? It's great that it has async/await built in, but that's got to be available in other languages, and the careful sandboxing is maybe an indication that it's not quite right. Maybe we could get further using a language like Scheme, which allows us to keep a DAG-like structure, and then we don't even worry about calling things parallel-- we just execute them as parallel, since as long as there are no side-effects.
+> 
+> Can you provide a full update of the project description, accounting for these issues?
+**assistant**:
+> ## Updated Project Description
+> 
+> ### Goal
+> 
+> Implement a general LLM-authored JavaScript planning/execution system in the existing Python `planner/` package.
+> 
+> An LLM may return visible user-facing text plus an optional fenced plan:
+> 
+> ```plan
+> async function main(input) {
+>   // restricted async JavaScript
+> }
+> ```
+> 
+> The JavaScript program is the plan. It may call registered tools and use ordinary bounded control flow, including loops, conditionals, functions, and concurrent fan-out/fan-in.
+> 
+> We explicitly do **not** create task-specific plan classes such as `PeopleDossierPlan`.
+> 
+> ### Dynamic and Recursive Planning
+> 
+> A plan may call the registered `llm_text` tool. That call can return ordinary text, structured data, or a new fenced `plan` block.
+> 
+> A returned plan is a **child execution**, not a rewrite of the parent program:
+> 
+> - The parent can have multiple outstanding `llm_text` calls, each potentially producing an independent child plan.
+> - Child plans inherit a bounded portion of the parent’s execution budget and receive explicit input/context derived from the calling result.
+> - Child plans may themselves call `llm_text` and create further children, subject to maximum depth, operation, tool-cost, and wall-time budgets.
+> - The trace records parent/child execution IDs and logical call locations.
+> - Dynamic plan output is returned to the calling JavaScript as structured data, including visible text, final result, status, and child trace reference.
+> 
+> This supports adaptive research: an LLM reviewing poor search results can issue a different retrieval strategy, use different tools, or synthesize directly.
+> 
+> ### Retry
+> 
+> `retry` is no longer central to the design. Dynamic replanning is generally preferable when recovery requires judgment or a changed strategy.
+> 
+> We may retain:
+> 
+> ```js
+> await retry({ attempts: 1..N }, async attempt => ...)
+> ```
+> 
+> as a narrowly defined convenience for transient mechanical failures. It retries only callbacks that throw and is always bounded. It is not a substitute for LLM-directed recovery.
+> 
+> ### JavaScript Rationale
+> 
+> JavaScript remains the preferred initial plan language because async/await, promises, arrays, and ordinary control flow are highly familiar to LLMs and map naturally to concurrent host tool calls.
+> 
+> A Scheme/dataflow language could offer attractive purity and implicit parallelism, but would introduce a less familiar LLM interface and would not eliminate the need for sandboxing, budgets, provenance, side-effect policy, or dynamic control flow. We should preserve the option to add a declarative/dataflow language later, but not delay the JavaScript implementation.
+> 
+> JavaScript must run only in a sandboxed subprocess/runtime—preferably QuickJS or Deno with no permissions—not Node `vm`. Python remains the security and policy boundary.
+> 
+> ### Registry-Derived Tool Interface
+> 
+> Do not hard-code a `JS_API` dictionary.
+> 
+> - `javascript_tools(registry)` derives the exposed manifest from `Registry.list_tools()`.
+> - `javascript_prompt(registry)` describes those tools and JS helpers.
+> - JavaScript function names resolve to pinned registered tools.
+> - Tool outputs are bounded JSON-safe data or artifact references; tool-originated text is untrusted data, never executable instructions.
+> 
+> `llm_text` is a normal registered tool. If its invocation specifies a model, use it; otherwise route through the Planner’s ordinary registered-model selection logic.
+> 
+> ### Execution and Attribution
+> 
+> Every run produces a comprehensive execution record, including:
+> 
+> - plan source, limits, validation result, parent/child run IDs, and lifecycle states;
+> - every tool invocation with complete `ToolInvocation` arguments;
+> - every model call, selected model ID, prompt/messages, generation arguments, and usage/cost metadata;
+> - `ToolResult`/artifact summaries, timing, failures, retries, cancellations, and logical worker/call IDs;
+> - current waiting/running locations where available.
+> 
+> This record is the attribution graph for later thumbs-up/down feedback: feedback on a final response can be propagated to every contributing model choice, prompt, tool call, argument set, and child plan.
+> 
+> ### Runtime
+> 
+> `JavaScriptRuntime.execute(plan, input, context=...)` uses line-delimited JSON-RPC with `worker.js`.
+> 
+> - The worker evaluates constrained JavaScript and sends host-call requests.
+> - Python resolves and invokes tools through a typed `ToolInvocation` executor adapter.
+> - `parallelMap` produces genuinely concurrent host execution, bounded by a Python semaphore, while preserving input order.
+> - Python owns cancellation, SSRF policy, tool costs, persistence, tracing, and all budgets.
+> - Enforce source size, wall time, operations, recursion depth, loop iterations, output bytes, concurrency, and tool-specific quotas.
+> - Use conservative validation initially, then Tree-sitter AST validation before relying on static checks.
+> 
+> ### Planner Integration
+> 
+> Extend `Planner` incrementally:
+> 
+> 1. Obtain a planning-model response using `javascript_prompt(self.registry)`.
+> 2. Parse exactly one optional fenced `plan` block with `extract_plan(model_text)`.
+> 3. Persist the initial `ResponseRecord` before visible output.
+> 4. Return/persist visible text honestly, then execute the plan synchronously initially.
+> 5. Store plan source, execution result, child-run graph, and full trace against the response ID.
+> 6. Extend `Planner.explain(response_id)` to expose the complete provenance record.
+> 
+> Existing `chat_response`, `stream_response`, legacy context behavior, and existing registered tools must remain compatible.

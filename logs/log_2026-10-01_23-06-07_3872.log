@@ -1,0 +1,277 @@
+**user**:
+> I have started a plan to build an abstraction around model and tool selection in my AI system. Here is the contract for tools:
+> """
+> Tool protocol and normalized typed tool-result contract.
+> 
+> Tools are executable capabilities. In the initial synchronous system they may
+> be invoked directly by a responder. In the workflow system they are executed
+> as Operations and yield Artifacts. Tool interfaces should therefore avoid
+> assuming that their primary result is user-visible text.
+> 
+> Expected tool callable shape:
+> 
+> ToolCallable = Callable[
+>     [ToolInvocation],
+>     ToolResult,
+> ]
+> 
+> @dataclass(frozen=True)
+> class ToolInvocation:
+>     operation_id: str | None
+>     conversation_id: str
+>     arguments: Mapping[str, Any]
+>     config: Mapping[str, Any]
+>     context: PlannerContext | None
+>     provenance_requirements: Mapping[str, Any]
+> 
+> @dataclass
+> class Tool:
+>     name: str
+>     description: str
+>     fn: ToolCallable | Callable[..., Any]
+>     config: ToolConfig
+>     quality_prior: float | None = None
+>     cost_estimate: float | None = None
+>     version: str = "1"
+> 
+> Compatibility:
+> - registry.py may accept legacy functions such as
+>   `fn(prompt, config) -> str`.
+> - tools/base.py normalizes such outputs to ToolResult/Artifact.
+> - Tool configuration defaults and allowed discrete options are validated here.
+> 
+> Caller:
+> - responders.py or workflow/workers.py invokes:
+>       result = tool.fn(invocation)
+> - the caller persists raw temporary output as appropriate, converts relevant
+>   materials to artifacts/source excerpts, and never blindly injects untrusted
+>   tool text into system instructions.
+> """
+> 
+> Now, here is the documentation for a tool available through OpenAI:
+> ## Tool search
+> 
+> `tool_search` keeps large tool catalogues out of the context until needed: you mark functions or MCP servers `defer_loading: true`, and the model loads only what it needs (appended at the end of context, so the prompt cache survives). Requires `gpt-5.4` or later.
+> 
+> ```python
+> resp = client.responses.create(
+>     model="gpt-6-astra",
+>     input="List open orders for customer CUST-12345.",
+>     tools=[
+>         {"type": "namespace", "name": "crm",
+>          "description": "CRM tools for customer lookup and orders.",
+>          "tools": [{"type": "function", "name": "list_open_orders",
+>                     "description": "List open orders for a customer ID.",
+>                     "defer_loading": True,
+>                     "parameters": {"type": "object",
+>                                    "properties": {"customer_id": {"type": "string"}},
+>                                    "required": ["customer_id"],
+>                                    "additionalProperties": False}}]},
+>         {"type": "tool_search"},
+>     ],
+>     parallel_tool_calls=False,
+> )
+> ```
+> 
+> | Option | Values / range | Notes |
+> | --- | --- | --- |
+> | `execution` | `server` (hosted, default) or `client` | Client mode emits `tool_search_call`; you return `tool_search_output` with the tools to load |
+> | `description` | string | Client mode: what the search is for |
+> | `parameters` | JSON Schema | Client mode: arguments your search accepts |
+> 
+> OpenAI recommends grouping deferred functions into namespaces or MCP servers of fewer than 10 functions each. An `additional_tools` input item (`role: "developer"`) can also inject tools at a specific point in the conversation.
+> 
+> Can you construct a full tool implementation for this? Please start off the file with a docstring, describing the tool and its usage.
+**assistant**:
+> ```python
+> """
+> OpenAI client-mode `tool_search` implementation.
+> 
+> This tool searches a locally managed catalogue of deferred OpenAI tool
+> definitions when an OpenAI model emits a `tool_search_call`. Register the
+> returned Tool alongside deferred functions/namespaces, then invoke it with a
+> ToolInvocation whose arguments contain at least:
+> 
+>     {"description": "list open CRM orders"}
+> 
+> On success, the first Artifact contains:
+> 
+>     {"tools": [<OpenAI-compatible deferred tool definitions>]}
+> 
+> The OpenAI transport adapter should read that artifact and send its `tools`
+> value back to OpenAI in the corresponding `tool_search_output` item. Registry
+> content is treated as potentially actionable/untrusted data even though its
+> structure is validated before being returned.
+> """
+> 
+> from __future__ import annotations
+> 
+> import copy
+> import re
+> from collections.abc import Mapping, Sequence
+> from typing import Any
+> 
+> # Replace with your project's actual imports.
+> from .base import Artifact, Tool, ToolConfig, ToolInvocation, ToolResult
+> 
+> 
+> _TOKEN_RE = re.compile(r"[a-z0-9_]+")
+> 
+> 
+> def make_openai_tool_search_tool(
+>     *,
+>     deferrable_tool_registry: Sequence[Mapping[str, Any]],
+>     config: ToolConfig,
+>     max_results: int = 10,
+> ) -> Tool:
+>     """Build a client-executed OpenAI dynamic tool-discovery Tool."""
+> 
+>     if max_results < 1:
+>         raise ValueError("max_results must be positive")
+> 
+>     # Freeze a defensive copy: callers cannot mutate the effective catalogue.
+>     registry = tuple(copy.deepcopy(dict(item)) for item in deferrable_tool_registry)
+> 
+>     def search(invocation: ToolInvocation) -> ToolResult:
+>         description = invocation.arguments.get("description")
+> 
+>         if not isinstance(description, str) or not description.strip():
+>             return _error(
+>                 invocation,
+>                 "arguments.description must be a non-empty string.",
+>             )
+> 
+>         terms = set(_TOKEN_RE.findall(description.lower()))
+>         matches: list[tuple[int, Mapping[str, Any]]] = []
+> 
+>         for definition in registry:
+>             matches.extend(_matches_for_definition(definition, terms))
+> 
+>         # Deterministic ordering matters for repeatability and prompt caching.
+>         matches.sort(
+>             key=lambda item: (
+>                 -item[0],
+>                 str(item[1].get("name", "")),
+>             )
+>         )
+> 
+>         selected: list[Mapping[str, Any]] = []
+>         seen: set[str] = set()
+> 
+>         for _, definition in matches:
+>             identity = _identity(definition)
+>             if identity in seen:
+>                 continue
+>             seen.add(identity)
+>             selected.append(copy.deepcopy(definition))
+>             if len(selected) >= max_results:
+>                 break
+> 
+>         payload = {
+>             "tools": selected,
+>             "query": description,
+>             "result_count": len(selected),
+>         }
+> 
+>         return ToolResult(
+>             success=True,
+>             artifacts=[
+>                 Artifact.from_json(
+>                     "tool_search",
+>                     payload,
+>                     metadata={
+>                         "trusted": False,
+>                         "source_invocation_id": invocation.operation_id,
+>                         "content_role": "openai_tool_search_output",
+>                     },
+>                 )
+>             ],
+>             # Avoid duplicating potentially actionable definitions in raw output.
+>             raw_output=None,
+>         )
+> 
+>     return Tool(
+>         name="tool_search",
+>         description=(
+>             "Searches the local deferred-tool catalogue for OpenAI-compatible "
+>             "tool definitions. Intended for OpenAI tool_search client mode."
+>         ),
+>         fn=search,
+>         config=config,
+>         quality_prior=0.95,
+>         cost_estimate=0.0,
+>         version="1.0",
+>     )
+> 
+> 
+> def _matches_for_definition(
+>     definition: Mapping[str, Any],
+>     terms: set[str],
+> ) -> list[tuple[int, Mapping[str, Any]]]:
+>     """Return scored, valid deferred definitions, including namespace subsets."""
+> 
+>     definition_type = definition.get("type")
+> 
+>     if definition_type == "namespace":
+>         matched_children: list[tuple[int, Mapping[str, Any]]] = []
+>         for child in definition.get("tools", []):
+>             if not isinstance(child, Mapping) or not child.get("defer_loading"):
+>                 continue
+>             score = _score(child, terms)
+>             if score:
+>                 matched_children.append((score, child))
+> 
+>         if not matched_children:
+>             return []
+> 
+>         matched_children.sort(key=lambda item: -item[0])
+>         namespace = copy.deepcopy(dict(definition))
+>         namespace["tools"] = [copy.deepcopy(dict(child)) for _, child in matched_children]
+>         return [(max(score for score, _ in matched_children), namespace)]
+> 
+>     if not definition.get("defer_loading"):
+>         return []
+> 
+>     score = _score(definition, terms)
+>     return [(score, definition)] if score else []
+> 
+> 
+> def _score(definition: Mapping[str, Any], terms: set[str]) -> int:
+>     """Small deterministic lexical scorer; replace with indexed semantic search."""
+> 
+>     name = str(definition.get("name", "")).lower()
+>     description = str(definition.get("description", "")).lower()
+>     haystack = f"{name} {description}"
+> 
+>     score = 0
+>     for term in terms:
+>         if term in name:
+>             score += 3
+>         elif term in haystack:
+>             score += 1
+>     return score
+> 
+> 
+> def _identity(definition: Mapping[str, Any]) -> str:
+>     """A stable-enough identity for de-duplicating a single search result."""
+>     return f"{definition.get('type', '')}:{definition.get('name', '')}"
+> 
+> 
+> def _error(invocation: ToolInvocation, message: str) -> ToolResult:
+>     return ToolResult(
+>         success=False,
+>         error=message,
+>         artifacts=[
+>             Artifact.from_json(
+>                 "tool_search",
+>                 {"error": message},
+>                 metadata={
+>                     "trusted": False,
+>                     "source_invocation_id": invocation.operation_id,
+>                 },
+>             )
+>         ],
+>     )
+> ```
+> 
+> The transport layer should extract `artifact.data["tools"]` and place it in OpenAI’s `tool_search_output` response for the original search-call ID.

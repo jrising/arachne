@@ -1,0 +1,337 @@
+**user**:
+> We have made an initial implementation of a new "planning" logic for responding to queries. This includes a tool specification:
+> """
+> Tool protocol and normalized typed tool-result contract.
+> 
+> Tools are executable capabilities. In the initial synchronous system they may
+> be invoked directly by a responder. In the workflow system they are executed
+> as Operations and yield Artifacts. Tool interfaces should therefore avoid
+> assuming that their primary result is user-visible text.
+> 
+> Expected tool callable shape:
+> 
+> ToolCallable = Callable[
+>     [ToolInvocation],
+>     ToolResult,
+> ]
+> 
+> @dataclass(frozen=True)
+> class ToolInvocation:
+>     operation_id: str | None
+>     conversation_id: str
+>     arguments: Mapping[str, Any]
+>     config: Mapping[str, Any]
+>     context: PlannerContext | None
+>     provenance_requirements: Mapping[str, Any]
+> 
+> @dataclass
+> class Tool:
+>     name: str
+>     description: str
+>     fn: ToolCallable | Callable[..., Any]
+>     config: ToolConfig
+>     quality_prior: float | None = None
+>     cost_estimate: float | None = None
+>     version: str = "1"
+> 
+> Compatibility:
+> - registry.py may accept legacy functions such as
+>   `fn(prompt, config) -> str`.
+> - tools/base.py normalizes such outputs to ToolResult/Artifact.
+> - Tool configuration defaults and allowed discrete options are validated here.
+> 
+> Caller:
+> - responders.py or workflow/workers.py invokes:
+>       result = tool.fn(invocation)
+> - the caller persists raw temporary output as appropriate, converts relevant
+>   materials to artifacts/source excerpts, and never blindly injects untrusted
+>   tool text into system instructions.
+> """
+> 
+> I have a legacy tool:
+> ```
+> import ast, math, operator
+> 
+> BINARY = {
+>     ast.Add: operator.add, ast.Sub: operator.sub,
+>     ast.Mult: operator.mul, ast.Div: operator.truediv,
+>     ast.Mod: operator.mod, ast.Pow: operator.pow,
+> }
+> UNARY = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+> 
+> def calculate(text: str, constants: dict[str, float | int], functions: dict[str, Callable]) -> float:
+>     if len(text) > 1000:
+>         raise ValueError("Expression is too long.")
+> 
+>     tree = ast.parse(text, mode="eval")
+>     if sum(1 for _ in ast.walk(tree)) > 200:
+>         raise ValueError("Expression is too complex.")
+> 
+>     def visit(node, depth=0):
+>         if depth > 50:
+>             raise ValueError("Expression is nested too deeply.")
+> 
+>         if isinstance(node, ast.Constant):
+>             if type(node.value) not in (int, float):
+>                 raise ValueError("Only numeric literals are allowed.")
+>             value = float(node.value)
+> 
+>         elif isinstance(node, ast.Name):
+>             if node.id not in CONSTS:
+>                 raise ValueError(f"Unknown name: {node.id}")
+>             value = CONSTS[node.id]
+> 
+>         elif isinstance(node, ast.UnaryOp) and type(node.op) in UNARY:
+>             value = UNARY[type(node.op)](visit(node.operand, depth + 1))
+> 
+>         elif isinstance(node, ast.BinOp) and type(node.op) in BINARY:
+>             left, right = visit(node.left, depth + 1), visit(node.right, depth + 1)
+>             if isinstance(node.op, ast.Pow) and abs(right) > 1000:
+>                 raise ValueError("Exponent is too large.")
+>             value = BINARY[type(node.op)](left, right)
+> 
+>         elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+>               and node.func.id in FUNCS and not node.keywords):
+>             value = FUNCS[node.func.id](*(visit(a, depth + 1) for a in node.args))
+> 
+>         else:
+>             raise ValueError("Unsupported expression.")
+> 
+>         if not math.isfinite(value):
+>             raise ValueError("Result is not finite.")
+>         return value
+> 
+>     try:
+>         return visit(tree.body)
+>     except (ArithmeticError, ValueError, OverflowError) as e:
+>         raise ValueError(f"Invalid calculation: {e}") from None
+> 
+> def calculator(messages: list[dict],
+>                context: PlannerContext,
+>                config: dict[str, Any]):
+>     constants = {
+>         "pi": math.pi,
+>         "e": math.e,
+>     }
+>     for name in dir(context):
+>         value = attr(context, name)
+>         if type(value) in (int, float) and math.isfinite(value):
+>             constants[name] = value
+> 
+>     funcs = {
+>         "abs": abs,
+>         "min": min,
+>         "max": max,
+>         "floor": math.floor,
+>         "ceil": math.ceil,
+>     }
+>     if config.mode == "scientific":
+>         funcs |= {
+>             "sqrt": math.sqrt, "sin": math.sin, "cos": math.cos,
+>             "tan": math.tan, "log": math.log, "log10": math.log10,
+>             "exp": math.exp,
+>         }
+>     
+>     return calculate(messages[-1]['content'])
+> 
+> calculator_info = dict(
+>     name="calculator",
+>     description="Perform simple arithmetic.",
+>     fn=calculator,
+>     config={
+>         "defaults": {"mode": "basic"},
+>         "options": {"mode": ["basic", "scientific"]}
+>     },
+>     quality_prior=0.50,
+>     cost_estimate=0.0)
+> ```
+> 
+> Can you update this tool to follow the new conventions? For now, also return a valid `calculator_info` for use with the previous version of our system.
+**assistant**:
+> ```python
+> import ast
+> import dataclasses
+> import math
+> import operator
+> from collections.abc import Callable, Mapping
+> from typing import Any
+> 
+> # Import these from your planning/tool protocol module.
+> # from planner.tools import ToolInvocation, ToolResult, PlannerContext
+> 
+> 
+> BINARY = {
+>     ast.Add: operator.add,
+>     ast.Sub: operator.sub,
+>     ast.Mult: operator.mul,
+>     ast.Div: operator.truediv,
+>     ast.Mod: operator.mod,
+>     ast.Pow: operator.pow,
+> }
+> UNARY = {
+>     ast.UAdd: operator.pos,
+>     ast.USub: operator.neg,
+> }
+> 
+> 
+> def calculate(
+>     text: str,
+>     constants: Mapping[str, float | int],
+>     functions: Mapping[str, Callable[..., float | int]],
+> ) -> float:
+>     if len(text) > 1000:
+>         raise ValueError("Expression is too long.")
+> 
+>     try:
+>         tree = ast.parse(text, mode="eval")
+>     except SyntaxError as exc:
+>         raise ValueError("Invalid expression syntax.") from exc
+> 
+>     if sum(1 for _ in ast.walk(tree)) > 200:
+>         raise ValueError("Expression is too complex.")
+> 
+>     def visit(node: ast.AST, depth: int = 0) -> float:
+>         if depth > 50:
+>             raise ValueError("Expression is nested too deeply.")
+> 
+>         if isinstance(node, ast.Constant):
+>             if type(node.value) not in (int, float):
+>                 raise ValueError("Only numeric literals are allowed.")
+>             value = float(node.value)
+> 
+>         elif isinstance(node, ast.Name):
+>             if node.id not in constants:
+>                 raise ValueError(f"Unknown name: {node.id}")
+>             value = constants[node.id]
+> 
+>         elif isinstance(node, ast.UnaryOp) and type(node.op) in UNARY:
+>             value = UNARY[type(node.op)](visit(node.operand, depth + 1))
+> 
+>         elif isinstance(node, ast.BinOp) and type(node.op) in BINARY:
+>             left = visit(node.left, depth + 1)
+>             right = visit(node.right, depth + 1)
+>             if isinstance(node.op, ast.Pow) and abs(right) > 1000:
+>                 raise ValueError("Exponent is too large.")
+>             value = BINARY[type(node.op)](left, right)
+> 
+>         elif (
+>             isinstance(node, ast.Call)
+>             and isinstance(node.func, ast.Name)
+>             and node.func.id in functions
+>             and not node.keywords
+>         ):
+>             value = functions[node.func.id](
+>                 *(visit(arg, depth + 1) for arg in node.args)
+>             )
+> 
+>         else:
+>             raise ValueError("Unsupported expression.")
+> 
+>         if not math.isfinite(value):
+>             raise ValueError("Result is not finite.")
+>         return float(value)
+> 
+>     try:
+>         return visit(tree.body)
+>     except (ArithmeticError, OverflowError, TypeError, ValueError) as exc:
+>         raise ValueError(f"Invalid calculation: {exc}") from None
+> 
+> 
+> def _context_constants(context: Any | None) -> dict[str, float | int]:
+>     constants: dict[str, float | int] = {"pi": math.pi, "e": math.e}
+> 
+>     if context is None:
+>         return constants
+> 
+>     if dataclasses.is_dataclass(context):
+>         values = {
+>             field.name: getattr(context, field.name)
+>             for field in dataclasses.fields(context)
+>         }
+>     else:
+>         values = vars(context) if hasattr(context, "__dict__") else {}
+> 
+>     for name, value in values.items():
+>         if type(value) in (int, float) and math.isfinite(value):
+>             constants[name] = value
+> 
+>     return constants
+> 
+> 
+> def _functions(mode: str) -> dict[str, Callable[..., float | int]]:
+>     if mode not in {"basic", "scientific"}:
+>         raise ValueError("Calculator mode must be 'basic' or 'scientific'.")
+> 
+>     funcs = {
+>         "abs": abs,
+>         "min": min,
+>         "max": max,
+>         "floor": math.floor,
+>         "ceil": math.ceil,
+>     }
+>     if mode == "scientific":
+>         funcs.update({
+>             "sqrt": math.sqrt,
+>             "sin": math.sin,
+>             "cos": math.cos,
+>             "tan": math.tan,
+>             "log": math.log,
+>             "log10": math.log10,
+>             "exp": math.exp,
+>         })
+>     return funcs
+> 
+> 
+> # New ToolInvocation -> ToolResult callable.
+> def calculator(invocation: ToolInvocation) -> ToolResult:
+>     expression = invocation.arguments.get("expression")
+>     if not isinstance(expression, str):
+>         raise ValueError("'expression' must be a string.")
+> 
+>     mode = invocation.config.get("mode", "basic")
+>     if not isinstance(mode, str):
+>         raise ValueError("'mode' must be a string.")
+> 
+>     value = calculate(
+>         expression,
+>         constants=_context_constants(invocation.context),
+>         functions=_functions(mode),
+>     )
+>     return ToolResult(value=value)
+> 
+> 
+> # Previous-system adapter: (messages, context, config) -> float.
+> def calculator_legacy(
+>     messages: list[dict[str, Any]],
+>     context: PlannerContext | None,
+>     config: Mapping[str, Any],
+> ) -> float:
+>     if not messages or not isinstance(messages[-1].get("content"), str):
+>         raise ValueError("Calculator requires string content in the final message.")
+> 
+>     mode = config.get("mode", "basic")
+>     if not isinstance(mode, str):
+>         raise ValueError("'mode' must be a string.")
+> 
+>     return calculate(
+>         messages[-1]["content"],
+>         constants=_context_constants(context),
+>         functions=_functions(mode),
+>     )
+> 
+> 
+> # For the previous registry implementation.
+> calculator_info = {
+>     "name": "calculator",
+>     "description": "Perform safe arithmetic and optional scientific calculations.",
+>     "fn": calculator_legacy,
+>     "config": {
+>         "defaults": {"mode": "basic"},
+>         "options": {"mode": ["basic", "scientific"]},
+>     },
+>     "quality_prior": 0.50,
+>     "cost_estimate": 0.0,
+> }
+> ```
+> 
+> The new registry should register `calculator`; the old registry can continue using `calculator_info`.

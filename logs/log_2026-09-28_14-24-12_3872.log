@@ -1,0 +1,67 @@
+**user**:
+> I have a dataset of GDP per capita and population, with columns `Country Code`, year, gdppc, pop. Can you create some R logic to make a Lorenz curve (i.e., gini coefficient graph)?
+**assistant**:
+> ```r
+> library(dplyr)
+> library(ggplot2)
+> 
+> # Lorenz curve and population-weighted Gini for one year
+> make_lorenz <- function(data, selected_year) {
+> 
+>   lorenz <- data %>%
+>     filter(year == selected_year,
+>            !is.na(gdppc), !is.na(pop),
+>            gdppc >= 0, pop > 0) %>%
+>     arrange(gdppc) %>%
+>     mutate(
+>       total_gdp = gdppc * pop,
+>       cum_pop_share = cumsum(pop) / sum(pop),
+>       cum_gdp_share = cumsum(total_gdp) / sum(total_gdp)
+>     ) %>%
+>     # Add origin, required for correct integration/plotting
+>     bind_rows(tibble(
+>       `Country Code` = NA_character_,
+>       year = selected_year,
+>       gdppc = NA_real_,
+>       pop = 0,
+>       total_gdp = 0,
+>       cum_pop_share = 0,
+>       cum_gdp_share = 0
+>     )) %>%
+>     arrange(cum_pop_share)
+> 
+>   # Gini = 1 - 2 * area beneath Lorenz curve
+>   gini <- lorenz %>%
+>     summarise(
+>       gini = 1 - sum(
+>         diff(cum_pop_share) *
+>           (head(cum_gdp_share, -1) + tail(cum_gdp_share, -1))
+>       )
+>     ) %>%
+>     pull(gini)
+> 
+>   p <- ggplot(lorenz, aes(cum_pop_share, cum_gdp_share)) +
+>     geom_abline(slope = 1, intercept = 0, linetype = "dashed",
+>                 color = "grey50") +
+>     geom_line(linewidth = 1.1, color = "#0072B2") +
+>     coord_equal() +
+>     labs(
+>       title = paste0("Global GDP per-capita Lorenz Curve, ", selected_year),
+>       subtitle = paste0("Population-weighted Gini coefficient = ",
+>                         round(gini, 3)),
+>       x = "Cumulative share of world population",
+>       y = "Cumulative share of world GDP"
+>     ) +
+>     theme_minimal()
+> 
+>   list(lorenz = lorenz, gini = gini, plot = p)
+> }
+> 
+> # Example
+> result <- make_lorenz(df, selected_year = 2023)
+> 
+> result$gini
+> result$plot
+> ```
+> 
+> This is a **population-weighted international inequality** measure: countries are ordered by `gdppc`, while their population determines each country’s weight. Total GDP is calculated as `gdppc * pop`.

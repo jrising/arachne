@@ -1,0 +1,157 @@
+**user**:
+> I have this loop in Julia:
+> ```
+> function optimize_regrange_double_outer_loop(dt0, soc_plugged_1, soc_driving_1, vehicles_plugged_1, drive_starts_time, park_starts_time)
+>     strat, regrange = given_initial(dt0, soc_plugged_1, soc_driving_1, vehicles_plugged_1, drive_starts_time, park_starts_time);
+>     df = fullsimulate(dt0, strat, regrange, vehicles_plugged_1, soc_plugged_1, soc_driving_1, drive_starts_time, park_starts_time)
+>     given_calcmaxrange!(df)
+> 
+>     valuebest = given_calcvalue(df, regrange, dt0);
+>     dfbest = df
+>     regrangebest = regrange
+>     stratbest = strat
+>     probfailbest = nothing
+>     lastprobstate = 0.
+>     doprobstate = true
+>     lastimprove = 0
+>     Random.seed!(20240826);
+>     for ll in 1:10000
+>         println("Loop $(ll)")
+> 
+>         if doprobstate && (ll % 2 == 1)
+>             ## Always updates best
+>             probstate = probstate_estimate(dt0, strat, regrangebest, vehicles_plugged_1, soc_plugged_1, drive_starts_time, park_starts_time);
+>             stratbest, probfailbest, regrange = optimize_regrange_probstate(dt0, probstate, drive_starts_time, park_starts_time);
+>             regrangebest = [0; regrange] # Need initial value
+> 
+>             if all(lastprobstate .== probstate)
+>                 doprobstate = false
+>             else
+>                 println(sum(abs.(lastprobstate .- probstate)))
+>             end
+> 
+>             dfbest = fullsimulate(dt0, stratbest, regrangebest, vehicles_plugged_1, soc_plugged_1, soc_driving_1, drive_starts_time, park_starts_time, mcdraws > 1);
+>             given_calcmaxrange!(dfbest)
+>             valuebest = given_calcvalue(dfbest, regrangebest, dt0)
+>             lastprobstate = probstate
+>         else
+>             ## Only updates on higher value
+>             println(regrangebest)
+>             regrange = regrangebest
+>             regrange[div(ll, 2) % length(regrange)] =
+>                 rand.(Truncated.(Normal.(min.(dfbest.regrange_maxkw, regrangebest), exp(-ll / 100)),
+>                                  0., dfbest.regrange_maxkw))[div(ll, 2) % length(regrange)]
+>             # regrange = rand.(Truncated.(Normal.(min.(dfbest.regrange_maxkw, regrangebest), exp(-ll / 100)),
+>             #                             min.(dfbest.regrange_maxkw, regrangebest), dfbest.regrange_maxkw))
+>             println(regrange)
+>             strat, probfail = optimize_regrange_given(dt0, regrange, drive_starts_time, park_starts_time);
+> 
+>             local df = fullsimulate(dt0, strat, regrange, vehicles_plugged_1, soc_plugged_1, soc_driving_1, drive_starts_time, park_starts_time, mcdraws > 1);
+>             value = given_calcvalue(df, regrange, dt0)
+> 
+>             println("$(value) vs. $(valuebest)")
+>             if value > valuebest
+>                 println("Improved under $(ll)")
+>                 valuebest = value
+>                 regrangebest = regrange
+>                 stratbest = strat
+>                 probfailbest = probfail
+>                 lastimprove = ll
+> 
+>                 given_calcmaxrange!(df)
+>                 dfbest = df
+>                 doprobstate = true
+>             elseif ll >= 100 && (ll - lastimprove > 10)
+>                 break
+>             end
+>         end
+>     end
+> 
+>     return stratbest, probfailbest, regrangebest
+> end
+> ```
+> And I can see reports like "Improved under 28", but I don't actually see regrangebest changing. What gives?
+**assistant**:
+> This is almost certainly an **aliasing / mutation** issue.
+> 
+> In Julia, this line:
+> 
+> ```julia
+> regrange = regrangebest
+> ```
+> 
+> does **not** make a copy. It makes `regrange` another name for the exact same array object as `regrangebest`.
+> 
+> So when you do:
+> 
+> ```julia
+> regrange[i] = ...
+> ```
+> 
+> you are already mutating `regrangebest`.
+> 
+> That means later:
+> 
+> ```julia
+> if value > valuebest
+>     regrangebest = regrange
+> end
+> ```
+> 
+> doesn’t visibly “change” anything, because `regrangebest` was already changed before you reached the `if`.
+> 
+> You probably want:
+> 
+> ```julia
+> regrange = copy(regrangebest)
+> ```
+> 
+> instead of:
+> 
+> ```julia
+> regrange = regrangebest
+> ```
+> 
+> So this block should be:
+> 
+> ```julia
+> println(regrangebest)
+> 
+> regrange = copy(regrangebest)
+> 
+> i = mod1(div(ll, 2), length(regrange))
+> 
+> regrange[i] =
+>     rand.(Truncated.(Normal.(min.(dfbest.regrange_maxkw, regrangebest), exp(-ll / 100)),
+>                      0., dfbest.regrange_maxkw))[i]
+> 
+> println(regrange)
+> ```
+> 
+> I also changed this:
+> 
+> ```julia
+> div(ll, 2) % length(regrange)
+> ```
+> 
+> to:
+> 
+> ```julia
+> mod1(div(ll, 2), length(regrange))
+> ```
+> 
+> because Julia arrays are 1-indexed. The expression `x % n` can return `0`, which is not a valid normal array index in Julia. `mod1(x, n)` cycles through `1:n`.
+> 
+> The core bug is here:
+> 
+> ```julia
+> regrange = regrangebest
+> ```
+> 
+> Use `copy` whenever you want to try a candidate perturbation without modifying the incumbent best solution. Also, when accepting the improvement, I’d write:
+> 
+> ```julia
+> regrangebest = copy(regrange)
+> ```
+> 
+> to avoid future accidental aliasing. Likewise, if `strat` is mutable, you may need to copy that too.

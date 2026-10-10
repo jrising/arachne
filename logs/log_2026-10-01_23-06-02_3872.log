@@ -1,0 +1,308 @@
+**user**:
+> I have started a plan to build an abstraction around model and tool selection in my AI system. Here is the contract for tools:
+> """
+> Tool protocol and normalized typed tool-result contract.
+> 
+> Tools are executable capabilities. In the initial synchronous system they may
+> be invoked directly by a responder. In the workflow system they are executed
+> as Operations and yield Artifacts. Tool interfaces should therefore avoid
+> assuming that their primary result is user-visible text.
+> 
+> Expected tool callable shape:
+> 
+> ToolCallable = Callable[
+>     [ToolInvocation],
+>     ToolResult,
+> ]
+> 
+> @dataclass(frozen=True)
+> class ToolInvocation:
+>     operation_id: str | None
+>     conversation_id: str
+>     arguments: Mapping[str, Any]
+>     config: Mapping[str, Any]
+>     context: PlannerContext | None
+>     provenance_requirements: Mapping[str, Any]
+> 
+> @dataclass
+> class Tool:
+>     name: str
+>     description: str
+>     fn: ToolCallable | Callable[..., Any]
+>     config: ToolConfig
+>     quality_prior: float | None = None
+>     cost_estimate: float | None = None
+>     version: str = "1"
+> 
+> Compatibility:
+> - registry.py may accept legacy functions such as
+>   `fn(prompt, config) -> str`.
+> - tools/base.py normalizes such outputs to ToolResult/Artifact.
+> - Tool configuration defaults and allowed discrete options are validated here.
+> 
+> Caller:
+> - responders.py or workflow/workers.py invokes:
+>       result = tool.fn(invocation)
+> - the caller persists raw temporary output as appropriate, converts relevant
+>   materials to artifacts/source excerpts, and never blindly injects untrusted
+>   tool text into system instructions.
+> """
+> 
+> Now, here is the documentation for a tool available through OpenAI:
+> ## Apply patch
+> 
+> `apply_patch` has no configuration fields: the model emits `apply_patch_call` items, your harness applies them to files, and you reply with `apply_patch_call_output` (`status: "completed"` or `"failed"`, plus an optional `output` message).
+> 
+> ```python
+> resp = client.responses.create(
+>     model="gpt-6-astra",
+>     input="Rename fib() to fibonacci() in lib/fib.py and update callers.",
+>     tools=[{"type": "apply_patch"}],
+> )
+> # then:
+> client.responses.create(
+>     model="gpt-6-astra",
+>     previous_response_id=resp.id,
+>     tools=[{"type": "apply_patch"}],
+>     input=[{"type": "apply_patch_call_output", "call_id": call_id,
+>             "status": "completed", "output": "Patched lib/fib.py"}],
+> )
+> ```
+> 
+> The `operation.type` is one of `create_file` (V4A diff of the full file), `update_file` (V4A diff) or `delete_file` (no diff), each with a `path`. The Agents SDK ships an `apply_diff` helper. It pairs well with `shell` for file discovery.
+> 
+> Can you construct a full tool implementation for this? Please start off the file with a docstring, describing the tool and its usage.
+**assistant**:
+> ```python
+> """
+> OpenAI apply_patch harness tool.
+> 
+> This is a harness-side executor for OpenAI's Responses API `apply_patch` tool.
+> The model emits `apply_patch_call` items; the caller passes each call's
+> `call_id` and `operation` into this tool. The tool validates the operation,
+> applies it inside a configured workspace, and returns a structured receipt
+> artifact containing an `apply_patch_call_output` payload suitable for the next
+> Responses request.
+> 
+> Usage:
+>     executor = ApplyPatchExecutor(
+>         workspace_root="/srv/project",
+>         apply_v4a_diff=my_agents_sdk_adapter,
+>     )
+>     tool = executor.as_tool()
+> 
+>     result = tool.fn(ToolInvocation(
+>         operation_id="op-123",
+>         conversation_id="conv-1",
+>         arguments={"call_id": call_id, "operation": operation},
+>         config={},
+>         context=None,
+>         provenance_requirements={},
+>     ))
+> 
+> `apply_v4a_diff` must implement the OpenAI/Agents-SDK V4A diff semantics:
+>     (operation_type, path, prior_text, diff) -> replacement_text | None
+> 
+> Return `None` for delete operations. The executor deliberately keeps this
+> adapter injectable, since V4A application is SDK-version-specific.
+> """
+> 
+> from __future__ import annotations
+> 
+> import hashlib
+> import json
+> import os
+> from dataclasses import dataclass
+> from pathlib import Path
+> from typing import Any, Callable, Mapping
+> 
+> # Replace these with your canonical project imports.
+> from planner.artifacts import Artifact
+> from planner.tools.base import Tool, ToolConfig, ToolInvocation, ToolResult
+> 
+> 
+> V4AApply = Callable[[str, str, str | None, str | None], str | None]
+> 
+> 
+> @dataclass(frozen=True)
+> class ApplyPatchExecutor:
+>     workspace_root: str | Path
+>     apply_v4a_diff: V4AApply
+>     max_diff_bytes: int = 4_000_000
+> 
+>     def as_tool(self) -> Tool:
+>         return Tool(
+>             name="apply_patch",
+>             description=(
+>                 "Applies one validated OpenAI apply_patch operation to the "
+>                 "configured workspace and returns a call-output receipt."
+>             ),
+>             fn=self,
+>             config=ToolConfig(),
+>             quality_prior=0.99,
+>             cost_estimate=0.0,
+>             version="1",
+>         )
+> 
+>     def __call__(self, invocation: ToolInvocation) -> ToolResult:
+>         try:
+>             receipt = self._apply(invocation.arguments)
+>             return ToolResult(
+>                 artifacts=[
+>                     Artifact(
+>                         kind="patch_receipt",
+>                         mime_type="application/json",
+>                         data=receipt,
+>                         source_tool="apply_patch",
+>                     )
+>                 ],
+>                 raw_output=json.dumps(receipt, ensure_ascii=False),
+>             )
+>         except Exception as exc:
+>             call_id = invocation.arguments.get("call_id")
+>             receipt = {
+>                 "type": "apply_patch_call_output",
+>                 "call_id": call_id,
+>                 "status": "failed",
+>                 "output": f"{type(exc).__name__}: {exc}",
+>             }
+>             return ToolResult(
+>                 artifacts=[
+>                     Artifact(
+>                         kind="patch_receipt",
+>                         mime_type="application/json",
+>                         data=receipt,
+>                         source_tool="apply_patch",
+>                     )
+>                 ],
+>                 raw_output=json.dumps(receipt, ensure_ascii=False),
+>                 error=str(exc),
+>             )
+> 
+>     def _apply(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
+>         call_id = arguments.get("call_id")
+>         operation = arguments.get("operation")
+> 
+>         if not isinstance(call_id, str) or not call_id:
+>             raise ValueError("arguments.call_id must be a non-empty string")
+>         if not isinstance(operation, Mapping):
+>             raise ValueError("arguments.operation must be an object")
+> 
+>         operation_type = operation.get("type")
+>         relative_path = operation.get("path")
+>         diff = operation.get("diff")
+> 
+>         if operation_type not in {"create_file", "update_file", "delete_file"}:
+>             raise ValueError(f"unsupported patch operation: {operation_type!r}")
+>         if not isinstance(relative_path, str) or not relative_path:
+>             raise ValueError("operation.path must be a non-empty string")
+>         if operation_type != "delete_file":
+>             if not isinstance(diff, str):
+>                 raise ValueError(f"{operation_type} requires a string diff")
+>             if len(diff.encode("utf-8")) > self.max_diff_bytes:
+>                 raise ValueError("diff exceeds configured size limit")
+>         elif diff is not None:
+>             raise ValueError("delete_file must not include a diff")
+> 
+>         root = Path(self.workspace_root).resolve()
+>         target = self._safe_target(root, relative_path)
+>         exists = target.exists()
+> 
+>         if operation_type == "create_file" and exists:
+>             raise FileExistsError(f"create_file target already exists: {relative_path}")
+>         if operation_type in {"update_file", "delete_file"} and not exists:
+>             raise FileNotFoundError(f"target does not exist: {relative_path}")
+>         if exists and target.is_symlink():
+>             raise ValueError("refusing to patch symlink targets")
+> 
+>         prior_text = None if not exists else target.read_text(encoding="utf-8")
+>         replacement = self.apply_v4a_diff(
+>             operation_type, relative_path, prior_text, diff
+>         )
+> 
+>         if operation_type == "delete_file":
+>             if replacement is not None:
+>                 raise ValueError("delete_file adapter must return None")
+>             target.unlink()
+>             output = f"Deleted {relative_path}"
+>         else:
+>             if not isinstance(replacement, str):
+>                 raise ValueError("V4A adapter must return replacement text")
+>             target.parent.mkdir(parents=True, exist_ok=True)
+>             self._atomic_write(target, replacement)
+>             output = f"{'Created' if not exists else 'Updated'} {relative_path}"
+> 
+>         return {
+>             "type": "apply_patch_call_output",
+>             "call_id": call_id,
+>             "status": "completed",
+>             "output": output,
+>             "operation": {
+>                 "type": operation_type,
+>                 "path": relative_path,
+>                 "sha256": None if replacement is None else self._sha256(replacement),
+>             },
+>         }
+> 
+>     @staticmethod
+>     def _safe_target(root: Path, relative_path: str) -> Path:
+>         candidate = (root / relative_path).resolve()
+>         if candidate ==
+**user**:
+> Please continue from where you left off.
+**assistant**:
+> ```python
+>             return candidate
+>         try:
+>             candidate.relative_to(root)
+>         except ValueError as exc:
+>             raise ValueError(
+>                 f"path escapes configured workspace: {relative_path!r}"
+>             ) from exc
+>         return candidate
+> 
+>     @staticmethod
+>     def _atomic_write(path: Path, text: str) -> None:
+>         """Write UTF-8 text atomically, preserving no prior file metadata."""
+>         temporary = path.with_name(f".{path.name}.apply-patch.tmp")
+>         try:
+>             with open(temporary, "w", encoding="utf-8", newline="") as handle:
+>                 handle.write(text)
+>                 handle.flush()
+>                 os.fsync(handle.fileno())
+>             os.replace(temporary, path)
+>         finally:
+>             if temporary.exists():
+>                 temporary.unlink(missing_ok=True)
+> 
+>     @staticmethod
+>     def _sha256(text: str) -> str:
+>         return hashlib.sha256(text.encode("utf-8")).hexdigest()
+> ```
+> 
+> A small correction to the preceding `_safe_target` implementation: it should reject an exact workspace-root target too, since that is a directory rather than a file. Use this full version:
+> 
+> ```python
+>     @staticmethod
+>     def _safe_target(root: Path, relative_path: str) -> Path:
+>         raw = Path(relative_path)
+> 
+>         if raw.is_absolute():
+>             raise ValueError("operation.path must be relative")
+>         if any(part in {"", ".", ".."} for part in raw.parts):
+>             raise ValueError("operation.path contains unsafe path components")
+> 
+>         candidate = (root / raw).resolve()
+> 
+>         try:
+>             candidate.relative_to(root)
+>         except ValueError as exc:
+>             raise ValueError(
+>                 f"path escapes configured workspace: {relative_path!r}"
+>             ) from exc
+> 
+>         if candidate == root:
+>             raise ValueError("operation.path must identify a file, not workspace root")
+> 
+>         return candidate
+> ```

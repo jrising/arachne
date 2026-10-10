@@ -1,0 +1,574 @@
+**user**:
+> I have a class to read NetCDFs into a data structure I have:
+> ```
+> #ifndef NETCDF_GEOGRAPHIC_MAP_H
+> #define NETCDF_GEOGRAPHIC_MAP_H
+> 
+> #include <netcdf.h>
+> #include <vector>
+> #include <stdexcept>
+> #include <algorithm>
+> #include <cmath>
+> #include <numeric>
+> #include <string>
+> #include <limits>
+> #include "GeographicMap.h"
+> 
+> namespace openworld {
+> 
+> class NetCDFGeographicMap : public MatrixGeographicMap<double> {
+>  public:
+>  NetCDFGeographicMap(DividedRange latitudes, DividedRange longitudes)
+>    : MatrixGeographicMap<double>(latitudes, longitudes) {
+>   }
+> 
+>   static DividedRange rangeFromCenters(const vector<double>& centers, Indicator indicator) {
+>     if (centers.size() < 2)
+>       throw runtime_error("Coordinate dimension needs at least two entries.");
+>     
+>     double width =
+>       (centers.back() - centers.front()) / (centers.size() - 1);
+>     
+>     double coordinateScale = std::max(std::abs(centers.front()), std::abs(centers.back()));
+> 
+>     // Coordinates may have been stored as NC_FLOAT, then read as doubles.
+>     double tolerance = std::max(1e-8,
+> 				4.0 * std::numeric_limits<float>::epsilon() *
+> 				std::max(1.0, coordinateScale));
+>     
+>     for (unsigned ii = 1; ii < centers.size(); ++ii) {
+>       double actualWidth = centers[ii] - centers[ii - 1];
+>       if (std::abs(actualWidth - width) > tolerance)
+> 	throw runtime_error("NetCDF coordinate values are not evenly spaced.");
+>     }
+> 
+>     return DividedRange::withEnds(centers.front(), centers.back(), width, indicator);
+>   }
+> 
+>   static double wrappedLongitude(double longitude) {
+>     double result = std::fmod(longitude + 180.0, 360.0);
+>     if (result < 0)
+>       result += 360.0;
+>     return result - 180.0;
+>   }
+>   
+>   static GeographicMap<double>* loadNetCDF(string filepath, string variableName,
+> 					   bool normalizeLongitudes = false) {
+>     int ncid, varid;
+>     int status = nc_open(filepath.c_str(), NC_NOWRITE, &ncid);
+>     if (status != NC_NOERR)
+>       throw runtime_error("Could not open NetCDF file: " + filepath +
+> 			  ": " + nc_strerror(status));
+>     
+>     status = nc_inq_varid(ncid, variableName.c_str(), &varid);
+>     if (status != NC_NOERR) {
+>       nc_close(ncid);
+>       throw runtime_error("Could not find NetCDF variable '" + variableName +
+> 			  "': " + nc_strerror(status));
+>     }
+>     
+>     nc_type type;
+>     int ndims, dimids[NC_MAX_VAR_DIMS], natts;
+>     status = nc_inq_var(ncid, varid, NULL, &type, &ndims, dimids, &natts);
+>     
+>     if (status != NC_NOERR || (ndims != 2 && ndims != 3)) {
+>       nc_close(ncid);
+>       throw runtime_error("NetCDF variable must have dimensions [lat, lon] or [time, lat, lon].");
+>     }
+> 
+>     size_t dimlens[NC_MAX_VAR_DIMS];
+>     for (int dd = 0; dd < ndims; ++dd) {
+>       status = nc_inq_dimlen(ncid, dimids[dd], &dimlens[dd]);
+>       if (status != NC_NOERR) {
+> 	nc_close(ncid);
+> 	throw runtime_error("Could not inspect NetCDF dimensions.");
+>       }
+>     }
+> 
+>     if (ndims == 3 && dimlens[0] != 1) {
+>       nc_close(ncid);
+>       throw runtime_error("NetCDF time dimension must have exactly one entry.");
+>     }
+> 
+>     int latDim = ndims == 2 ? 0 : 1;
+>     int lonDim = ndims == 2 ? 1 : 2;
+>     size_t rows = dimlens[latDim];
+>     size_t cols = dimlens[lonDim];
+>     
+>     char latName[NC_MAX_NAME + 1], lonName[NC_MAX_NAME + 1];
+>     nc_inq_dimname(ncid, dimids[latDim], latName);
+>     nc_inq_dimname(ncid, dimids[lonDim], lonName);
+> 
+>     int latVar, lonVar;
+>     if (nc_inq_varid(ncid, latName, &latVar) != NC_NOERR ||
+> 	nc_inq_varid(ncid, lonName, &lonVar) != NC_NOERR) {
+>       nc_close(ncid);
+>       throw runtime_error("Could not find latitude/longitude coordinate variables.");
+>     }
+> 
+>     vector<double> latValues(rows), lonValues(cols);
+>     status = nc_get_var_double(ncid, latVar, latValues.data());
+>     if (status == NC_NOERR)
+>       status = nc_get_var_double(ncid, lonVar, lonValues.data());
+> 
+>     if (status != NC_NOERR) {
+>       nc_close(ncid);
+>       throw runtime_error("Could not read coordinate variables: " +
+> 			  string(nc_strerror(status)));
+>     }
+> 
+>     DividedRange latitudes = rangeFromCenters(latValues, Inds::lat);
+> 
+>     std::vector<double> buffer(rows * cols);
+>     if (ndims == 2) {
+>       size_t start[] = {0, 0};
+>       size_t count[] = {rows, cols};
+>       status = nc_get_vara_double(ncid, varid, start, count, buffer.data());
+>     } else {
+>       size_t start[] = {0, 0, 0};
+>       size_t count[] = {1, rows, cols};
+>       status = nc_get_vara_double(ncid, varid, start, count, buffer.data());
+>     }
+> 
+>     nc_close(ncid);
+> 
+>     if (status != NC_NOERR)
+>       throw runtime_error("Could not read NetCDF variable: " +
+> 			  string(nc_strerror(status)));
+>     
+>     vector<unsigned> sourceColumn(cols);
+>     std::iota(sourceColumn.begin(), sourceColumn.end(), 0);
+> 
+>     if (normalizeLongitudes) {
+>       for (unsigned cc = 0; cc < cols; ++cc)
+> 	lonValues[cc] = wrappedLongitude(lonValues[cc]);
+>       
+>       std::sort(sourceColumn.begin(), sourceColumn.end(),
+> 		[&](unsigned aa, unsigned bb) {
+> 		  return lonValues[aa] < lonValues[bb];
+> 		});
+> 
+>       vector<double> sortedLongitudes(cols);
+>       for (unsigned cc = 0; cc < cols; ++cc)
+> 	sortedLongitudes[cc] = lonValues[sourceColumn[cc]];
+>       lonValues.swap(sortedLongitudes);
+>     }
+> 
+>     DividedRange longitudes = rangeFromCenters(lonValues, Inds::lon);
+> 
+>     NetCDFGeographicMap* result =
+>       new NetCDFGeographicMap(latitudes, longitudes);
+>     
+>     for (unsigned rr = 0; rr < rows; ++rr)
+>       for (unsigned cc = 0; cc < cols; ++cc)
+> 	result->values.get(rr, cc) = buffer[rr * cols + sourceColumn[cc]];
+>     
+>     return result;
+>   }
+> };
+> 
+> }
+> 
+> #endif
+> ```
+> 
+> But when I try to run loadNetCDF on my NetCDF file, I get a segfault:
+> [wifi-roaming-128-4-187-10:41751] *** Process received signal ***
+> [wifi-roaming-128-4-187-10:41751] Signal: Segmentation fault: 11 (11)
+> [wifi-roaming-128-4-187-10:41751] Signal code: Invalid permissions (2)
+> [wifi-roaming-128-4-187-10:41751] Failing at address: 0x733574000
+> [wifi-roaming-128-4-187-10:41751] [ 0] 0   libsystem_platform.dylib            0x000000018e005744 _sigtramp + 56
+> [wifi-roaming-128-4-187-10:41751] [ 1] 0   model                               0x0000000102d17de4 _ZN9openworld19NetCDFGeographicMap10loadNetCDFENSt3__112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES7_b + 2268
+> [wifi-roaming-128-4-187-10:41751] [ 2] 0   model                               0x0000000102d15b0c main + 1568
+> [wifi-roaming-128-4-187-10:41751] [ 3] 0   dyld                                0x000000018dc304e4 start + 6992
+> [wifi-roaming-128-4-187-10:41751] *** End of error message ***
+> zsh: segmentation fault  ./model
+**assistant**:
+> The most likely buffer overrun is here:
+> 
+> ```cpp
+> nc_get_var_double(ncid, latVar, latValues.data());
+> ```
+> 
+> You assume each coordinate variable is 1-D with exactly `rows` / `cols` entries. If the file has 2-D curvilinear `lat`/`lon` variables, `nc_get_var_double` writes `rows * cols` values into a vector of only `rows` (or `cols`) doubles, corrupting memory and producing a later segfault.
+> 
+> Validate coordinate-variable dimensions before reading them:
+> 
+> ```cpp
+> auto readCoordinate = [&](int coordVar, int expectedDim, size_t length,
+>                           const char* label) {
+>   nc_type coordType;
+>   int coordNdims, coordDimids[NC_MAX_VAR_DIMS], coordNatts;
+> 
+>   int s = nc_inq_var(ncid, coordVar, nullptr, &coordType, &coordNdims,
+>                      coordDimids, &coordNatts);
+>   if (s != NC_NOERR || coordNdims != 1 || coordDimids[0] != expectedDim)
+>     throw runtime_error(string("Expected a 1-D ") + label +
+>                         " coordinate variable matching its data dimension.");
+> 
+>   vector<double> result(length);
+>   s = nc_get_var_double(ncid, coordVar, result.data());
+>   if (s != NC_NOERR)
+>     throw runtime_error(string("Could not read ") + label +
+>                         " coordinates: " + nc_strerror(s));
+>   return result;
+> };
+> 
+> vector<double> latValues = readCoordinate(latVar, dimids[latDim], rows, "latitude");
+> vector<double> lonValues = readCoordinate(lonVar, dimids[lonDim], cols, "longitude");
+> ```
+> 
+> Also check every NetCDF call currently ignored, especially:
+> 
+> ```cpp
+> status = nc_inq_dimname(ncid, dimids[latDim], latName);
+> if (status != NC_NOERR) ...
+> 
+> status = nc_inq_dimname(ncid, dimids[lonDim], lonName);
+> if (status != NC_NOERR) ...
+> ```
+> 
+> To confirm, inspect the file:
+> 
+> ```bash
+> ncdump -h your-file.nc
+> ```
+> 
+> You want something like:
+> 
+> ```text
+> double latitude(latitude) ;
+> double longitude(longitude) ;
+> float variable(latitude, longitude) ;
+> ```
+> 
+> If instead it has:
+> 
+> ```text
+> double lat(y, x) ;
+> double lon(y, x) ;
+> ```
+> 
+> it is a curvilinear grid and cannot be represented by your `DividedRange`/rectangular-coordinate model without a different loader or regridding.
+> 
+> Compile once with AddressSanitizer for an exact offending line:
+> 
+> ```bash
+> clang++ -fsanitize=address -g ...
+> ```
+> 
+> That should turn the opaque segfault into a clear heap-buffer-overflow report.
+**user**:
+> I've isolated it to the following loop at the end of the loadNetCDF function:
+> ```
+>     for (unsigned rr = 0; rr < rows; ++rr)
+>       for (unsigned cc = 0; cc < cols; ++cc)
+> 	result->values.get(rr, cc) = buffer[rr * cols + sourceColumn[cc]];
+> ```
+**assistant**:
+> That loop is safe for `buffer` and `sourceColumn` provided their construction succeeded. The likely invalid access is the destination:
+> 
+> ```cpp
+> result->values.get(rr, cc)
+> ```
+> 
+> Most likely `rangeFromCenters()` constructs a `DividedRange` with **one fewer divisions than coordinate centers**. If `DividedRange::withEnds(start, end, width, ...)` interprets `start` and `end` as cell boundaries, then $N$ center coordinates span only $N-1$ widths.
+> 
+> For center coordinates, construct boundary ends instead:
+> 
+> ```cpp
+> return DividedRange::withEnds(
+>     centers.front() - width / 2.0,
+>     centers.back()  + width / 2.0,
+>     width,
+>     indicator);
+> ```
+> 
+> That makes a coordinate vector such as:
+> 
+> ```text
+> 0.5, 1.5, 2.5     // 3 centers
+> ```
+> 
+> map to bounds `[0, 3]` with width `1`, i.e. 3 cells—not `[0.5, 2.5]`, which contains only 2 intervals.
+> 
+> Immediately before the loop, verify the allocation dimensions against the NetCDF dimensions, using whatever dimension API `values` exposes:
+> 
+> ```cpp
+> assert(result->values.rows() == rows);
+> assert(result->values.cols() == cols);
+> assert(buffer.size() == rows * cols);
+> assert(sourceColumn.size() == cols);
+> ```
+> 
+> Also, temporarily split the indexing to identify precisely which side fails:
+> 
+> ```cpp
+> for (size_t rr = 0; rr < rows; ++rr) {
+>   for (size_t cc = 0; cc < cols; ++cc) {
+>     size_t source = sourceColumn.at(cc);
+>     double value = buffer.at(rr * cols + source);
+>     result->values.get(rr, cc) = value;
+>   }
+> }
+> ```
+> 
+> Use `size_t`, not `unsigned`, since NetCDF dimensions and vector indices are `size_t`.
+> 
+> If the asserts show a mismatch, the fix belongs in `rangeFromCenters` / `DividedRange` construction, not in the copy loop.
+**user**:
+> I think it is a problem with DividedRange, perhaps which only occurs when there are lots of entries. Here's DividedRange:
+> ```
+> /******************************************************************************\
+>  * DividedRange: An evenly spaced collection of points or boxes
+>  ******************************************************************************
+>  *
+> \******************************************************************************/
+> #ifndef DIVIDED_RANGE_H
+> #define DIVIDED_RANGE_H
+> 
+> #include <measure/Measure.h>
+> #include <measure/Units.h>
+> #include <measure/Quantity.h>
+> #include <cmath>
+> 
+> namespace openworld {
+>   class DividedRange {
+>   protected:
+>     double min;
+>     double max;
+>     double widths;
+>     Indicator indicator;
+> 
+>   public:
+>     DividedRange(Indicator indicator)
+>     : indicator(indicator) {
+>       this->min = this->max = this->widths = 0;
+>     }
+> 
+>     DividedRange(double min, double max, double widths, Indicator indicator)
+>       : indicator(indicator) {
+>       initialize(min, max, widths);
+>     }
+> 
+>     void initialize(double min, double max, double widths) {
+>       this->min = min;
+>       this->max = max;
+>       this->widths = widths;
+>     }
+> 
+>     Measure getMin() const {
+>       return Measure(min, indicator);
+>     }
+> 
+>     Measure getMax() const {
+>       return Measure(max, indicator);
+>     }
+> 
+>     double getMinOPT() const {
+>       return min;
+>     }
+> 
+>     double getMaxOPT() const {
+>       return max;
+>     }
+> 
+>     Quantity getWidths() const {
+>       return Quantity(widths, indicator.getUnit());
+>     }
+> 
+>     Indicator getIndicator() const {
+>       return indicator;
+>     }
+> 
+>     Measure getCellMin(unsigned ii) const {
+>       return Measure(min + ii * widths, indicator);
+>     }
+> 
+>     Measure getCellMax(unsigned ii) const {
+>       return Measure(min + (ii + 1) * widths, indicator);
+>     }
+> 
+>     Measure getCellCenter(unsigned ii) const {
+>       return Measure(min + (ii + .5) * widths, indicator);
+>     }
+> 
+>     friend ostream& operator<<(ostream& out, const DividedRange& xx) {
+>       out << "[" << xx.min << ":" << xx.widths << ":" << xx.max << " " << xx.indicator << "]";
+>       return out;
+>     }
+> 
+>     int inRange(double check) const {
+>       if ((widths > 0 && check >= min && check < max) || (widths < 0 && check <= min && check > max))
+>         return (int) ((check - min) / widths);
+>       return -1;
+>     }
+> 
+>     int inRange(Measure check) const {
+>       if (check.getIndicator() != indicator)
+>         throw runtime_error("Indicator does not match");
+> 
+>       return inRange(check.getValue());
+>     }
+> 
+>     unsigned count() const {
+>       return (int) ((max - min) / widths);
+>     }
+> 
+>     DividedRange intersect(DividedRange dr) {
+>       if (widths != dr.widths || indicator != dr.indicator)
+>         throw runtime_error("Intersection with differently sampled range");
+> 
+>       if (widths > 0)
+>         return DividedRange(min > dr.min ? min : dr.min, max > dr.max ? dr.max : max, widths, indicator);
+>       else
+>         return DividedRange(min < dr.min ? min : dr.min, max < dr.max ? dr.max : max, widths, indicator);
+>     }
+> 
+>     static long int toTime(int year, int month = 1, int day = 1, int hour = 0, int min = 0, int sec = 0) {
+>       if (year >= 1970) {
+>         struct tm time;
+>         time.tm_sec = sec;
+>         time.tm_min = min;
+>         time.tm_hour = hour;
+>         time.tm_mday = day;
+>         time.tm_mon = month - 1;
+>         time.tm_year = year - 1900;
+> 
+>         return (long int) mktime(&time);
+>       } else {
+>         return toTime(year + 20, month, day, hour, min, sec) - (365*20 + 5) * 24*60*60;
+>       }
+>     }
+> 
+>     static unsigned toReadableDate(long int time) {
+>       if (time < 0) {
+>         return toReadableDate(time + (365*20 + 5) * 24*60*60) - 200000;
+>       } else {
+>         time_t rawtime = (time_t) time;
+>         struct tm* timeinfo = localtime(&rawtime);
+>         return (timeinfo->tm_year + 1900) * 10000 + (timeinfo->tm_mon + 1) * 100 + timeinfo->tm_mday;
+>       }
+>     }
+> 
+>     static Quantity toTimespan(int day = 0, int hour = 0, int min = 0, int sec = 0) {
+>       return Quantity(((day * 24 + hour) * 60 + min) * 60 + sec, Units::s);
+>     }
+> 
+>     static DividedRange rounded(double minpt, double maxpt, double widths, Indicator indicator) {
+>       // check if we should add an extra point:
+>       if (std::abs((maxpt - minpt) / widths - (int) ((maxpt - minpt) / widths)) > .9)
+>         maxpt += widths / 10;
+> 
+>       return DividedRange(minpt, maxpt, widths, indicator);
+>     }
+> 
+>     static DividedRange withEnds(double minpt, double maxpt, double widths, Indicator indicator) {
+>       // check if we should add an extra point:
+>       if (std::abs((maxpt - minpt) / widths - (int) ((maxpt - minpt) / widths)) > .9)
+>         maxpt += widths / 10;
+>       return DividedRange(minpt - widths/2, maxpt + widths/2, widths, indicator);
+>     }
+> 
+>     static DividedRange withMax(double min, double maxpt, double widths, Indicator indicator) {
+>       // check if we should add an extra point:
+>       if (std::abs((maxpt - min) / widths - (int) ((maxpt - min) / widths)) > .9)
+>         maxpt += widths / 10;
+>       return DividedRange(min, maxpt + widths, widths, indicator);
+>     }
+> 
+>     // Operators
+> 
+>     bool operator==(const DividedRange& b) const {
+>       return (min == b.min && max == b.max && widths == b.widths && indicator == b.indicator);
+>     }
+> 
+>     bool operator!=(const DividedRange& b) const {
+>       return !(*this == b);
+>     }
+> 
+>     // Serialization
+> 
+>     virtual ostream& streamInsert(ostream& os) const {
+>       return indicator.streamInsert(os) << min << " " << max << " " << widths << " ";
+>     }
+> 
+>     static DividedRange streamExtract(istream& in) {
+>       Indicator indicator = Indicator::streamExtract(in);
+>       double min, max, widths;
+>       in >> min >> max >> widths;
+> 
+>       return DividedRange(min, max, widths, indicator);
+>     }
+> 
+>     template<class T> friend class GeographicMap;
+>     template<class T> friend class ScaledGeographicMap;
+>   };
+> }
+> 
+> #endif
+> ```
+> 
+> From ncdump, longitude looks like this:
+> longitude = 0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.2, 
+> ...
+>     359.6, 359.7, 359.8, 359.9 ;
+**assistant**:
+> Yes—this is very likely floating-point truncation in `DividedRange::count()`:
+> 
+> ```cpp
+> return (int) ((max - min) / widths);
+> ```
+> 
+> For your longitude grid, `withEnds` produces approximately:
+> 
+> ```text
+> min = -0.05
+> max = 359.95
+> width = 0.1
+> ```
+> 
+> Mathematically, `(max - min) / width == 3600`, but in binary floating point it may be `3599.9999999999995`. Casting to `int` truncates it to `3599`.
+> 
+> Then `MatrixGeographicMap` allocates 3599 columns, while the NetCDF loop writes 3600 columns, causing the segfault.
+> 
+> Replace `count()` with rounding rather than truncation:
+> 
+> ```cpp
+> unsigned count() const {
+>   double rawCount = (max - min) / widths;
+>   long long roundedCount = std::llround(rawCount);
+> 
+>   if (roundedCount < 0 ||
+>       std::abs(rawCount - roundedCount) > 1e-8 * std::max(1.0, std::abs(rawCount)))
+>     throw runtime_error("DividedRange does not contain an integral number of cells.");
+> 
+>   return static_cast<unsigned>(roundedCount);
+> }
+> ```
+> 
+> You will need:
+> 
+> ```cpp
+> #include <algorithm>
+> #include <stdexcept>
+> ```
+> 
+> Optionally, make the relevant variables `size_t` throughout the NetCDF loader:
+> 
+> ```cpp
+> for (size_t rr = 0; rr < rows; ++rr)
+>   for (size_t cc = 0; cc < cols; ++cc)
+>     result->values.get(rr, cc) =
+>       buffer[rr * cols + sourceColumn[cc]];
+> ```
+> 
+> A quick confirmation before constructing `result`:
+> 
+> ```cpp
+> std::cerr << "NetCDF: " << rows << " x " << cols << "\n";
+> std::cerr << "Ranges: " << latitudes.count()
+>           << " x " << longitudes.count() << "\n";
+> ```
+> 
+> I would also remove the “add an extra point” logic in `withEnds`; it attempts to patch this same numerical issue but does not reliably do so. Rounding in `count()` is the correct place to resolve a near-integer cell count.

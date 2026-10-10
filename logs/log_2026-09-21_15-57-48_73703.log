@@ -1,0 +1,245 @@
+**user**:
+> I have a c++ class:
+> ```
+>   template <class T>
+>   class GeographicMap : public AbstractGeographicMap, public AbstractData<T, GeographicMap<T>, GeographicMap<bool> > {
+>   protected:
+>     DividedRange latitudes;
+>     DividedRange longitudes;
+>     const AbstractGeographicMap* source;
+> ...
+> 
+>   template <class T>
+>   class MatrixGeographicMap : public GeographicMap<T> {
+>   protected:
+>     Matrix<T> values;
+> ...
+> ```
+> and it has some loaders:
+> ```
+>     void loadConstantInto(T value) {
+>       values.loadConstantInto(value);
+>     }
+> 
+>     static GeographicMap<T>* loadDelimited(DividedRange latitudes, DividedRange longitudes, string filepath, T (*parser)(string) = NULL, char delimiter = ',') {
+>       unsigned int rows, cols;
+>       list<T>* lst = Matrix<T>::loadDelimited(filepath, &rows, &cols, parser, delimiter);
+> 
+>       //cout << rows << ", " << cols << " vs. " << latitudes.count() << ", " << longitudes.count() << endl;
+> 
+>       MatrixGeographicMap<T>* result = new MatrixGeographicMap<T>(latitudes, longitudes);
+>       result->values.loadIteratorInto(lst->begin(), rows, cols);
+> 
+>       return result;
+>     }
+> 
+> #ifndef SKIP_TIFF
+>     static GeographicMap<T>* loadTIFF(DividedRange latitudes, DividedRange longitudes, string filepath) {
+>       TIFF* tiff = TIFFOpen(filepath.c_str(), "r");
+>       if (!tiff) {
+>         std::cerr << "Could not open the file: " << filepath << std::endl;
+>         return NULL;
+>       }
+> 
+>       uint32_t width, height;
+>       TIFFGetField(tiff, TIFFTAG_IMAGEWIDTH, &width);
+>       TIFFGetField(tiff, TIFFTAG_IMAGELENGTH, &height);
+> 
+>        // Needs to be exact because of how we index
+>       if (height != latitudes.count() || width != longitudes.count()) {
+>         cout << "Size Mismatch: " << height << ", " << width << " (file) vs. " << latitudes.count() << ", " << longitudes.count() << " (given)" << endl;
+> 	return NULL;
+>       }
+> 
+>       MatrixGeographicMap<T>* result = new MatrixGeographicMap<T>(latitudes, longitudes);
+>       for (uint32_t row = 0; row < height; row++) {
+>         if (TIFFReadScanline(tiff, result->values.getValues() + width, row) == -1) {
+> 	  std::cerr << "Could not read scanline " << row << std::endl;
+> 	  TIFFClose(tiff);
+> 	  return NULL;
+>         }
+>       }
+> 
+>       TIFFClose(tiff);
+>       return result;
+>     }
+> #endif
+> 
+>     static MatrixGeographicMap<T>* loadBinary(DividedRange latitudes, DividedRange longitudes, string filepath, unsigned datasize, T (*parser)(string) = NULL) {
+>       BinarySupplier<T>* supplier = new BinarySupplier<T>(filepath, datasize, parser);
+>       MatrixGeographicMap<T>* result = new MatrixGeographicMap<T>(latitudes, longitudes);
+> 
+>       // Check the size
+>       if (supplier->length() != result->getLatitudes().count() * result->getLongitudes().count())
+>         throw runtime_error("Size mismatch" + ToString::base10(supplier->length()) + " <> " + ToString::base10(result->getLatitudes().count()) + " x " + ToString::base10(result->getLongitudes().count()));
+> 
+>       for (unsigned rr = 0; rr < result->getValues().getRows(); rr++)
+>         for (unsigned cc = 0; cc < result->getValues().getCols(); cc++)
+>           result->getValues().get(rr, cc) = supplier->get();
+> 
+>       delete supplier;
+>       return result;
+>     }
+>   };
+> ```
+> 
+> I would like to add a new loader for NetCDF files. Can you offer me code?
+**assistant**:
+> Using the NetCDF C API, a strict 2-D loader (expecting the variable dimensions to be ordered `[latitude, longitude]`) could be:
+> 
+> ```cpp
+> #include <netcdf.h>
+> #include <vector>
+> #include <stdexcept>
+> 
+> static GeographicMap<T>* loadNetCDF(
+>     DividedRange latitudes, DividedRange longitudes,
+>     string filepath, string variableName) {
+> 
+>   int ncid, varid;
+>   int status = nc_open(filepath.c_str(), NC_NOWRITE, &ncid);
+>   if (status != NC_NOERR)
+>     throw runtime_error("Could not open NetCDF file: " + filepath +
+>                         ": " + nc_strerror(status));
+> 
+>   status = nc_inq_varid(ncid, variableName.c_str(), &varid);
+>   if (status != NC_NOERR) {
+>     nc_close(ncid);
+>     throw runtime_error("Could not find NetCDF variable '" + variableName +
+>                         "': " + nc_strerror(status));
+>   }
+> 
+>   nc_type type;
+>   int ndims, dimids[NC_MAX_VAR_DIMS], natts;
+>   status = nc_inq_var(ncid, varid, NULL, &type, &ndims, dimids, &natts);
+>   if (status != NC_NOERR || ndims != 2) {
+>     nc_close(ncid);
+>     throw runtime_error("NetCDF variable must have exactly two dimensions.");
+>   }
+> 
+>   size_t rows, cols;
+>   nc_inq_dimlen(ncid, dimids[0], &rows);
+>   nc_inq_dimlen(ncid, dimids[1], &cols);
+> 
+>   if (rows != latitudes.count() || cols != longitudes.count()) {
+>     nc_close(ncid);
+>     throw runtime_error(
+>       "NetCDF size mismatch: " + ToString::base10(rows) + " x " +
+>       ToString::base10(cols) + " vs. " +
+>       ToString::base10(latitudes.count()) + " x " +
+>       ToString::base10(longitudes.count()));
+>   }
+> 
+>   std::vector<double> buffer(rows * cols);
+>   size_t start[] = { 0, 0 };
+>   size_t count[] = { rows, cols };
+> 
+>   status = nc_get_vara_double(ncid, varid, start, count, buffer.data());
+>   nc_close(ncid);
+> 
+>   if (status != NC_NOERR)
+>     throw runtime_error("Could not read NetCDF variable: " +
+>                         string(nc_strerror(status)));
+> 
+>   MatrixGeographicMap<T>* result =
+>       new MatrixGeographicMap<T>(latitudes, longitudes);
+> 
+>   for (unsigned rr = 0; rr < rows; ++rr)
+>     for (unsigned cc = 0; cc < cols; ++cc)
+>       result->getValues().get(rr, cc) =
+>           static_cast<T>(buffer[rr * cols + cc]);
+> 
+>   return result;
+> }
+> ```
+> 
+> Compile/link with NetCDF, e.g.:
+> 
+> ```bash
+> g++ ... -lnetcdf
+> ```
+> 
+> This deliberately uses `nc_get_vara_double`, so NetCDF converts numeric storage types uniformly. It does not automatically apply CF metadata such as `scale_factor`, `add_offset`, `_FillValue`, or reverse latitude order; those should be handled explicitly if your files use them.
+> 
+> Unrelated: your TIFF loop likely needs `+ row * width`, not `+ width`:
+> 
+> ```cpp
+> TIFFReadScanline(tiff, result->values.getValues() + row * width, row)
+> ```
+**user**:
+> For the particular file I want to load, the variable of interest has dimensions time, latitude, longitude, but the time dimension only has 1 entry in it. Can you generalize to allow this too?
+**assistant**:
+> Yes—allow either `[latitude, longitude]` or `[time, latitude, longitude]`, requiring the time dimension to have length one. Replace the dimension-query/read portion with this:
+> 
+> ```cpp
+> nc_type type;
+> int ndims, dimids[NC_MAX_VAR_DIMS], natts;
+> status = nc_inq_var(ncid, varid, NULL, &type, &ndims, dimids, &natts);
+> 
+> if (status != NC_NOERR || (ndims != 2 && ndims != 3)) {
+>   nc_close(ncid);
+>   throw runtime_error(
+>       "NetCDF variable must have dimensions [lat, lon] or [time, lat, lon].");
+> }
+> 
+> size_t dimlens[NC_MAX_VAR_DIMS];
+> for (int dd = 0; dd < ndims; ++dd) {
+>   status = nc_inq_dimlen(ncid, dimids[dd], &dimlens[dd]);
+>   if (status != NC_NOERR) {
+>     nc_close(ncid);
+>     throw runtime_error("Could not inspect NetCDF dimensions.");
+>   }
+> }
+> 
+> size_t rows, cols;
+> if (ndims == 2) {
+>   rows = dimlens[0];
+>   cols = dimlens[1];
+> } else {
+>   if (dimlens[0] != 1) {
+>     nc_close(ncid);
+>     throw runtime_error(
+>         "NetCDF time dimension must have exactly one entry.");
+>   }
+> 
+>   rows = dimlens[1];
+>   cols = dimlens[2];
+> }
+> 
+> if (rows != latitudes.count() || cols != longitudes.count()) {
+>   nc_close(ncid);
+>   throw runtime_error(
+>       "NetCDF size mismatch: " + ToString::base10(rows) + " x " +
+>       ToString::base10(cols));
+> }
+> 
+> std::vector<double> buffer(rows * cols);
+> 
+> if (ndims == 2) {
+>   size_t start[] = {0, 0};
+>   size_t count[] = {rows, cols};
+>   status = nc_get_vara_double(ncid, varid, start, count, buffer.data());
+> } else {
+>   // Select time index 0 and read its complete lat/lon slice.
+>   size_t start[] = {0, 0, 0};
+>   size_t count[] = {1, rows, cols};
+>   status = nc_get_vara_double(ncid, varid, start, count, buffer.data());
+> }
+> 
+> nc_close(ncid);
+> 
+> if (status != NC_NOERR)
+>   throw runtime_error("Could not read NetCDF variable: " +
+>                       string(nc_strerror(status)));
+> ```
+> 
+> The subsequent population code remains unchanged:
+> 
+> ```cpp
+> for (unsigned rr = 0; rr < rows; ++rr)
+>   for (unsigned cc = 0; cc < cols; ++cc)
+>     result->getValues().get(rr, cc) =
+>         static_cast<T>(buffer[rr * cols + cc]);
+> ```
+> 
+> This assumes the 3-D variable is ordered exactly `[time, latitude, longitude]`.

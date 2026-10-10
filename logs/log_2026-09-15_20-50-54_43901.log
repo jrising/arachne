@@ -1,0 +1,169 @@
+**user**:
+> I'd like to provide a decent calculator tool (e.g., one that can handle parentheses and a range of math functions) to a system which could write any text as the input. So, it needs to be secure. The code is in python, but I was thinking of passing the material to `bc`. But I'm open to anything. How can I provide this functionality safely?
+**assistant**:
+> Do not pass arbitrary text to `eval`, `exec`, a shell, or directly to `bc`. Treat this as a small *expression language*, not Python code.
+> 
+> A good approach is: parse with Python’s `ast`, accept only a whitelist of numeric literals, operators, constants, and functions, and impose size/complexity limits.
+> 
+> ```python
+> import ast, math, operator
+> 
+> FUNCS = {
+>     "sin": math.sin, "cos": math.cos, "tan": math.tan,
+>     "sqrt": math.sqrt, "log": math.log, "log10": math.log10,
+>     "exp": math.exp, "abs": abs, "floor": math.floor, "ceil": math.ceil,
+>     "min": min, "max": max,
+> }
+> CONSTS = {"pi": math.pi, "e": math.e}
+> BINARY = {
+>     ast.Add: operator.add, ast.Sub: operator.sub,
+>     ast.Mult: operator.mul, ast.Div: operator.truediv,
+>     ast.Mod: operator.mod, ast.Pow: operator.pow,
+> }
+> UNARY = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+> 
+> def calculate(text: str) -> float:
+>     if len(text) > 1000:
+>         raise ValueError("Expression is too long.")
+> 
+>     tree = ast.parse(text, mode="eval")
+>     if sum(1 for _ in ast.walk(tree)) > 200:
+>         raise ValueError("Expression is too complex.")
+> 
+>     def visit(node, depth=0):
+>         if depth > 50:
+>             raise ValueError("Expression is nested too deeply.")
+> 
+>         if isinstance(node, ast.Constant):
+>             if type(node.value) not in (int, float):
+>                 raise ValueError("Only numeric literals are allowed.")
+>             value = float(node.value)
+> 
+>         elif isinstance(node, ast.Name):
+>             if node.id not in CONSTS:
+>                 raise ValueError(f"Unknown name: {node.id}")
+>             value = CONSTS[node.id]
+> 
+>         elif isinstance(node, ast.UnaryOp) and type(node.op) in UNARY:
+>             value = UNARY[type(node.op)](visit(node.operand, depth + 1))
+> 
+>         elif isinstance(node, ast.BinOp) and type(node.op) in BINARY:
+>             left, right = visit(node.left, depth + 1), visit(node.right, depth + 1)
+>             if isinstance(node.op, ast.Pow) and abs(right) > 1000:
+>                 raise ValueError("Exponent is too large.")
+>             value = BINARY[type(node.op)](left, right)
+> 
+>         elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+>               and node.func.id in FUNCS and not node.keywords):
+>             value = FUNCS[node.func.id](*(visit(a, depth + 1) for a in node.args))
+> 
+>         else:
+>             raise ValueError("Unsupported expression.")
+> 
+>         if not math.isfinite(value):
+>             raise ValueError("Result is not finite.")
+>         return value
+> 
+>     try:
+>         return visit(tree.body)
+>     except (ArithmeticError, ValueError, OverflowError) as e:
+>         raise ValueError(f"Invalid calculation: {e}") from None
+> ```
+> 
+> This supports inputs such as:
+> 
+> ```text
+> sqrt(16) + sin(pi / 2) * 3
+> max(2, 4, 1) ^ 2
+> ```
+> 
+> but rejects attributes, indexing, strings, assignments, imports, comprehensions, and arbitrary function calls.
+> 
+> `bc` can be workable only if run as a tightly sandboxed subprocess with input validation, CPU/time limits, memory limits, and no shell interpolation. The in-process whitelist above is simpler and usually safer.
+**user**:
+> This is helpful. I am setting this up as an example tool, and I would like to make two additions:
+> 1. A set of "context" constants-- like the current timestamp seconds. These would be passed in by the system that also passes the input to this tool. (So, not by the person using the tool).
+> 2. Some bit of configuration, consisting of a configuration parameter which can take a small number (2-3) discrete options.
+**assistant**:
+> Make both explicit, typed inputs to the tool—not text appended to the expression. Keep context values numeric and configuration an allowlisted enum.
+> 
+> ```python
+> from dataclasses import dataclass
+> from enum import Enum
+> import math
+> 
+> class CalculatorMode(str, Enum):
+>     BASIC = "basic"
+>     SCIENTIFIC = "scientific"
+>     PERMISSIVE = "permissive"
+> 
+> @dataclass(frozen=True)
+> class CalculatorConfig:
+>     mode: CalculatorMode = CalculatorMode.SCIENTIFIC
+>     max_expression_length: int = 1_000
+>     max_ast_nodes: int = 200
+>     max_depth: int = 50
+> 
+> def calculate(
+>     text: str,
+>     *,
+>     context: dict[str, int | float] | None = None,
+>     config: CalculatorConfig = CalculatorConfig(),
+> ) -> float:
+>     context = context or {}
+> 
+>     # Context is system-provided, but still validate it defensively.
+>     for name, value in context.items():
+>         if not name.isidentifier() or name.startswith("_"):
+>             raise ValueError(f"Invalid context name: {name!r}")
+>         if type(value) not in (int, float) or not math.isfinite(value):
+>             raise ValueError(f"Invalid context value for {name!r}")
+> 
+>     constants = {
+>         "pi": math.pi,
+>         "e": math.e,
+>         **context,
+>     }
+> 
+>     funcs = {
+>         "abs": abs,
+>         "min": min,
+>         "max": max,
+>         "floor": math.floor,
+>         "ceil": math.ceil,
+>     }
+>     if config.mode in (CalculatorMode.SCIENTIFIC, CalculatorMode.PERMISSIVE):
+>         funcs |= {
+>             "sqrt": math.sqrt, "sin": math.sin, "cos": math.cos,
+>             "tan": math.tan, "log": math.log, "log10": math.log10,
+>             "exp": math.exp,
+>         }
+> 
+>     # Use `constants`, `funcs`, and config limits in the AST evaluator
+>     # from the previous example.
+>     return safe_ast_evaluate(
+>         text,
+>         constants=constants,
+>         functions=funcs,
+>         max_length=config.max_expression_length,
+>         max_nodes=config.max_ast_nodes,
+>         max_depth=config.max_depth,
+>     )
+> ```
+> 
+> For example, the calling system supplies context:
+> 
+> ```python
+> calculate(
+>     "current_timestamp_s - account_created_timestamp_s",
+>     context={
+>         "current_timestamp_s": 1_789_000_123,
+>         "account_created_timestamp_s": 1_700_000_000,
+>     },
+>     config=CalculatorConfig(mode=CalculatorMode.BASIC),
+> )
+> ```
+> 
+> The expression author can reference those names but cannot create or override them.
+> 
+> I would make configuration control *policy*—available functions and resource limits—not accept arbitrary user-supplied settings. Also, Python exponentiation is `**`, not `^` (`^` is bitwise XOR and should remain disallowed).

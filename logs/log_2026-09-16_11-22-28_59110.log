@@ -1,0 +1,124 @@
+**user**:
+> I have a bunch of dplyr lines of this form:
+> mutate(totimpact=stats::filter(c(rep(0, 30), dimpact), (1 - persist)^(0:30), sides=1)[-1:-30])
+> mutate(hyy.TT=stats::filter(c(rep(0, 30), eyy.TT), (1 - 0.6)^(0:30), sides=1)[-1:-30])
+> mutate(mu=stats::filter(c(rep(0, 30), mu), (1 - as.numeric(persist))^(0:30), sides=1)[-1:-30])
+> 
+> I want to generalize this, so I can just have a function that takes, say, the variable name and the persist level and does the calculation. How do I write this function?
+**assistant**:
+> Define the calculation as a vector function, then use it inside `mutate()`:
+> 
+> ```r
+> persistent_sum <- function(x, persist, lag = 30L) {
+>   stopifnot(length(persist) == 1L)
+> 
+>   as.numeric(
+>     stats::filter(
+>       c(rep(0, lag), x),
+>       filter = (1 - persist)^(0:lag),
+>       sides = 1
+>     )
+>   )[-seq_len(lag)]
+> }
+> ```
+> 
+> Then your code becomes:
+> 
+> ```r
+> df %>%
+>   mutate(
+>     totimpact = persistent_sum(dimpact, persist),
+>     hyy.TT   = persistent_sum(eyy.TT, 0.6),
+>     mu       = persistent_sum(mu, as.numeric(persist))
+>   )
+> ```
+> 
+> This also works naturally after `group_by()`, provided `persist` has one value per group:
+> 
+> ```r
+> df %>%
+>   group_by(region) %>%
+>   mutate(totimpact = persistent_sum(dimpact, first(persist))) %>%
+>   ungroup()
+> ```
+> 
+> If you want to supply the input/output column names as strings:
+> 
+> ```r
+> add_persistent <- function(data, output, input, persist, lag = 30L) {
+>   data %>%
+>     mutate("{output}" := persistent_sum(.data[[input]], persist, lag))
+> }
+> 
+> df <- add_persistent(df, "totimpact", "dimpact", persist = 0.08)
+> ```
+> 
+> The vector-function approach is usually the cleanest, since it composes directly with `mutate()` and `across()`.
+**user**:
+> By the way-- as a preference, I don't like trailing parentheses in R code, and I prefer fewer lines (not one line per argument).
+**assistant**:
+> Got it—I’ll keep closing parentheses on the preceding line and use compact argument layouts.
+> 
+> ```r
+> persistent_sum <- function(x, persist, lag = 30L) {
+>   as.numeric(stats::filter(c(rep(0, lag), x), (1 - persist)^(0:lag), sides = 1))[-seq_len(lag)]
+> }
+> 
+> df %>% mutate(
+>   totimpact = persistent_sum(dimpact, persist),
+>   hyy.TT = persistent_sum(eyy.TT, 0.6),
+>   mu = persistent_sum(mu, as.numeric(persist))
+> )
+> ```
+> 
+> If you want a helper that takes column names as strings:
+> 
+> ```r
+> add_persistent <- function(data, output, input, persist, lag = 30L) {
+>   data %>% mutate("{output}" := persistent_sum(.data[[input]], persist, lag))
+> }
+> 
+> df <- add_persistent(df, "totimpact", "dimpact", persist)
+> ```
+**user**:
+> Plus, I don't like spaces around the equal sign in default arguments. Seems pedantic to me.
+**assistant**:
+> Noted. I’ll use compact R defaults such as `lag=30L`, while retaining spaces around assignment in ordinary expressions where useful.
+> 
+> ```r
+> persistent_sum <- function(x, persist, lag=30L) {
+>   as.numeric(stats::filter(c(rep(0, lag), x), (1 - persist)^(0:lag), sides=1))[-seq_len(lag)]
+> }
+> ```
+**user**:
+> Why would I need as.numeric?
+**assistant**:
+> You don’t strictly need it for the calculation. I included it only to strip the `"ts"` class/`tsp` attributes that `stats::filter()` may attach, ensuring `mutate()` receives an ordinary numeric vector.
+> 
+> Your original form is fine:
+> 
+> ```r
+> persistent_sum <- function(x, persist, lag=30L) {
+>   stats::filter(c(rep(0, lag), x), (1 - persist)^(0:lag), sides=1)[-seq_len(lag)]
+> }
+> ```
+> 
+> Use `as.numeric(...)` only if the time-series attributes cause problems downstream.
+> 
+> Separately, `as.numeric(persist)` is appropriate only if `persist` is character numeric data. If it is a factor, it converts to underlying integer codes—not the displayed values—so prefer:
+> 
+> ```r
+> as.numeric(as.character(persist))
+> ```
+> 
+> or, ideally, make `persist` numeric when reading/creating the data.
+**user**:
+> Oh, and while we're at it, my preference for R is to use "." in the middle of function/variable names, not _.
+**assistant**:
+> Noted. I’ll use R-style dot-separated names, e.g.:
+> 
+> ```r
+> persistent.sum <- function(x, persist, lag=30L) {
+>   stats::filter(c(rep(0, lag), x), (1 - persist)^(0:lag), sides=1)[-seq_len(lag)]
+> }
+> ```

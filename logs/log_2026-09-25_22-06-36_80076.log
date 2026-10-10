@@ -1,0 +1,34 @@
+**user**:
+> I know I can turn a continuous vector in R into a number of discrete bins by calling cut and then table (not sure that that's the best way), but if any of the values aren't represented, I don't know how to then get out an ordered set of values. If I use levels from the cut, it will miss those missing bins, right?
+**assistant**:
+> `cut()` returns a **factor whose levels include all defined bins**, even bins with zero observations. So `levels()` will not omit empty bins—unless you subsequently call `droplevels()` or otherwise coerce/rebuild the factor.
+> 
+> ```r
+> x <- c(1, 2, 8, 9)
+> 
+> breaks <- seq(0, 10, by = 2)
+> bins <- cut(x, breaks = breaks, include.lowest = TRUE)
+> 
+> levels(bins)
+> # "[0,2]" "(2,4]" "(4,6]" "(6,8]" "(8,10]"
+> 
+> table(bins)
+> # bins
+> #  [0,2]  (2,4]  (4,6]  (6,8] (8,10]
+> #      2      0      0      1      1
+> ```
+> 
+> The key is to specify the breaks yourself, rather than e.g. `breaks = 5`, if you need consistent bins across datasets:
+> 
+> ```r
+> bins <- cut(x, breaks = c(0, 2, 4, 6, 8, 10),
+>             include.lowest = TRUE)
+> ```
+> 
+> For `dplyr`, preserve empty factor levels with:
+> 
+> ```r
+> df |> dplyr::count(bins, .drop = FALSE)
+> ```
+> 
+> `table()` likewise retains unused factor levels by default.

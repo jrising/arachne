@@ -1,0 +1,49 @@
+**user**:
+> I have a library in python I've written to abstract away from AI chat systems. It provides a function `chat_response(messages, max_tokens=None, model='gpt-5.4-nano')` which I can use to get a response from an AI. `messages` is of the form [{"role": "system", "content": system_message}, {"role": "user", "content": prompt}, ...]. The function is in the file "chatwrap/openaigpt.py".
+> 
+> Now I'd like to write some code in Julia that uses that system, setting up an initial set of messages (just a system and user message), then taking the response, adding it on as role: assistant message, and then another prompt after that. Can you provide code that does this?
+**assistant**:
+> ```julia
+> using PyCall
+> 
+> # If chatwrap is not installed in the Python environment used by PyCall:
+> # pyimport("sys").path.insert(0, "/path/to/your/python/project")
+> 
+> openaigpt = pyimport("chatwrap.openaigpt")
+> 
+> messages = [
+>     Dict("role" => "system",
+>          "content" => "You are a concise and helpful research assistant."),
+>     Dict("role" => "user",
+>          "content" => "What is the main purpose of a carbon tax?")
+> ]
+> 
+> # First turn
+> response1 = openaigpt.chat_response(
+>     messages;
+>     model = "gpt-5.4-nano",
+>     max_tokens = 300
+> )
+> 
+> println("Assistant: ", response1)
+> 
+> # Preserve the assistant response in the conversation history
+> push!(messages, Dict("role" => "assistant", "content" => String(response1)))
+> 
+> # Add the next user turn
+> push!(messages, Dict(
+>     "role" => "user",
+>     "content" => "Give one important limitation or political challenge."
+> ))
+> 
+> # Second turn, with full prior context
+> response2 = openaigpt.chat_response(
+>     messages;
+>     model = "gpt-5.4-nano",
+>     max_tokens = 300
+> )
+> 
+> println("Assistant: ", response2)
+> ```
+> 
+> Make sure `PyCall` is configured to use the same Python environment where `chatwrap` and its dependencies are available.

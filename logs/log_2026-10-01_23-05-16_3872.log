@@ -1,0 +1,338 @@
+**user**:
+> I have started a plan to build an abstraction around model and tool selection in my AI system. Here is the contract for tools:
+> """
+> Tool protocol and normalized typed tool-result contract.
+> 
+> Tools are executable capabilities. In the initial synchronous system they may
+> be invoked directly by a responder. In the workflow system they are executed
+> as Operations and yield Artifacts. Tool interfaces should therefore avoid
+> assuming that their primary result is user-visible text.
+> 
+> Expected tool callable shape:
+> 
+> ToolCallable = Callable[
+>     [ToolInvocation],
+>     ToolResult,
+> ]
+> 
+> @dataclass(frozen=True)
+> class ToolInvocation:
+>     operation_id: str | None
+>     conversation_id: str
+>     arguments: Mapping[str, Any]
+>     config: Mapping[str, Any]
+>     context: PlannerContext | None
+>     provenance_requirements: Mapping[str, Any]
+> 
+> @dataclass
+> class Tool:
+>     name: str
+>     description: str
+>     fn: ToolCallable | Callable[..., Any]
+>     config: ToolConfig
+>     quality_prior: float | None = None
+>     cost_estimate: float | None = None
+>     version: str = "1"
+> 
+> Compatibility:
+> - registry.py may accept legacy functions such as
+>   `fn(prompt, config) -> str`.
+> - tools/base.py normalizes such outputs to ToolResult/Artifact.
+> - Tool configuration defaults and allowed discrete options are validated here.
+> 
+> Caller:
+> - responders.py or workflow/workers.py invokes:
+>       result = tool.fn(invocation)
+> - the caller persists raw temporary output as appropriate, converts relevant
+>   materials to artifacts/source excerpts, and never blindly injects untrusted
+>   tool text into system instructions.
+> """
+> 
+> Now, here is the documentation for a tool available through OpenAI:
+> ## Code interpreter
+> 
+> `code_interpreter` runs Python in a sandboxed container that can read your files and write new ones (plots, CSVs), cited back as `container_file_citation` annotations. The model knows it as "the python tool".
+> 
+> ```python
+> resp = client.responses.create(
+>     model="gpt-6-astra",
+>     tools=[{
+>         "type": "code_interpreter",
+>         "container": {"type": "auto", "memory_limit": "4g",
+>                       "file_ids": ["file-abc"]},
+>     }],
+>     input="Use the python tool to fit a log-linear trend to the attached CSV.",
+> )
+> ```
+> 
+> | Option | Values / range | Notes |
+> | --- | --- | --- |
+> | `container` | `{"type": "auto", ...}` or a container ID string (`"cntr_..."`) | Auto creates or reuses one; an ID uses one made via `/v1/containers` |
+> | `container.memory_limit` | `1g`, `4g`, `16g`, `64g` | Default `1g`; higher tiers cost more and apply for the container's life |
+> | `container.file_ids` | list of file IDs | Files placed in the container; files in the input are uploaded automatically |
+> 
+> Containers expire after 20 minutes idle and their data is discarded, so download outputs promptly via the container files API. Rate limit is 100 requests per minute per organisation.
+> 
+> Can you construct a full tool implementation for this? Please start off the file with a docstring, describing the tool and its usage
+**assistant**:
+> ```python
+> """
+> OpenAI Responses API Code Interpreter tool.
+> 
+> This tool asks an OpenAI model to use the `code_interpreter` capability: a
+> sandboxed Python container that can analyse attached files and create outputs
+> such as plots, CSVs, and notebooks.
+> 
+> Usage:
+>     client = OpenAI()
+>     tool = make_openai_code_interpreter_tool(client)
+> 
+>     result = tool.fn(ToolInvocation(
+>         operation_id="op_123",
+>         conversation_id="conv_123",
+>         arguments={
+>             "input": "Fit a log-linear trend to the attached CSV and save a plot."
+>         },
+>         config={
+>             "container": {
+>                 "type": "auto",
+>                 "memory_limit": "4g",
+>                 "file_ids": ["file-abc"],
+>             }
+>         },
+>         context=None,
+>         provenance_requirements={},
+>     ))
+> 
+> Returned text, execution traces, and file citations are untrusted tool output.
+> Generated files are represented as structured `container_file_citation`
+> artifacts; download them promptly because containers expire after idle periods.
+> """
+> 
+> from __future__ import annotations
+> 
+> from dataclasses import asdict, is_dataclass
+> from datetime import datetime, timezone
+> from typing import Any, Mapping, Sequence
+> import re
+> import time
+> 
+> from openai import OpenAI
+> 
+> # Replace with imports from your shared tool-contract module.
+> from your_project.tools.contracts import Artifact, Tool, ToolInvocation, ToolResult
+> 
+> 
+> _MEMORY_LIMITS = frozenset({"1g", "4g", "16g", "64g"})
+> _CONTAINER_ID_RE = re.compile(r"^cntr_[A-Za-z0-9_-]+$")
+> 
+> 
+> def _jsonable(value: Any) -> Any:
+>     """Convert SDK/dataclass objects into persistable JSON-like values."""
+>     if hasattr(value, "model_dump"):
+>         return value.model_dump(mode="json")
+>     if is_dataclass(value):
+>         return asdict(value)
+>     if isinstance(value, Mapping):
+>         return {str(k): _jsonable(v) for k, v in value.items()}
+>     if isinstance(value, (list, tuple)):
+>         return [_jsonable(v) for v in value]
+>     return value
+> 
+> 
+> def _find_by_type(value: Any, target_type: str) -> list[dict[str, Any]]:
+>     """Find typed OpenAI response objects without trusting a fixed response shape."""
+>     found: list[dict[str, Any]] = []
+> 
+>     if isinstance(value, Mapping):
+>         if value.get("type") == target_type:
+>             found.append(dict(value))
+>         for child in value.values():
+>             found.extend(_find_by_type(child, target_type))
+>     elif isinstance(value, list):
+>         for child in value:
+>             found.extend(_find_by_type(child, target_type))
+> 
+>     return found
+> 
+> 
+> def _parse_container(config: Mapping[str, Any]) -> dict[str, Any] | str:
+>     raw = config.get("container", {"type": "auto", "memory_limit": "1g"})
+> 
+>     if isinstance(raw, str):
+>         if not _CONTAINER_ID_RE.fullmatch(raw):
+>             raise ValueError("container string must be a container ID such as 'cntr_...'")
+>         return raw
+> 
+>     if not isinstance(raw, Mapping):
+>         raise ValueError("container must be a mapping or a container ID string")
+> 
+>     unknown = set(raw) - {"type", "memory_limit", "file_ids"}
+>     if unknown:
+>         raise ValueError(f"Unsupported container configuration keys: {sorted(unknown)}")
+> 
+>     container_type = raw.get("type", "auto")
+>     if container_type != "auto":
+>         raise ValueError("container.type must be 'auto'; use a container ID string otherwise")
+> 
+>     memory_limit = raw.get("memory_limit", "1g")
+>     if memory_limit not in _MEMORY_LIMITS:
+>         raise ValueError(
+>             f"container.memory_limit must be one of {sorted(_MEMORY_LIMITS)}"
+>         )
+> 
+>     file_ids = raw.get("file_ids", [])
+>     if (
+>         not isinstance(file_ids, Sequence)
+>         or isinstance(file_ids, (str, bytes))
+>         or not all(isinstance(file_id, str) and file_id for file_id in file_ids)
+>     ):
+>         raise ValueError("container.file_ids must be a list of non-empty file ID strings")
+> 
+>     return {
+>         "type": "auto",
+>         "memory_limit": memory_limit,
+>         "file_ids": list(file_ids),
+>     }
+> 
+> 
+> def make_openai_code_interpreter_tool(
+>     client: OpenAI,
+>     *,
+>     default_model: str = "gpt-6-astra",
+> ) -> Tool:
+>     """Create a contract-conforming OpenAI Code Interpreter tool."""
+> 
+>     def run(invocation: ToolInvocation) -> ToolResult:
+>         started = time.monotonic()
+> 
+>         try:
+>             prompt = invocation.arguments.get("input")
+>             if not isinstance(prompt, str) or not prompt.strip():
+>                 raise ValueError("arguments.input must be a non-empty string")
+> 
+>             unknown_config = set(invocation.config) - {"model", "container"}
+>             if unknown_config:
+>                 raise ValueError(f"Unsupported configuration keys: {sorted(unknown_config)}")
+> 
+>             model = invocation.config.get("model", default_model)
+>             if not isinstance(model, str) or not model:
+>                 raise ValueError("config.model must be a non-empty string")
+> 
+>             container = _parse_container(invocation.config)
+> 
+>         except ValueError as exc:
+>             return ToolResult(
+>                 status="error",
+>                 error=str(exc),
+>                 execution_info={"operation_id": invocation.operation_id},
+>             )
+> 
+>         try:
+>             response = client.responses.create(
+>                 model=model,
+>                 input=prompt,
+>                 tools=[{"type": "code_interpreter", "container": container}],
+>             )
+>             raw = _jsonable(response)
+> 
+>             if raw.get("status") == "failed":
+>                 return ToolResult(
+>                     status="error",
+>                     raw_output=raw,
+>                     error=str(raw.get("error", {}).get("message", "OpenAI execution failed")),
+>                     execution_info={"operation_id": invocation.operation_id, "model": model},
+>                 )
+> 
+>             artifacts: list[Artifact] = []
+>             text = getattr(response, "output_text", None)
+>             if text:
+>                 artifacts.append(
+>                     Artifact(
+>                         type="tool_response_text",
+>                         content=text,
+>                         mime_type="text/plain",
+>                         description="Untrusted model summary of Code Interpreter work.",
+>                         metadata={"untrusted": True},
+>                     )
+>                 )
+> 
+>             seen_files: set[tuple[str | None, str | None]] = set()
+>             for citation in _find_by_type(raw, "container_file_citation"):
+>                 file_id = citation.get("file_id")
+>                 container_id = citation.get("container_id")
+>                 key = (container_id, file_id)
+>                 if not file_id or key in seen_files:
+>                     continue
+>                 seen_files.add(key)
+> 
+>                 source_uri = (
+>                     f"openai-container://{container_id}/files/{file_id}"
+>                     if container_id
+>                     else f"openai-file://{file_id}"
+>                 )
+>                 artifacts.append(
+>                     Artifact(
+>                         type="container_file_citation",
+>                         content=citation,
+>                         mime_type="application/json",
+>                         description=f"Generated file: {citation.get('filename', file_id)}",
+>                         source_uri=source_uri,
+>                         metadata={
+>                             "file_id": file_id,
+>                             "container_id": container_id,
+>                             "filename": citation.get("filename"),
+>                             "untrusted": True,
+>                         },
+>                     )
+>                 )
+> 
+>             for call in _find_by_type(raw, "code_interpreter_call"):
+>                 artifacts.append(
+>                     Artifact(
+>                         type="code_interpreter_trace",
+>                         content=call,
+>                         mime_type="application/json",
+>                         description="Untrusted Code Interpreter execution trace.",
+>                         metadata={"untrusted": True},
+>                     )
+>                 )
+> 
+>             return ToolResult(
+>                 status="success" if artifacts else "partial_success",
+>                 artifacts=artifacts,
+>                 raw_output=raw,
+>                 error=None if artifacts else "The request completed without extractable output.",
+>                 execution_info={
+>                     "operation_id": invocation.operation_id,
+>                     "conversation_id": invocation.conversation_id,
+>                     "model": model,
+>                     "duration_ms": round((time.monotonic() - started) * 1000),
+>                     "completed_at": datetime.now(timezone.utc).isoformat(),
+>                 },
+>             )
+> 
+>         except Exception as exc:
+>             return ToolResult(
+>                 status="error",
+>                 error=f"OpenAI Code Interpreter request failed: {exc}",
+>                 execution_info={
+>                     "operation_id": invocation.operation_id,
+>                     "model": model,
+>                     "duration_ms": round((time.monotonic() - started) * 1000),
+>                 },
+>             )
+> 
+>     return Tool(
+>         name="code_interpreter",
+>         description="Uses OpenAI's sandboxed Python environment to analyse files and generate artifacts.",
+>         fn=run,
+>         config={
+>             "model": default_model,
+>             "container": {"type": "auto", "memory_limit": "1g", "file_ids": []},
+>         },
+>         quality_prior=0.85,
+>         cost_estimate=None,
+>         version="1.0.0",
+>     )
+> ```

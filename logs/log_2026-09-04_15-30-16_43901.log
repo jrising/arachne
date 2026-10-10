@@ -1,0 +1,902 @@
+**user**:
+> I have this system meant to allow a kind of genetic algorithm improvement of stock prediction algorithms. Here's the code:
+> ```
+> module PoolPredict
+> using Dates, TOML, Serialization, Random, Statistics, UUIDs, Printf
+> 
+> include("pool_api.jl")
+> 
+> const ROOT = joinpath(@__DIR__, "modelpool")
+> const MODELS = joinpath(ROOT, "models")
+> const PREDS = joinpath(ROOT, "predictions")
+> const STATE = joinpath(ROOT, "state.toml")
+> const API   = abspath(joinpath(@__DIR__, "pool_api.jl"))
+> 
+> function initpool()
+>     mkpath.( (ROOT, MODELS, PREDS) )
+>     if !isfile(STATE)
+>         open(STATE, "w") do io
+>             TOML.print(io, Dict(
+>                 "validated_limit" => 10,
+>                 "candidate_limit" => 5,
+>                 "min_candidate_events" => 20,
+>                 "sigma_floor" => 0.01,
+>                 "recency_days" => 365.25,
+>                 "temperature" => 0.35,
+>                 "models" => Any[]
+>             ))
+>         end
+>     end
+> end
+> 
+> state() = (initpool(); TOML.parsefile(STATE))
+> function savestate(s)
+>     open(STATE, "w") do io; TOML.print(io, s); end
+> end
+> 
+> models(s=state()) = get(s, "models", Any[])
+> 
+> function logscore(draws, low, high; sigma_floor=0.01)
+>     x = log.(filter(z -> isfinite(z) && z > 0, Float64.(draws)))
+>     length(x) < 2 && return nothing
+>     (!isfinite(low) || !isfinite(high) || low <= 0 || high <= 0) && return nothing
+> 
+>     μ, σ = mean(x), max(std(x), sigma_floor)
+>     a, b = log(min(low, high)), log(max(low, high))
+>     p = 0.5 * (erf((b - μ) / (σ * sqrt(2))) -
+>                erf((a - μ) / (σ * sqrt(2))))
+>     return log(max(p, 1e-12))
+> end
+> 
+> # Child contract:
+> #   algorithm_predict(nday::Int, context)::Dict{String,Vector{Float64}}
+> #
+> # Each vector must contain exactly five positive finite price draws.
+> function runmodel(m, nday; timeout=60)
+>     out = tempname()
+>     logfile = joinpath(ROOT, "logs", "$(m["id"])-$(Dates.format(now(), "yyyymmdd-HHMMSS")).log")
+>     mkpath(dirname(logfile))
+> 
+>     contextpath = "pool/modelpool/context/context-current.bin"
+> 
+>     project = Base.active_project()
+>     cmd = `$(Base.julia_cmd()) --startup-file=no --project=$project \
+>       pool/_runner.jl $(m["path"]) $nday $contextpath $out`
+> 
+>     open(logfile, "w") do io
+>         p = run(pipeline(cmd, stdout=io, stderr=io); wait=false)
+> 
+>         if timedwait(() -> process_exited(p), timeout) == :timed_out
+>             kill(p)
+>             wait(p)
+>             return nothing, "timeout; see $logfile"
+>         end
+> 
+>         if !success(p)
+>             return nothing, "exit $(p.exitcode); see $logfile"
+>         end
+>     end
+> 
+>     isfile(out) || return nothing, "no output; see $logfile"
+> 
+>     try
+>         return deserialize(out), nothing
+>     catch e
+>         return nothing, "output deserialize failure: $(sprint(showerror, e)); see $logfile"
+>     finally
+>         rm(out; force=true)
+>     end
+> end
+> 
+> function snapshots()
+>     initpool()
+>     files = filter(f -> endswith(f, ".bin"), readdir(PREDS; join=true))
+>     return [deserialize(f) for f in files]
+> end
+> 
+> function resolved_events()
+>     ev = NamedTuple[]
+>     for snap in snapshots()
+>         target = Date(snap["target"])
+>         age = max(0, Dates.value(today() - Date(snap["date"])))
+>         for (id, pred) in snap["individual"]
+>             for (ticker, draws) in pred
+>                 actual = actual_interval(ticker, target)
+>                 actual === nothing && continue
+>                 push!(ev, (
+>                     id=id, score=logscore(draws, actual[1], actual[2];
+>                                           sigma_floor=snap["sigma_floor"]),
+>                     age=age
+>                 ))
+>             end
+>         end
+>     end
+>     return filter(x -> x.score !== nothing, ev)
+> end
+> 
+> function scoretable(s=state())
+>     ev = resolved_events()
+>     ids = [m["id"] for m in models(s)]
+>     isempty(ev) && return Dict(id => (skill=-10.0, n=0.0) for id in ids)
+> 
+>     λ = s["recency_days"]
+>     raw = Dict{String,Tuple{Float64,Float64}}()
+>     for id in ids
+>         mine = filter(x -> x.id == id, ev)
+>         w = [exp(-x.age / λ) for x in mine]
+>         raw[id] = isempty(w) ? (0.0, 0.0) :
+>                   (sum(w .* [x.score for x in mine]), sum(w))
+>     end
+> 
+>     # Empirical prior: protects new candidates from tiny-sample luck.
+>     allmean = mean(x.score for x in ev)
+>     priorweight = 10.0
+>     return Dict(id => begin
+>         total, n = raw[id]
+>         (skill=(total + priorweight * allmean) / (n + priorweight), n=n)
+>     end for id in ids)
+> end
+> 
+> function weights(ms, scores, temperature)
+>     z = [scores[m["id"]].skill for m in ms]
+>     isempty(z) && return Float64[]
+>     q = exp.((z .- maximum(z)) ./ temperature)
+>     q .+= 0.02                         # persistent exploration
+>     return q ./ sum(q)
+> end
+> 
+> """
+> Run all validated and candidate models; store all outputs; return five pooled draws.
+> Only validated models contribute to the returned pooled distribution.
+> """
+> function poolprice(nday::Int)
+>     s = state()
+>     ms = filter(m -> m["status"] != "archived", models(s))
+>     individual = Dict{String,Dict{String,Vector{Float64}}}()
+>     errors = Dict{String,String}()
+> 
+>     for m in ms
+>         pred, err = runmodel(m, nday; timeout=60)
+>         if err !== nothing
+>             errors[m["id"]] = err
+>         else
+>             individual[m["id"]] = pred
+>         end
+>     end
+> 
+>     scores = scoretable(s)
+>     validated = filter(m -> m["status"] == "validated", ms)
+>     ws = weights(validated, scores, s["temperature"])
+>     pooled = Dict{String,Vector{Float64}}()
+> 
+>     for ticker in union((Set(keys(individual[m["id"]]))
+>                          for m in validated if haskey(individual, m["id"]))...)
+>         relevant = [m for m in validated
+>                     if haskey(individual, m["id"]) &&
+>                        haskey(individual[m["id"]], ticker)]
+>         isempty(relevant) && continue
+> 
+>         ix = [findfirst(x -> x["id"] == m["id"], validated) for m in relevant]
+>         rw = ws[ix]
+>         rw ./= sum(rw)
+> 
+>         draws = Float64[]
+>         for _ in 1:5
+>             j = sample(1:length(relevant), Weights(rw))
+>             push!(draws, rand(individual[relevant[j]["id"]][ticker]))
+>         end
+>         pooled[ticker] = draws
+>     end
+> 
+>     serialize(joinpath(PREDS, "$(uuid4()).bin"), Dict(
+>         "date" => today(),
+>         "target" => forecast_target(nday),
+>         "sigma_floor" => s["sigma_floor"],
+>         "individual" => individual,
+>         "pooled" => pooled,
+>         "errors" => errors,
+>         "weights" => Dict(m["id"] => w for (m, w) in zip(validated, ws))
+>     ))
+>     return pooled
+> end
+> 
+> "Draw a mutation parent from validated and candidate models by smoothed skill."
+> function drawparent()
+>     s = state()
+>     ms = filter(m -> m["status"] != "archived", models(s))
+>     isempty(ms) && error("No models in pool.")
+>     sc = scoretable(s)
+>     ws = weights(ms, sc, s["temperature"])
+>     return ms[sample(1:length(ms), Weights(ws))]
+> end
+> 
+> """
+> Store source code as a candidate. If candidates exceed the configured limit,
+> archive the weakest candidate. Returns the new model ID.
+> """
+> function storechild(childcode::String; parent=nothing, mutation="")
+>     s = state()
+>     id = string(uuid4())
+>     path = joinpath(MODELS, "$id.jl")
+>     write(path, childcode)
+> 
+>     # Smoke test before admitting it.
+>     provisional = Dict("id" => id, "path" => path, "status" => "candidate")
+>     _, err = runmodel(provisional, 1; timeout=60)
+>     err === nothing || error("Child failed smoke test: $err")
+> 
+>     push!(s["models"], merge(provisional, Dict(
+>         "parent" => something(parent, ""),
+>         "mutation" => mutation,
+>         "created" => string(now())
+>     )))
+> 
+>     candidates = filter(m -> m["status"] == "candidate", s["models"])
+>     excess = length(candidates) - s["candidate_limit"]
+>     if excess > 0
+>         sc = scoretable(s)
+>         weakest = sort(candidates, by=m -> sc[m["id"]].skill)[1:excess]
+>         for m in weakest
+>             m["status"] = "archived"
+>         end
+>     end
+> 
+>     savestate(s)
+>     return id
+> end
+> 
+> "Promote qualified candidates and retain only the configured validated pool."
+> function manage_pool()
+>     s = state()
+>     sc = scoretable(s)
+> 
+>     validated = filter(m -> m["status"] == "validated", s["models"])
+>     reference = isempty(validated) ? -10.0 :
+>         mean(sc[m["id"]].skill for m in validated)
+> 
+>     for m in s["models"]
+>         if m["status"] == "candidate"
+>             z = sc[m["id"]]
+>             if z.n >= s["min_candidate_events"] && z.skill >= reference
+>                 m["status"] = "validated"
+>             end
+>         end
+>     end
+> 
+>     validated = filter(m -> m["status"] == "validated", s["models"])
+>     excess = length(validated) - s["validated_limit"]
+>     if excess > 0
+>         weakest = sort(validated, by=m -> sc[m["id"]].skill)[1:excess]
+>         for m in weakest
+>             m["status"] = "archived"
+>         end
+>     end
+>     savestate(s)
+> end
+> 
+> function generatediagnostics()
+>     s = state()
+>     sc = scoretable(s)
+>     rows = [Dict(
+>         "id" => m["id"],
+>         "status" => m["status"],
+>         "parent" => get(m, "parent", ""),
+>         "skill" => sc[m["id"]].skill,
+>         "effective_events" => sc[m["id"]].n,
+>         "path" => m["path"]
+>     ) for m in models(s)]
+> 
+>     out = joinpath(ROOT, "diagnostics.toml")
+>     open(out, "w") do io
+>         TOML.print(io, Dict("generated" => string(now()), "models" => rows))
+>     end
+>     return out
+> end
+> 
+> end # module
+> 
+> using Dates
+> 
+> "Replace with trading-calendar logic if desired."
+> forecast_target(nday::Int) = today() + Day(nday)
+> 
+> """
+> Return (low, high) for ticker/date once known, else `nothing`.
+> """
+> function actual_interval(ticker::String, date::Date)
+>     (highprices[ticker][alldates .== date], lowprices[ticker][alldates .== date])
+> end
+> ```
+> 
+> Here is the logic for running the pool:
+> ```
+> poolprice(5)
+> manage_pool()
+> parent = drawparent()
+> # Arachne proposes mutation of read(parent["path"], String)
+> childid = storechild(childcode; parent=parent["id"], mutation="description")
+> generatediagnostics()
+> ```
+> 
+> And here's the "_runner.jl" script:
+> ```
+> using Serialization
+> include(ARGS[1])  # model source
+> 
+> nday = parse(Int, ARGS[2])
+> context = deserialize(ARGS[3])
+> outfile = ARGS[4]
+> 
+> raw = algorithm_predict(nday, context)
+> serialize(outfile, raw)
+> ```
+> 
+> Now, I have two issues.
+> First, when I try to store a child there, I get an error:
+> ```
+> childcode = read("arachne.jl", String)
+> childid = PoolPredict.storechild(childcode; parent=nothing, mutation="Initial Arachne model")
+> ERROR: MethodError: convert(::Type{Union{}}, ::Dict{String, String}) is ambiguous. Candidates:
+>   convert(::Type{T}, x::AbstractDict) where T<:AbstractDict in Base at abstractdict.jl:527
+>   convert(::Type{Union{}}, x) in Base at essentials.jl:216
+>   convert(::Type{T}, arg) where T<:VecElement in Base at baseext.jl:19
+> Possible fix, define
+>   convert(::Type{Union{}}, ::AbstractDict)
+> Stacktrace:
+>  [1] push!(a::Vector{Union{}}, item::Dict{String, String})
+>    @ Base ./array.jl:994
+>  [2] storechild(childcode::String; parent::Nothing, mutation::String)
+>    @ Main.PoolPredict ~/projects/justeco/stockings/pool/PoolPredict.jl:225
+>  [3] top-level scope
+>    @ REPL[5]:1
+> ```
+> So, I would like help fixing that.
+> 
+> Second, I think there should be provisions in here for shared code. The way I'm thinking about it, the shared code would have unique script names and descriptions (generated by the AI process that I'm going to figure out in detail later). The scripts, when run, would add additional material to the "context" dictionary. They would be limited by a 1 minute clock time, like the algorithms (but their time would be in addition to the algorithm time). Their context additions would only be run once, no matter how many algorithms rely on them. What I need is:
+>  - Methods to add a new script, given its code (string), description, and jl script.
+>  - A method to get out a list of the scripts, which would include for each script their script name (used to refer to them), description, and a recent set of results produced by them.
+>  - When an algorithm is added to the pool, it should include a list of relying context scripts.
+>  - When the algorithms are all run, we first run the union set of all context scripts they rely upon. Each context scripts additions are stored separately (which can help when we need an example result), and then only added to a copy of the context on a per-algorithm basis (because multiple context scripts may use the same dict keys).
+>  - A method which checks if any of the context scripts are not used by any algorithm and removes them. This should be rolled into the normal maintenance process.
+> 
+> Either give me the specific code additions/changes for the above items, or provide an improved version of the whole code, whichever is more convenient.
+**assistant**:
+> The immediate error comes from TOML parsing an empty array as `Vector{Union{}}`, which cannot accept a dictionary. Normalize state arrays to `Any[]` after loading.
+> 
+> Also add `StatsBase`, since `sample` and `Weights` come from it.
+> 
+> ```julia
+> using Dates, TOML, Serialization, Random, Statistics, UUIDs, Printf, StatsBase
+> 
+> const CONTEXT_SCRIPTS = joinpath(ROOT, "context_scripts")
+> const CONTEXT_RESULTS = joinpath(ROOT, "context_results")
+> const BASE_CONTEXT    = joinpath(ROOT, "context", "context-current.bin")
+> 
+> function initpool()
+>     mkpath.((ROOT, MODELS, PREDS, CONTEXT_SCRIPTS, CONTEXT_RESULTS))
+>     if !isfile(STATE)
+>         open(STATE, "w") do io
+>             TOML.print(io, Dict(
+>                 "validated_limit" => 10,
+>                 "candidate_limit" => 5,
+>                 "min_candidate_events" => 20,
+>                 "sigma_floor" => 0.01,
+>                 "recency_days" => 365.25,
+>                 "temperature" => 0.35,
+>                 "models" => Any[],
+>                 "context_scripts" => Any[]
+>             ))
+>         end
+>     end
+> end
+> 
+> function state()
+>     initpool()
+>     s = TOML.parsefile(STATE)
+> 
+>     # TOML reads empty arrays as Vector{Union{}}.
+>     s["models"] = Any[get(s, "models", Any[])...]
+>     s["context_scripts"] = Any[get(s, "context_scripts", Any[])...]
+>     return s
+> end
+> 
+> models(s=state()) = s["models"]
+> contextscripts(s=state()) = s["context_scripts"]
+> ```
+> 
+> Then replace `storechild` with this version, adding declared dependencies:
+> 
+> ```julia
+> function storechild(childcode::String;
+>                     parent=nothing,
+>                     mutation="",
+>                     contexts::Vector{String}=String[])
+>     s = state()
+> 
+>     known = Set(c["name"] for c in contextscripts(s))
+>     unknown = setdiff(contexts, collect(known))
+>     isempty(unknown) || error("Unknown context scripts: $(join(unknown, ", "))")
+> 
+>     id = string(uuid4())
+>     path = joinpath(MODELS, "$id.jl")
+>     write(path, childcode)
+> 
+>     provisional = Dict(
+>         "id" => id, "path" => path,
+>         "status" => "candidate",
+>         "contexts" => contexts
+>     )
+> 
+>     _, err = runmodel(provisional, 1; timeout=60)
+>     err === nothing || error("Child failed smoke test: $err")
+> 
+>     push!(s["models"], merge(provisional, Dict(
+>         "parent" => something(parent, ""),
+>         "mutation" => mutation,
+>         "created" => string(now())
+>     )))
+> 
+>     candidates = filter(m -> m["status"] == "candidate", s["models"])
+>     excess = length(candidates) - s["candidate_limit"]
+>     if excess > 0
+>         sc = scoretable(s)
+>         for m in sort(candidates, by=m -> sc[m["id"]].skill)[1:excess]
+>             m["status"] = "archived"
+>         end
+>     end
+> 
+>     savestate(s)
+>     return id
+> end
+> ```
+> 
+> ## Context-script implementation
+> 
+> Use this contract for every context script:
+> 
+> ```julia
+> # Required function in each context script:
+> context_addition(context)::Dict{String,Any}
+> ```
+> 
+> For example:
+> 
+> ```julia
+> function context_addition(context)
+>     prices = context["prices"]
+>     return Dict(
+>         "five_day_returns" => Dict(
+>             ticker => prices[ticker][end] / prices[ticker][end - 5] - 1
+>             for ticker in keys(prices)
+>         )
+>     )
+> end
+> ```
+> 
+> Create `pool/_context_runner.jl`:
+> 
+> ```julia
+> using Serialization
+> 
+> include(ARGS[1])
+> 
+> basecontext = deserialize(ARGS[2])
+> outfile = ARGS[3]
+> 
+> addition = context_addition(basecontext)
+> addition isa AbstractDict || error("context_addition must return a Dict")
+> serialize(outfile, addition)
+> ```
+> 
+> Add these methods to `PoolPredict`:
+> 
+> ```julia
+> function addcontextscript(name::String, description::String, code::String)
+>     occursin(r"^[A-Za-z][A-Za-z0-9_]*$", name) ||
+>         error("Context-script name must be a simple identifier.")
+> 
+>     s = state()
+>     any(c -> c["name"] == name, contextscripts(s)) &&
+>         error("Context script '$name' already exists.")
+> 
+>     path = joinpath(CONTEXT_SCRIPTS, "$name.jl")
+>     write(path, code)
+> 
+>     # Smoke test against the current base context.
+>     script = Dict("name" => name, "description" => description, "path" => path)
+>     _, err = runcontextscript(script)
+>     err === nothing || begin
+>         rm(path; force=true)
+>         error("Context script failed smoke test: $err")
+>     end
+> 
+>     push!(s["context_scripts"], script)
+>     savestate(s)
+>     return name
+> end
+> 
+> function runcontextscript(script; timeout=60)
+>     out = tempname()
+>     logfile = joinpath(ROOT, "logs",
+>         "context-$(script["name"])-$(Dates.format(now(), "yyyymmdd-HHMMSS")).log")
+>     mkpath(dirname(logfile))
+> 
+>     cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) \
+>         pool/_context_runner.jl $(script["path"]) $BASE_CONTEXT $out`
+> 
+>     open(logfile, "w") do io
+>         p = run(pipeline(cmd, stdout=io, stderr=io); wait=false)
+> 
+>         if timedwait(() -> process_exited(p), timeout) == :timed_out
+>             kill(p); wait(p)
+>             return nothing, "timeout; see $logfile"
+>         elseif !success(p)
+>             return nothing, "exit $(p.exitcode); see $logfile"
+>         end
+>     end
+> 
+>     try
+>         addition = deserialize(out)
+>         addition isa AbstractDict || return nothing, "did not return a Dict"
+> 
+>         record = Dict(
+>             "name" => script["name"],
+>             "date" => string(now()),
+>             "addition" => addition
+>         )
+>         serialize(joinpath(CONTEXT_RESULTS,
+>             "$(script["name"])-$(uuid4()).bin"), record)
+> 
+>         return addition, nothing
+>     catch e
+>         return nothing, "deserialize failure: $(sprint(showerror, e))"
+>     finally
+>         rm(out; force=true)
+>     end
+> end
+> 
+> function listcontextscripts(; recent=3)
+>     s = state()
+> 
+>     records = Dict{String,Vector{Any}}()
+>     for file in readdir(CONTEXT_RESULTS; join=true)
+>         endswith(file, ".bin") || continue
+>         try
+>             r = deserialize(file)
+>             push!(get!(records, r["name"], Any[]), r)
+>         catch
+>         end
+>     end
+> 
+>     return [Dict(
+>         "name" => c["name"],
+>         "description" => c["description"],
+>         "recent_results" => sort(get(records, c["name"], Any[]),
+>                                   by=r -> r["date"], rev=true)[1:min(recent,
+>                                   length(get(records, c["name"], Any[])))]
+>     ) for c in contextscripts(s)]
+> end
+> 
+> function prune_contextscripts!()
+>     s = state()
+>     used = Set{String}()
+> 
+>     for m in models(s)
+>         m["status"] == "archived" && continue
+>         union!(used, get(m, "contexts", String[]))
+>     end
+> 
+>     removed = String[]
+>     keep = Any[]
+> 
+>     for script in contextscripts(s)
+>         if script["name"] in used
+>             push!(keep, script)
+>         else
+>             push!(removed, script["name"])
+>             rm(script["path"]; force=true)
+>             for f in readdir(CONTEXT_RESULTS; join=true)
+>                 startswith(basename(f), script["name"] * "-") && rm(f; force=true)
+>             end
+>         end
+>     end
+> 
+>     s["context_scripts"] = keep
+>     savestate(s)
+>     return removed
+> end
+> ```
+> 
+> Finally, call pruning during maintenance:
+> 
+> ```julia
+> function manage_pool()
+>     # ... your existing promotion/archive logic ...
+>     savestate(s)
+>     prune_contextscripts!()
+> end
+> ```
+> 
+> The remaining integration step is to modify `poolprice` so it runs the union of required context scripts once, then serializes a merged context dictionary separately for each model before calling `runmodel`. This preserves script-result reuse while allowing dependency order to determine collisions: later scripts in an algorithm’s declared `contexts` list overwrite earlier keys.
+**user**:
+> Great. Can you also now give me an implementation of `poolprice` with this integration?
+**assistant**:
+> Replace
+**user**:
+> Actually, I think we want something a little higher-level than poolprice. We will be running poolprice multiple times for each algorithm, with different nday values. Like, here is how I run another algorithm that isn't part of this pool:
+> `lassoprice = cat([getlassoprice(nday) for nday in 1:7]..., dims=3)`
+> 
+> So, there should be a step prior to poolprice which runs all the necessary context scripts, and gives back an object, which can be passed to poolprice and from there passed into each of the algorithms based on their dependencies.
+**assistant**:
+> Yes—make context preparation a separate step, then reuse its output across all forecast horizons.
+> 
+> ## 1. Replace `runmodel`
+> 
+> This version accepts an already-built context dictionary.
+> 
+> ```julia
+> function runmodel(m, nday, context; timeout=60)
+>     out = tempname()
+>     contextpath = tempname() * ".bin"
+>     serialize(contextpath, context)
+> 
+>     logfile = joinpath(ROOT, "logs",
+>         "$(m["id"])-$(Dates.format(now(), "yyyymmdd-HHMMSS")).log")
+>     mkpath(dirname(logfile))
+> 
+>     project = Base.active_project()
+>     cmd = `$(Base.julia_cmd()) --startup-file=no --project=$project \
+>         pool/_runner.jl $(m["path"]) $nday $contextpath $out`
+> 
+>     try
+>         open(logfile, "w") do io
+>             p = run(pipeline(cmd, stdout=io, stderr=io); wait=false)
+> 
+>             if timedwait(() -> process_exited(p), timeout) == :timed_out
+>                 kill(p)
+>                 wait(p)
+>                 return nothing, "timeout; see $logfile"
+>             elseif !success(p)
+>                 return nothing, "exit $(p.exitcode); see $logfile"
+>             end
+>         end
+> 
+>         isfile(out) || return nothing, "no output; see $logfile"
+>         return deserialize(out), nothing
+>     catch e
+>         return nothing, "failure: $(sprint(showerror, e)); see $logfile"
+>     finally
+>         rm(out; force=true)
+>         rm(contextpath; force=true)
+>     end
+> end
+> ```
+> 
+> ## 2. Add prepared-context methods
+> 
+> ```julia
+> """
+> Run every context script needed by active pool models exactly once.
+> 
+> The result may be reused for multiple `poolprice(nday, prepared)` calls.
+> """
+> function prepare_pool_context()
+>     s = state()
+>     active = filter(m -> m["status"] != "archived", models(s))
+> 
+>     required = Set{String}()
+>     for m in active
+>         union!(required, get(m, "contexts", String[]))
+>     end
+> 
+>     scripts = Dict(c["name"] => c for c in contextscripts(s))
+>     additions = Dict{String,Any}()
+>     errors = Dict{String,String}()
+> 
+>     for name in required
+>         if !haskey(scripts, name)
+>             errors[name] = "Context script is registered by a model but unavailable."
+>             continue
+>         end
+> 
+>         addition, err = runcontextscript(scripts[name]; timeout=60)
+>         if err === nothing
+>             additions[name] = addition
+>         else
+>             errors[name] = err
+>         end
+>     end
+> 
+>     return Dict(
+>         "prepared_at" => string(now()),
+>         "base_context" => deserialize(BASE_CONTEXT),
+>         "additions" => additions,
+>         "errors" => errors
+>     )
+> end
+> 
+> """
+> Build the specific context visible to one model.
+> 
+> If multiple declared scripts define the same key, the later script in
+> `m["contexts"]` wins.
+> """
+> function context_for_model(m, prepared)
+>     context = deepcopy(prepared["base_context"])
+> 
+>     for name in get(m, "contexts", String[])
+>         if haskey(prepared["errors"], name)
+>             return nothing, "required context script '$name' failed: " *
+>                             prepared["errors"][name]
+>         end
+> 
+>         if !haskey(prepared["additions"], name)
+>             return nothing, "required context script '$name' produced no result"
+>         end
+> 
+>         addition = prepared["additions"][name]
+>         addition isa AbstractDict ||
+>             return nothing, "context script '$name' did not return a dictionary"
+> 
+>         merge!(context, addition)
+>     end
+> 
+>     return context, nothing
+> end
+> ```
+> 
+> ## 3. Replace `poolprice`
+> 
+> ```julia
+> function poolprice(nday::Int, prepared=prepare_pool_context())
+>     s = state()
+>     ms = filter(m -> m["status"] != "archived", models(s))
+> 
+>     individual = Dict{String,Dict{String,Vector{Float64}}}()
+>     errors = Dict{String,String}()
+> 
+>     for m in ms
+>         context, contexterr = context_for_model(m, prepared)
+> 
+>         if contexterr !== nothing
+>             errors[m["id"]] = contexterr
+>             continue
+>         end
+> 
+>         pred, err = runmodel(m, nday, context; timeout=60)
+>         if err !== nothing
+>             errors[m["id"]] = err
+>         else
+>             individual[m["id"]] = pred
+>         end
+>     end
+> 
+>     scores = scoretable(s)
+>     validated = filter(m -> m["status"] == "validated", ms)
+>     ws = weights(validated, scores, s["temperature"])
+>     pooled = Dict{String,Vector{Float64}}()
+> 
+>     tickers = Set{String}()
+>     for m in validated
+>         haskey(individual, m["id"]) || continue
+>         union!(tickers, keys(individual[m["id"]]))
+>     end
+> 
+>     for ticker in tickers
+>         relevant = [m for m in validated if
+>             haskey(individual, m["id"]) &&
+>             haskey(individual[m["id"]], ticker)]
+> 
+>         isempty(relevant) && continue
+> 
+>         ix = [findfirst(x -> x["id"] == m["id"], validated) for m in relevant]
+>         rw = copy(ws[ix])
+>         rw ./= sum(rw)
+> 
+>         draws = Float64[]
+>         for _ in 1:5
+>             j = sample(1:length(relevant), Weights(rw))
+>             push!(draws, rand(individual[relevant[j]["id"]][ticker]))
+>         end
+>         pooled[ticker] = draws
+>     end
+> 
+>     serialize(joinpath(PREDS, "$(uuid4()).bin"), Dict(
+>         "date" => today(),
+>         "target" => forecast_target(nday),
+>         "sigma_floor" => s["sigma_floor"],
+>         "individual" => individual,
+>         "pooled" => pooled,
+>         "errors" => errors,
+>         "weights" => Dict(m["id"] => w for (m, w) in zip(validated, ws)),
+>         "prepared_context_at" => prepared["prepared_at"]
+>     ))
+> 
+>     return pooled
+> end
+> ```
+> 
+> ## Usage
+> 
+> ```julia
+> prepared = PoolPredict.prepare_pool_context()
+> 
+> poolprices = cat(
+>     [PoolPredict.poolprice(nday, prepared) for nday in 1:7]...,
+>     dims=3
+> )
+> ```
+> 
+> More likely, since each result is a ticker-keyed dictionary:
+> 
+> ```julia
+> prepared = PoolPredict.prepare_pool_context()
+> poolprices = Dict(nday => PoolPredict.poolprice(nday, prepared) for nday in 1:7)
+> ```
+> 
+> This runs each required context script once, while every algorithm receives an independent merged copy of the base context.
+**user**:
+> Okay, I've stored a child which works (when I run it separately), and I get a file in predictions/, so I think it's there too, but when I run:
+> ```
+> prepared = PoolPredict.prepare_pool_context()
+> PoolPredict.poolprice(1, prepared)
+> ```
+> I get `Dict{String, Vector{Float64}}()`.
+**assistant**:
+> Most likely: your child is a **candidate**, and `poolprice` deliberately returns pooled draws from **validated models only**:
+> 
+> ```julia
+> validated = filter(m -> m["status"] == "validated", ms)
+> ```
+> 
+> So it can successfully run the child, write its individual prediction into `predictions/`, yet return:
+> 
+> ```julia
+> Dict{String,Vector{Float64}}()
+> ```
+> 
+> until at least one model is validated.
+> 
+> Inspect this:
+> 
+> ```julia
+> PoolPredict.generatediagnostics()
+> println(read(joinpath(PoolPredict.ROOT, "diagnostics.toml"), String))
+> ```
+> 
+> Or directly:
+> 
+> ```julia
+> [(m["id"], m["status"]) for m in PoolPredict.models()]
+> ```
+> 
+> Also inspect the newest prediction snapshot’s errors and individual outputs:
+> 
+> ```julia
+> snap = PoolPredict.snapshots()[end]
+> snap["errors"]
+> keys(snap["individual"])
+> ```
+> 
+> If your child ID appears in `snap["individual"]`, it ran correctly; it simply was not eligible for pooling.
+> 
+> For initial testing, promote it manually:
+> 
+> ```julia
+> s = PoolPredict.state()
+> for m in s["models"]
+>     if m["id"] == childid
+>         m["status"] = "validated"
+>     end
+> end
+> PoolPredict.savestate(s)
+> ```
+> 
+> Then:
+> 
+> ```julia
+> prepared = PoolPredict.prepare_pool_context()
+> PoolPredict.poolprice(1, prepared)
+> ```
+> 
+> Longer-term, you need one or more initial “seed” models marked `"validated"` when added, because candidates require at least `min_candidate_events` resolved outcomes before `manage_pool()` can promote them. With the current default of 20, that means they will not become eligible immediately.

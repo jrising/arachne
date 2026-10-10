@@ -1,0 +1,131 @@
+**user**:
+> I have some functions declared in a file SerializationTools.h:
+> ```
+>   template <class T>
+>   ostream& streamInsertVector(vector<T*>& vec, ostream& os, PointerTracker& tracker);
+>   
+>   template <class T>
+>   istream& streamExtractVector(istream& in, PointerReference& reference, vector<T*>& vec, void* (*constructor)(istream&, PointerReference&));
+> ```
+> And then defined in SerializationTools.cpp:
+> ```
+> 
+> #include "SerializationTools.h"
+> 
+> namespace openworld {
+>   template <class T>
+>   ostream& streamInsertVector(vector<T*>& vec, ostream& os, PointerTracker& tracker) {
+>     //ostream& streamInsertPointer(ostream& os, PointerTracker& tracker)
+>     os << vec.size() << " ";
+> 
+>     for (vector<IPointerSerializable*>::const_iterator it = vec.begin() ; it != vec.end(); it++) {
+>       (*it)->streamInsertPointer(os, tracker);
+>     }
+> 
+>     return os;
+>   }
+> 
+>   template <class T>
+>   istream& streamExtractVector(istream& in, PointerReference& reference, vector<T*>& vec, void* (*constructor)(istream&, PointerReference&)) {
+>     //void* streamExtractPointer(istream& in, PointerReference& reference)
+>     unsigned count;
+>     in >> count;
+> 
+>     vec.clear();
+>     for (unsigned ii = 0; ii < count; ii++) {
+>       T* item = (T*) reference.streamExtractPointer(in, constructor);
+>       vec.insert(item);
+>     }
+> 
+>     return in;
+>   }
+> 
+> }
+> ```
+> 
+> My code compiles fine (using the declarations), but when I link (including SerializationTools.o), I get the error:
+> ```
+> Undefined symbols for architecture arm64:
+>   "std::__1::basic_ostream<char, std::__1::char_traits<char>>& openworld::streamInsertVector<openworld::HydroOutputNode>(std::__1::vector<openworld::HydroOutputNode*, std::__1::allocator<openworld::HydroOutputNode*>>&, std::__1::basic_ostream<char, std::__1::char_traits<char>>&, openworld::PointerTracker&)", referenced from:
+>       openworld::HydroNet::generateSurfaceNodeFiles(openworld::DInfinityMap&, openworld::GeographicMap<bool>&, openworld::GeographicMap<double>&, double, std::__1::vector<openworld::HydroOutputNode*, std::__1::allocator<openworld::HydroOutputNode*>>) in main.o
+>   "std::__1::basic_istream<char, std::__1::char_traits<char>>& openworld::streamExtractVector<openworld::HydroOutputNode>(std::__1::basic_istream<char, std::__1::char_traits<char>>&, openworld::PointerReference&, std::__1::vector<openworld::HydroOutputNode*, std::__1::allocator<openworld::HydroOutputNode*>>&, void* (*)(std::__1::basic_istream<char, std::__1::char_traits<char>>&, openworld::PointerReference&))", referenced from:
+>       openworld::HydroNet::generateFromSurfaceNodeFiles(std::__1::vector<openworld::HydroOutputNode*, std::__1::allocator<openworld::HydroOutputNode*>>) in main.o
+> ld: symbol(s) not found for architecture arm64
+> ```
+> 
+> Any ideas why?
+**assistant**:
+> Function templates generally must be **defined in the header**, because each translation unit that calls them needs to instantiate the specialization (e.g. `streamInsertVector<HydroOutputNode>`).
+> 
+> `SerializationTools.cpp` compiles the template definitions, but it does not itself instantiate them for `HydroOutputNode`, so no matching symbols are emitted for the linker.
+> 
+> ### Recommended fix: move definitions into the header
+> 
+> Put the definitions in `SerializationTools.h` (or in a `.tpp`/`.ipp` file included at the end of the header).
+> 
+> Also fix two issues in the implementations:
+> 
+> ```cpp
+> template <class T>
+> std::ostream& streamInsertVector(
+>     std::vector<T*>& vec,
+>     std::ostream& os,
+>     PointerTracker& tracker)
+> {
+>     os << vec.size() << " ";
+> 
+>     for (T* item : vec) {
+>         item->streamInsertPointer(os, tracker);
+>     }
+> 
+>     return os;
+> }
+> 
+> template <class T>
+> std::istream& streamExtractVector(
+>     std::istream& in,
+>     PointerReference& reference,
+>     std::vector<T*>& vec,
+>     void* (*constructor)(std::istream&, PointerReference&))
+> {
+>     unsigned count;
+>     in >> count;
+> 
+>     vec.clear();
+> 
+>     for (unsigned ii = 0; ii < count; ++ii) {
+>         T* item = static_cast<T*>(
+>             reference.streamExtractPointer(in, constructor)
+>         );
+>         vec.push_back(item);  // not vec.insert(item)
+>     }
+> 
+>     return in;
+> }
+> ```
+> 
+> Your original code has these additional problems:
+> 
+> - `vector<IPointerSerializable*>::const_iterator` cannot iterate over a `vector<T*>`; vectors are invariant. Use `T*`, `auto`, or `vector<T*>::const_iterator`.
+> - `std::vector` has no `insert(item)` overload that appends an item. Use `push_back(item)`.
+> 
+> ### Alternative: explicit instantiation
+> 
+> If you deliberately want definitions in the `.cpp`, explicitly instantiate every used specialization there:
+> 
+> ```cpp
+> template std::ostream& streamInsertVector<HydroOutputNode>(
+>     std::vector<HydroOutputNode*>&,
+>     std::ostream&,
+>     PointerTracker&
+> );
+> 
+> template std::istream& streamExtractVector<HydroOutputNode>(
+>     std::istream&,
+>     PointerReference&,
+>     std::vector<HydroOutputNode*>&,
+>     void* (*)(std::istream&, PointerReference&)
+> );
+> ```
+> 
+> But this requires including the complete definition of `HydroOutputNode` in `SerializationTools.cpp`, and doing this for every `T`. Header-defined templates are usually the better choice.

@@ -1,0 +1,89 @@
+**user**:
+> I have a python package which I'm using as a submodule, under the folder "chatwrap". I usually can do , e.g., `from chatwrap import selector`. But now I want to include an example script in the submodule that can run on its own. I put this in chatwrap, but then when it imports selector (`import selector`) I get a problem because selector.py has the line `from . import budget`, and the error is "ImportError: attempted relative import with no known parent package".
+> 
+> How can I set this up, ideally without turning this into a package?
+**assistant**:
+> `chatwrap` already needs to be treated as a package for `from . import budget` to work. The key is: **do not run a package module as a file**.
+> 
+> Suppose:
+> 
+> ```text
+> project/
+> ├── chatwrap/
+> │   ├── __init__.py
+> │   ├── selector.py
+> │   ├── budget.py
+> │   └── example.py
+> ```
+> 
+> In `example.py`, use a package-relative import:
+> 
+> ```python
+> from . import selector
+> ```
+> 
+> Then, from the directory *above* `chatwrap`, run:
+> 
+> ```bash
+> python -m chatwrap.example
+> ```
+> 
+> Do **not** run:
+> 
+> ```bash
+> python chatwrap/example.py
+> ```
+> 
+> The latter makes `example.py` a top-level script, so Python does not know it belongs to `chatwrap`; consequently `selector.py`’s `from . import budget` fails.
+> 
+> If you want a convenient standalone command, add a tiny launcher outside the submodule:
+> 
+> ```python
+> # run_chatwrap_example.py
+> from chatwrap.example import main
+> 
+> if __name__ == "__main__":
+>     main()
+> ```
+> 
+> Then:
+> 
+> ```bash
+> python run_chatwrap_example.py
+> ```
+> 
+> You do not necessarily need an `__init__.py` on modern Python (namespace packages exist), but including an empty one is usually simplest and most reliable, especially for tooling.
+**user**:
+> Okay, that worked. But I also have a subdirectory of chatwrap called `planner`. Within example.py, I say `from planner import calculate_tool`, where calculate_tool.py is inside of chatwrap/planner. But it looks like it's trying to import it from the parent directory (parent/planner, rather than parent/chatwrap/planner).
+**assistant**:
+> Use a package-relative import within `chatwrap`:
+> 
+> ```python
+> from .planner import calculate_tool
+> ```
+> 
+> or, if you need a symbol from that module:
+> 
+> ```python
+> from .planner.calculate_tool import some_function
+> ```
+> 
+> Your layout should be roughly:
+> 
+> ```text
+> project/
+> └── chatwrap/
+>     ├── __init__.py
+>     ├── example.py
+>     └── planner/
+>         ├── __init__.py
+>         └── calculate_tool.py
+> ```
+> 
+> Run it from the parent directory:
+> 
+> ```bash
+> python -m chatwrap.example
+> ```
+> 
+> `from planner import calculate_tool` asks Python for a *top-level* package named `planner`, so it searches `project/planner`. The leading dot explicitly means “the `planner` package inside the current `chatwrap` package.”

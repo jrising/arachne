@@ -1,0 +1,64 @@
+**user**:
+> I have a string in Julia of the following form:
+> "Name: MarketFeatureCache\n\nDescription: Preprocesses high/low price p..."
+> 
+> That is, a variable-like name and a multi-line description. How can I extract out this information?
+**assistant**:
+> ```julia
+> s = "Name: MarketFeatureCache\n\nDescription: Preprocesses high/low price p..."
+> 
+> m = match(r"^Name:\s*(.+?)\s*\n\s*\nDescription:\s*(.*)$"s, s)
+> 
+> name = m.captures[1]
+> description = m.captures[2]
+> 
+> # name == "MarketFeatureCache"
+> # description == "Preprocesses high/low price p..."
+> ```
+> 
+> The `s` flag makes `.` also match newlines, so this works for multi-line descriptions.
+> 
+> For a slightly more robust reusable function:
+> 
+> ```julia
+> function parse_named_description(s::AbstractString)
+>     m = match(r"^Name:\s*(.+?)\s*\n\s*\nDescription:\s*(.*)$"s, s)
+>     isnothing(m) && error("Expected Name and Description fields")
+>     return (; name = m.captures[1], description = m.captures[2])
+> end
+> ```
+> 
+> Then:
+> 
+> ```julia
+> info = parse_named_description(s)
+> info.name
+> info.description
+> ```
+**user**:
+> I have another string which has a bunch of other stuff in it, but the first line is meant to be a dependencies list, behind a Julia comment mark. For example:
+> "# Dependencies: MarketFeatureCache\n..."
+> How can I extract that? I used the match approach you provided before.
+**assistant**:
+> ```julia
+> s = "# Dependencies: MarketFeatureCache\nother stuff\n..."
+> 
+> m = match(r"^#\s*Dependencies:\s*(.*)$"m, s)
+> deps = strip(m.captures[1])
+> 
+> # deps == "MarketFeatureCache"
+> ```
+> 
+> The `m` flag makes `^` and `$` operate line-by-line, so this finds the dependencies comment even if it is not literally the first line.
+> 
+> If it must be the first line, omit `m`:
+> 
+> ```julia
+> m = match(r"^#\s*Dependencies:\s*(.*)$", s)
+> ```
+> 
+> For comma-separated dependencies:
+> 
+> ```julia
+> deps_list = filter(!isempty, strip.(split(deps, ',')))
+> ```

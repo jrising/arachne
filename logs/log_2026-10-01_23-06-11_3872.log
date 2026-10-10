@@ -1,0 +1,473 @@
+**user**:
+> I have started a plan to build an abstraction around model and tool selection in my AI system. Here is the contract for tools:
+> """
+> Tool protocol and normalized typed tool-result contract.
+> 
+> Tools are executable capabilities. In the initial synchronous system they may
+> be invoked directly by a responder. In the workflow system they are executed
+> as Operations and yield Artifacts. Tool interfaces should therefore avoid
+> assuming that their primary result is user-visible text.
+> 
+> Expected tool callable shape:
+> 
+> ToolCallable = Callable[
+>     [ToolInvocation],
+>     ToolResult,
+> ]
+> 
+> @dataclass(frozen=True)
+> class ToolInvocation:
+>     operation_id: str | None
+>     conversation_id: str
+>     arguments: Mapping[str, Any]
+>     config: Mapping[str, Any]
+>     context: PlannerContext | None
+>     provenance_requirements: Mapping[str, Any]
+> 
+> @dataclass
+> class Tool:
+>     name: str
+>     description: str
+>     fn: ToolCallable | Callable[..., Any]
+>     config: ToolConfig
+>     quality_prior: float | None = None
+>     cost_estimate: float | None = None
+>     version: str = "1"
+> 
+> Compatibility:
+> - registry.py may accept legacy functions such as
+>   `fn(prompt, config) -> str`.
+> - tools/base.py normalizes such outputs to ToolResult/Artifact.
+> - Tool configuration defaults and allowed discrete options are validated here.
+> 
+> Caller:
+> - responders.py or workflow/workers.py invokes:
+>       result = tool.fn(invocation)
+> - the caller persists raw temporary output as appropriate, converts relevant
+>   materials to artifacts/source excerpts, and never blindly injects untrusted
+>   tool text into system instructions.
+> """
+> 
+> Now, here is the documentation for a tool available through OpenAI:
+> ## Programmatic tool calling
+> 
+> `programmatic_tool_calling` lets the model write JavaScript that calls your other tools in loops or in parallel, then returns one compact result. It runs in an isolated V8 runtime with no network, filesystem or Node.js; it reaches the outside only through the tools you enable.
+> 
+> ```python
+> tools = [
+>     {"type": "function", "name": "get_inventory",
+>      "description": "Return sku and available_units.",
+>      "parameters": {"type": "object", "properties": {"sku": {"type": "string"}},
+>                     "required": ["sku"], "additionalProperties": False},
+>      "output_schema": {"type": "object",
+>                        "properties": {"sku": {"type": "string"},
+>                                       "available_units": {"type": "number"}},
+>                        "required": ["sku", "available_units"],
+>                        "additionalProperties": False},
+>      "allowed_callers": ["programmatic"]},
+>     {"type": "programmatic_tool_calling"},
+> ]
+> resp = client.responses.create(model="gpt-6-astra", tools=tools,
+>                                input="Compare inventory with demand for sku_123.")
+> ```
+> 
+> The hosted tool itself takes no options in the Responses API; control sits on each callable tool:
+> 
+> | Field on other tools | Values | Effect |
+> | --- | --- | --- |
+> | `allowed_callers` | omitted or `["direct"]` | Model calls it directly only |
+> |  | `["programmatic"]` | Only from a program |
+> |  | `["direct", "programmatic"]` | Either way |
+> | `output_schema` | JSON Schema | Lets the program rely on return fields |
+> 
+> Eligible tool types: `function`, `custom`, `mcp`, `apply_patch`, `shell` and `code_interpreter`. Responses contain `program`, nested `function_call` (with a `caller` field you must echo in your `function_call_output`) and `program_output` items. In the Agents API it is on by default; disable with `{"type": "programmatic_tool_calling", "enabled": false}`.
+> 
+> Can you construct a full tool implementation for this? Please start off the file with a docstring, describing the tool and its usage.
+**assistant**:
+> ```python
+> """
+> OpenAI Programmatic Tool Calling broker.
+> 
+> This tool invokes OpenAI's `programmatic_tool_calling` Responses API feature,
+> allowing a model-written JavaScript program to call registered local tools in
+> loops or parallel. It brokers nested function calls back into this application's
+> normalized ToolInvocation -> ToolResult contract.
+> 
+> Usage:
+>     broker = OpenAIProgrammaticBroker(
+>         client=openai_client,
+>         model="gpt-6-astra",
+>         callable_tools={"get_inventory": inventory_spec},
+>         artifact_factory=make_artifact,
+>         result_factory=make_tool_result,
+>     )
+> 
+>     tool = broker.as_tool()
+>     result = tool.fn(ToolInvocation(
+>         operation_id="...",
+>         conversation_id="...",
+>         arguments={"input": "Compare inventory with demand for sku_123."},
+>         config={},
+>         context=None,
+>         provenance_requirements={},
+>     ))
+> 
+> Tool-produced content remains untrusted external data. This broker stores model
+> and program output in artifacts; callers must not inject it into system prompts.
+> """
+> 
+> from __future__ import annotations
+> 
+> import json
+> from dataclasses import dataclass, field
+> from typing import Any, Callable, Mapping, Protocol
+> 
+> from jsonschema import Draft202012Validator, ValidationError
+> 
+> # Replace these imports with your project's canonical contracts.
+> from your_project.tools.base import Tool, ToolConfig, ToolInvocation, ToolResult
+> 
+> 
+> JsonObject = dict[str, Any]
+> ArtifactFactory = Callable[..., Any]
+> ResultFactory = Callable[..., ToolResult]
+> ResultEncoder = Callable[[ToolResult], Any]
+> 
+> 
+> class ResponsesClient(Protocol):
+>     class responses:
+>         @staticmethod
+>         def create(**kwargs: Any) -> Any: ...
+> 
+> 
+> @dataclass(frozen=True)
+> class ProgramCallableTool:
+>     """A local normalized tool exposed to OpenAI as a callable function."""
+> 
+>     name: str
+>     description: str
+>     parameters: Mapping[str, Any]
+>     output_schema: Mapping[str, Any]
+>     fn: Callable[[ToolInvocation], ToolResult]
+>     allowed_callers: tuple[str, ...] = ("programmatic",)
+>     default_config: Mapping[str, Any] = field(default_factory=dict)
+>     result_encoder: ResultEncoder | None = None
+> 
+>     def openai_definition(self) -> JsonObject:
+>         return {
+>             "type": "function",
+>             "name": self.name,
+>             "description": self.description,
+>             "parameters": dict(self.parameters),
+>             "output_schema": dict(self.output_schema),
+>             "allowed_callers": list(self.allowed_callers),
+>         }
+> 
+> 
+> @dataclass
+> class OpenAIProgrammaticBroker:
+>     client: ResponsesClient
+>     model: str
+>     callable_tools: Mapping[str, ProgramCallableTool]
+>     artifact_factory: ArtifactFactory
+>     result_factory: ResultFactory
+>     max_rounds: int = 12
+>     max_output_chars: int = 100_000
+> 
+>     def as_tool(self) -> Tool:
+>         return Tool(
+>             name="openai_programmatic_tool_calling",
+>             description=(
+>                 "Uses OpenAI programmatic tool calling to orchestrate eligible "
+>                 "registered tools through isolated JavaScript."
+>             ),
+>             fn=self,
+>             config=ToolConfig(),
+>             quality_prior=0.85,
+>             cost_estimate=None,
+>             version="1",
+>         )
+> 
+>     def __call__(self, invocation: ToolInvocation) -> ToolResult:
+>         prompt = invocation.arguments.get("input")
+>         if not isinstance(prompt, str) or not prompt.strip():
+>             return self._error("invalid_arguments", "`arguments.input` must be a non-empty string.")
+> 
+>         tools = [spec.openai_definition() for spec in self.callable_tools.values()]
+>         tools.append({"type": "programmatic_tool_calling"})
+> 
+>         try:
+>             response = self.client.responses.create(
+>                 model=self.model,
+>                 input=prompt,
+>                 tools=tools,
+>             )
+> 
+>             rounds = 0
+>             audit: list[JsonObject] = []
+> 
+>             while True:
+>                 calls = self._function_calls(response)
+>                 if not calls:
+>                     break
+> 
+>                 rounds += 1
+>                 if rounds > self.max_rounds:
+>                     return self._error(
+>                         "max_rounds_exceeded",
+>                         f"Programmatic execution exceeded {self.max_rounds} tool rounds.",
+>                         audit=audit,
+>                     )
+> 
+>                 outputs: list[JsonObject] = []
+>                 for call in calls:
+>                     output, event = self._execute_call(call, invocation)
+>                     audit.append(event)
+> 
+>                     # OpenAI requires caller to be echoed for nested program calls.
+>                     item: JsonObject = {
+>                         "type": "function_call_output",
+>                         "call_id": call["call_id"],
+>                         "output": json.dumps(output, ensure_ascii=False),
+>                     }
+>                     if call.get("caller"):
+>                         item["caller"] = call["caller"]
+>                     outputs.append(item)
+> 
+>                 response = self.client.responses.create(
+>                     model=self.model,
+>                     previous_response_id=self._field(response, "id"),
+>                     input=outputs,
+>                     tools=tools,
+>                 )
+> 
+>             payload = {
+>                 "response_id": self._field(response, "id"),
+>                 "model": self.model,
+>                 "program_outputs": self._program_outputs(response),
+>                 "response_output": self._jsonable(self._field(response, "output") or []),
+>                 "tool_audit": audit,
+>             }
+> 
+>             artifact = self.artifact_factory(
+>                 kind="openai_programmatic_result",
+>                 data=payload,
+>                 metadata={
+>                     "trusted": False,
+>                     "source": "openai.responses.programmatic_tool_calling",
+>                     "conversation_id": invocation.conversation_id,
+>                 },
+>             )
+>             return self.result_factory(
+>                 ok=True,
+>                 artifacts=[artifact],
+>                 metadata={"response_id": payload["response_id"], "rounds": rounds},
+>             )
+> 
+>         except Exception as exc:
+>             # Avoid returning provider internals, request contents, or secrets.
+>             return self._error(
+>                 "openai_programmatic_execution_failed",
+>                 f"{type(exc).__name__}: {str(exc)[:500]}",
+>             )
+> 
+>     def _execute_call(
+>         self,
+>         call: JsonObject,
+>         parent: ToolInvocation,
+>     ) -> tuple[Any, JsonObject]:
+>         name = call.get("name")
+>         caller = call.get("caller") or "direct"
+>         spec = self.callable_tools.get(name)
+> 
+>         event: JsonObject = {"name": name, "caller": caller, "ok": False}
+> 
+>         if spec is None:
+>             return {"ok": False, "error": {"code": "unknown_tool"}}, event
+> 
+>         if caller not in spec.allowed_callers:
+>             return {"ok": False, "error": {"code": "caller_not_allowed"}}, event
+> 
+>         try:
+>             arguments = json.loads(call.get("arguments") or "{}")
+>             if not isinstance(arguments, dict):
+>                 raise ValueError("Function arguments must decode to a JSON object.")
+>             Draft202012Validator(spec.parameters).validate(arguments)
+>         except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+>             return {
+>                 "ok": False,
+>                 "error": {"code": "invalid_tool_arguments", "message": str(exc)[:300]},
+>             }, event
+> 
+>         child = ToolInvocation(
+>             operation_id=parent.operation_id,
+>             conversation_id=parent.conversation_id,
+>             arguments=arguments,
+>             config=dict(spec.default_config),
+>             context=parent.context,
+>             provenance_requirements=parent.provenance_requirements,
+>         )
+> 
+>         try:
+>             result = spec.fn(child)
+>             encoded = (
+>                 spec.result_encoder(result)
+>                 if spec.result_encoder
+>                 else self._default_result_encoder(result)
+>             )
+>             Draft202012Validator(spec.output_schema).validate(encoded)
+**user**:
+> Please continue from where you left off.
+**assistant**:
+> ```python
+>             Draft202012Validator(spec.output_schema).validate(encoded)
+> 
+>             event.update({"ok": True})
+>             return encoded, event
+> 
+>         except ValidationError as exc:
+>             return {
+>                 "ok": False,
+>                 "error": {
+>                     "code": "tool_output_schema_violation",
+>                     "message": str(exc.message)[:300],
+>                 },
+>             }, event
+>         except Exception as exc:
+>             return {
+>                 "ok": False,
+>                 "error": {
+>                     "code": "tool_execution_failed",
+>                     "message": f"{type(exc).__name__}: {str(exc)[:300]}",
+>                 },
+>             }, event
+> 
+>     def _error(
+>         self,
+>         code: str,
+>         message: str,
+>         *,
+>         audit: list[JsonObject] | None = None,
+>     ) -> ToolResult:
+>         artifact = self.artifact_factory(
+>             kind="openai_programmatic_error",
+>             data={
+>                 "code": code,
+>                 "message": message,
+>                 "tool_audit": audit or [],
+>             },
+>             metadata={
+>                 "trusted": False,
+>                 "source": "openai.responses.programmatic_tool_calling",
+>             },
+>         )
+>         return self.result_factory(
+>             ok=False,
+>             artifacts=[artifact],
+>             metadata={"error_code": code},
+>         )
+> 
+>     @staticmethod
+>     def _field(value: Any, name: str, default: Any = None) -> Any:
+>         """Read a field from either an SDK model object or mapping."""
+>         if isinstance(value, Mapping):
+>             return value.get(name, default)
+>         return getattr(value, name, default)
+> 
+>     def _function_calls(self, response: Any) -> list[JsonObject]:
+>         """
+>         Extract function calls requiring host execution.
+> 
+>         Only calls whose caller is `programmatic` should normally appear when
+>         programmatic-tool-calling is active, but direct calls are also handled
+>         safely if the provider returns them.
+>         """
+>         calls: list[JsonObject] = []
+> 
+>         for item in self._field(response, "output", []) or []:
+>             item_type = self._field(item, "type")
+> 
+>             if item_type != "function_call":
+>                 continue
+> 
+>             call_id = self._field(item, "call_id")
+>             name = self._field(item, "name")
+> 
+>             if not isinstance(call_id, str) or not isinstance(name, str):
+>                 continue
+> 
+>             calls.append(
+>                 {
+>                     "call_id": call_id,
+>                     "name": name,
+>                     "arguments": self._field(item, "arguments", "{}"),
+>                     "caller": self._field(item, "caller"),
+>                 }
+>             )
+> 
+>         return calls
+> 
+>     def _program_outputs(self, response: Any) -> list[Any]:
+>         """Retain program output as untrusted artifact data, not prompt text."""
+>         outputs: list[Any] = []
+> 
+>         for item in self._field(response, "output", []) or []:
+>             if self._field(item, "type") == "program_output":
+>                 outputs.append(self._jsonable(item))
+> 
+>         return outputs
+> 
+>     def _default_result_encoder(self, result: ToolResult) -> Any:
+>         """
+>         Conservative default conversion for a normalized ToolResult.
+> 
+>         Production tools should generally supply `result_encoder`: programmatic
+>         tool output must match the explicitly declared output_schema and should
+>         expose only intentional fields—not raw artifacts or internal metadata.
+>         """
+>         ok = getattr(result, "ok", None)
+>         if ok is None and isinstance(result, Mapping):
+>             ok = result.get("ok")
+> 
+>         artifacts = getattr(result, "artifacts", None)
+>         if artifacts is None and isinstance(result, Mapping):
+>             artifacts = result.get("artifacts", [])
+> 
+>         return {
+>             "ok": bool(ok),
+>             "artifact_count": len(artifacts or []),
+>         }
+> 
+>     @staticmethod
+>     def _jsonable(value: Any) -> Any:
+>         """
+>         Convert SDK Pydantic models and dataclasses into JSON-compatible data.
+> 
+>         Do not use arbitrary `__dict__` serialization: SDK objects may include
+>         non-serializable transport state or fields not intended for persistence.
+>         """
+>         if value is None or isinstance(value, (str, int, float, bool)):
+>             return value
+> 
+>         if isinstance(value, Mapping):
+>             return {
+>                 str(key): OpenAIProgrammaticBroker._jsonable(item)
+>                 for key, item in value.items()
+>             }
+> 
+>         if isinstance(value, (list, tuple)):
+>             return [OpenAIProgrammaticBroker._jsonable(item) for item in value]
+> 
+>         model_dump = getattr(value, "model_dump", None)
+>         if callable(model_dump):
+>             return OpenAIProgrammaticBroker._jsonable(
+>                 model_dump(mode="json", exclude_none=True)
+>             )
+> 
+>         if hasattr(value, "to_dict") and callable(value.to_dict):
+>             return OpenAIProgrammaticBroker._jsonable(value.to_dict())
+> 
+>         return str(value)[:10_000]
+> ```
+> 
+> One important adjustment: make each `ProgramCallableTool.result_encoder` return precisely the public, schema-conformant output intended for JavaScript consumption. The default encoder is deliberately too minimal for most useful tools.
