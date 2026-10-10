@@ -36,7 +36,12 @@ function addToResponse(text, temp, temprend) {
 	scrollToBottom();
 }
 
+function addButtons(temprend, uid) {
+    $(temprend).parent().append("[<span class=\"vote-icons up-vote\" data-link-id=\"" + uid + "\">👍</span><span class=\"vote-icons down-vote\" data-link-id=\"" + uid + "\">👎</span><span class=\"vote-icons recycle\" data-link-id=\"" + uid + "\">♻</span>]");
+}
+
 function endResponse(temp, temprend) {
+    addButtons(temprend, "response-" + $('.appmessagediv').length);
     temp.removeAttribute('id');
     temprend.removeAttribute('id');
 }
@@ -56,7 +61,9 @@ function stopStreaming(event) {
     fetch('/stop-stream', { method: 'POST' }).then((response) =>
 	response.json()).then((data) => {
 	    if (data.status === 'success') {
-		console.log(data.message); } });
+		console.log(data.message);
+		addButtons(document.getElementById('temprend'), "response-" + $('.appmessagediv').length);
+	    } });
     event.preventDefault();
 }
 
@@ -77,15 +84,17 @@ async function asyncSubmit() {
     let userinput = document.getElementById('input_text').value;
     let upperdiv = document.getElementById('pastmessages');
 
-    escapedinput = htmlEscape(userinput);
-    upperdiv.innerHTML += `<div class="message">
+    if (userinput != "") {
+	escapedinput = htmlEscape(userinput);
+	upperdiv.innerHTML += `<div class="message">
                 <div class="usermessagediv">
                         <div class="usermessage">
                             ${escapedinput}
                         </div>
                 </div>
             </div>`
-    scrollToBottom()
+	scrollToBottom();
+    }
 
     var formData = new FormData(searchForm);
     formData.append('input_text', userinput);
@@ -178,9 +187,10 @@ function applyShakeEffect() {
 function voteUp() {
     $(this).effect('shake', {distance: 5}, 300);
     var linkId = $(this).closest('.vote-icons').data('link-id');
+    let upperdiv = document.getElementById('pastmessages');
     $.get({
         url: '/vote-updown',
-	data: { id: linkId, prob: 1 },
+	data: { id: linkId, prob: 1, past_messages: document.getElementById('pastmessages').innerHTML },
 	function (data) {
             // Handle successful up-vote
             console.log('Up-vote successful for link ID:', linkId);
@@ -190,12 +200,13 @@ function voteUp() {
         });
 }
 
-function voteDown(linkId) {
+function voteDown() {
     $(this).effect('shake', {distance: 5}, 300);
     var linkId = $(this).closest('.vote-icons').data('link-id');
+    let upperdiv = document.getElementById('pastmessages');
     $.get({
         url: '/vote-updown',
-	data: { id: linkId, prob: 0 },
+	data: { id: linkId, prob: 0, past_messages: document.getElementById('pastmessages').innerHTML },
 	function (data) {
             // Handle successful up-vote
             console.log('Down-vote successful for link ID:', linkId);
@@ -203,4 +214,14 @@ function voteDown(linkId) {
             // Handle errors
             console.error('Error occurred.');
         });
+}
+
+function recycle() {
+    $(this).effect('shake', {distance: 5}, 300);
+    let userinput = document.getElementById('input_text').value;
+    if (userinput != "") {
+	$(this).closest('.message').prev().remove();
+    }
+    $(this).closest('.message').remove();
+    asyncSubmit();
 }

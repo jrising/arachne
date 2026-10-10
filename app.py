@@ -14,8 +14,7 @@ import memory
 import memory.default, memory.integration_short_term
 import utils
 from utils import create_chat, fillin_training_end, chat_tokens, chat_tokens_each, chat_tokens_one
-from planner import memory_tool
-from planner.Planner import Planner, PlannerContext
+from chatwrap.planner import PlannerEnvironment, PlannerContext
 
 app = Flask(__name__)
 
@@ -26,7 +25,9 @@ user_id = "jar"
 
 break_streaming = False
 
-Planner.register_tool(**memory_tool.tool_info)
+environment = PlannerEnvironment()
+environment.register_defaults()
+
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -56,17 +57,21 @@ def stream(input_text, past_messages, log_filename, history_text="",
 
     if custom_model:
         messages = create_chat(input_text, past_messages, history_text=history_text, custom_system=custom_system)
-        
+
+        max_completion_tokens = 3000
         if custom_model == 'cheap':
             model = 'gpt-5-nano'
+        elif custom_model == "gpt-5.6-terra-long":
+            model = "gpt-5.6-terra"
+            max_completion_tokens = 28000
         elif custom_model:
             model = custom_model
             
         fillin_training_end(messages, model)
         print(model)
         completion = client.chat.completions.create(model=model, messages=messages,
-                                                    stream=True, max_completion_tokens=3000,
-                                                    temperature=1, verbosity="low")
+                                                    stream=True, max_completion_tokens=max_completion_tokens,
+                                                    temperature=1, verbosity="medium")
 
         response = ""
         for line in completion:
@@ -84,9 +89,10 @@ def stream(input_text, past_messages, log_filename, history_text="",
         planner_context = PlannerContext(
             user_id_for_memory=memory_user_id,
             history_list_raw_data=history_text,
+            current_timestamp=time.time(),
         )
 
-        planner = Planner(conversation_id=log_filename)
+        planner = environment.planner(conversation_id=log_filename)
 
         response_stream = planner.stream_response(
             messages,
@@ -94,13 +100,17 @@ def stream(input_text, past_messages, log_filename, history_text="",
             context=planner_context,
         )
 
+        print(planner.current_plan_text())
+
         response = ""
         for token in response_stream:
             response += token
             yield token
             if break_streaming:
                 break
-            
+
+        print(planner.explain(response_stream.id))
+
     messages.append({"role": "assistant", "content": response})
         
     ## Write all out to logs

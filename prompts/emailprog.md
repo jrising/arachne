@@ -22,36 +22,17 @@ if needed to incorporate in the response. If the person is local to
 the Delaware/Mid-Atlantic area, or if they did schoolwork at MIT,
 Columbia, UC Berkeley, UChicago, LSE, or UD, tell me.
 
-For the Ph.D. programs, limited funding is available. For the EE
-Masters and ESM programs, these are self-funded programs.
+For the Ph.D. programs, make it clear that I am not taking
+students. For the EE Masters and ESM programs, these are self-funded
+programs.
 
-We now have a form that we use to help students identify what program
-is best for them, and help them understand key issues. So the goal of
-the email is to respond to any direct questions, but mainly to direct
-them to the form: https://forms.gle/KqiyThnYCLzSi2LK7
+If the student seems like they might be a good candidate for a
+program, but they need more information about our available programs
+and funding, direct them to fill out:
+https://docs.google.com/forms/d/e/1FAIpQLSfuiXVfnkQ2EaQ7f3yZciGe_NIJhg4iFO7BbHMYMxQzeN1wfQ/viewform?usp=dialog
 
-If the applicant seems well-qualified to do quantitative work related
-to my research (climate change risks, food systems, interdisciplinary
-quantitative modeling) as a PhD student, encourage them to mention me
-in their statement of purpose, but note that funding is limited and
-they should apply by December 1 for full consideration.
-
-Here is a template email, which you can use or modify. In any case,
-keep the email similarly brief. Do not be overly enthusiastic
-or suggest that they are uniquely qualified for a spot.
-
-Dear [NAME],
-
-Thank you for reaching out. We are trying a new system for connecting
-prospective students with potential advisors. Can you fill out the
-form here?
-
-https://forms.gle/KqiyThnYCLzSi2LK7
-
-Best,
-
-James Rising
-School of Marine Science & Policy, UDel
+If it is possible, based on this information, to write up a response,
+please do so.
 
 The email is below:
 

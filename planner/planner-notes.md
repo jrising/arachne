@@ -475,7 +475,7 @@ This is especially appropriate for long-running computations, document ingestion
 
 # “Drop results in” should mean state updates first, visible messages second
 
-I think your instinct is right: completed async work should not have to wait uselessly for the next user prompt.
+Completed async work should not have to wait uselessly for the next user prompt.
 
 But there are two distinct destinations:
 
@@ -592,7 +592,7 @@ That is much safer and more legible than silently rewriting the earlier response
 
 # Add an event bus and a state reducer
 
-Architecturally, I would introduce an append-only event log plus workers.
+Introduce an append-only event log plus workers.
 
 ```text
 Chat/API/UI
@@ -609,3 +609,14 @@ Event log ◄──────── operation workers / tool adapters
     ├── Delivery service ─► chat websocket / notification / email
     └── Learning logger ─► policy-training dataset
 ```
+
+## Additional notes:
+
+ - Under some conditions, the plan should be revised, but the delay
+   associated with that should be included in the eventual evaluation
+   of the original plan.
+   
+ - The entire process should be auditable, temporarily keeping track
+   of full tool results, but permanently keeping track of "source
+   materials": the exact excerpts from tool results that matter to the
+   final responses.
