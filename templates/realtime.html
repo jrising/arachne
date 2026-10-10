@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>OpenAI Realtime Voice Agent</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin-top: 100px; background: #fafafa; }
+        .btn { padding: 15px 30px; font-size: 18px; border-radius: 25px; border: none; cursor: pointer; color: white; margin: 10px; }
+        #startBtn { background-color: #28a745; }
+        #stopBtn { background-color: #dc3545; }
+        #status { font-weight: bold; margin-top: 20px; color: #666; }
+    </style>
+</head>
+<body>
+
+    <h1>OpenAI Realtime WebRTC Agent</h1>
+    <button id="startBtn" class="btn">Start Session</button>
+    <button id="stopBtn" class="btn" disabled>Stop Session</button>
+    <p id="status">Status: Disconnected</p>
+
+    <!-- Invisible audio element to play the stream from OpenAI -->
+    <audio id="agentAudio" autoplay></audio>
+
+    <script>
+        let peerConnection = null;
+        let localStream = null;
+
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const statusText = document.getElementById('status');
+        const agentAudio = document.getElementById('agentAudio');
+
+async function initRealtimeCall() {
+    try {
+        statusText.innerText = "Status: Fetching ephemeral token...";
+        
+        // 1. Fetch token from Flask
+        const sessionResponse = await fetch('/session');
+        const sessionData = await sessionResponse.json();
+        
+        if (sessionData.error) {
+            throw new Error(`Backend Error: ${sessionData.error}`);
+        }
+
+        // Extract production ephemeral secret key 
+        const ephemeralToken = sessionData.value; 
+        if (!ephemeralToken) {
+            throw new Error("Invalid response format: 'value' field missing.");
+        }
+
+        statusText.innerText = "Status: Initializing microphone...";
+
+        // 2. Request microphone permission
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+        // 3. Setup WebRTC Peer Connection
+        peerConnection = new RTCPeerConnection();
+
+        // Bind incoming audio stream to HTML Audio element
+        peerConnection.ontrack = (event) => {
+            agentAudio.srcObject = event.streams[0];
+        };
+
+        // Add local mic audio to connection
+        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+        // 4. Create and set Local SDP Offer
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+
+        statusText.innerText = "Status: Connecting to OpenAI servers...";
+
+        // 5. POST local SDP description directly to OpenAI's live WebRTC call gateway
+        const openAiUrl = "https://api.openai.com/v1/realtime/calls";
+        const response = await fetch(openAiUrl, {
+            method: "POST",
+            body: offer.sdp,
+            headers: {
+                "Authorization": `Bearer ${ephemeralToken}`,
+                "Content-Type": "application/sdp"
+            }
+        });
+
+        if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`OpenAI Connection Rejected: ${errText}`);
+        }
+
+        // 6. Finalize peer-to-peer audio connection
+        const answerSdp = await response.text();
+        const answer = { type: "answer", sdp: answerSdp };
+        await peerConnection.setRemoteDescription(answer);
+
+        statusText.innerText = "Status: Connected! You can start talking now.";
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+
+    } catch (err) {
+        console.error(err);
+        statusText.innerText = `Status Error: ${err.message}`;
+        stopRealtimeCall();
+    }
+}
+
+        function stopRealtimeCall() {
+            if (peerConnection) peerConnection.close();
+            if (localStream) localStream.getTracks().forEach(track => track.stop());
+            
+            statusText.innerText = "Status: Disconnected";
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+        }
+
+        startBtn.addEventListener('click', initRealtimeCall);
+        stopBtn.addEventListener('click', stopRealtimeCall);
+    </script>
+</body>
+</html>
