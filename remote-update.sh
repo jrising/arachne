@@ -247,9 +247,9 @@ cd -- "$remote_path"
 
 # `git pull --ff-only` refuses unexpected merge commits. This is desirable:
 # the server should not contain hand-edited Git-tracked code.
-git fetch origin "$branch"
+git -c fetch.recurseSubmodules=false fetch origin "$branch"
 git checkout "$branch"
-git pull --ff-only origin "$branch"
+git -c fetch.recurseSubmodules=false pull --ff-only origin "$branch"
 
 git submodule sync --recursive
 git submodule update --init --recursive
@@ -276,7 +276,7 @@ printf '%s\n' "$deploy_id" > last_updated.txt
 # If this is a DreamHost Passenger application, uncomment the appropriate
 # restart mechanism if needed:
 #
-# touch tmp/restart.txt
+touch tmp/restart.txt
 #
 # Or, depending on your setup:
 # touch passenger_wsgi.py

@@ -764,3 +764,278 @@
 > ```
 > 
 > Do **not** ignore `requirements.txt`; that file should be committed.
+**user**:
+> Okay, it was working up until the following from the server:
+> Updating code and dependencies on DreamHost...
+> From https://github.com/jrising/arachne
+>  * branch            master     -> FETCH_HEAD
+>    2214c16..3102215  master     -> origin/master
+> Fetching submodule chatwrap
+> remote: Invalid username or token. Password authentication is not supported for Git operations.
+> fatal: Authentication failed for 'https://github.com/jrising/chatwrap.git/'
+> fatal: could not read Username for 'https://github.com': No such device or address
+> Errors during submodule fetch:
+> 	chatwrap
+> 	chatwrap
+> 
+> Deployment failed.
+**assistant**:
+> This is a **submodule authentication problem**, not a Python/dependency problem.
+> 
+> Your server is trying to fetch:
+> 
+> ```text
+> https://github.com/jrising/chatwrap.git/
+> ```
+> 
+> but GitHub no longer allows password auth over HTTPS, and DreamHost has no interactive way to ask for a username/token. Best fix: make the `chatwrap` submodule use **SSH**, and give the server an SSH key that can read that repo.
+> 
+> ## 1. Change `chatwrap` submodule URL locally
+> 
+> From your local `arachne` repo:
+> 
+> ```bash
+> cd ~/projects/arachne
+> 
+> git config -f .gitmodules submodule.chatwrap.url git@github.com:jrising/chatwrap.git
+> git submodule sync chatwrap
+> 
+> git add .gitmodules
+> git commit -m "Use SSH URL for chatwrap submodule"
+> git push origin HEAD:master
+> ```
+> 
+> Use `main` instead of `master` if that is actually your deployment branch, but your log shows `master`.
+> 
+> ## 2. Add an SSH key on DreamHost for GitHub
+> 
+> SSH into DreamHost:
+> 
+> ```bash
+> ssh existencia
+> ```
+> 
+> Create a key if one does not already exist:
+> 
+> ```bash
+> ssh-keygen -t ed25519 -C "dreamhost-arachne-chatwrap" -f ~/.ssh/github_chatwrap
+> ```
+> 
+> Press enter for no passphrase, unless you have an agent setup.
+> 
+> Then configure SSH:
+> 
+> ```bash
+> cat >> ~/.ssh/config <<'EOF'
+> 
+> Host github.com
+>     HostName github.com
+>     User git
+>     IdentityFile ~/.ssh/github_chatwrap
+>     IdentitiesOnly yes
+> EOF
+> 
+> chmod 700 ~/.ssh
+> chmod 600 ~/.ssh/config ~/.ssh/github_chatwrap
+> chmod 644 ~/.ssh/github_chatwrap.pub
+> ```
+> 
+> Now print the public key:
+> 
+> ```bash
+> cat ~/.ssh/github_chatwrap.pub
+> ```
+> 
+> Add that public key in GitHub under:
+> 
+> ```text
+> jrising/chatwrap → Settings → Deploy keys → Add deploy key
+> ```
+> 
+> Read-only is enough unless the server needs to push, which it should not.
+> 
+> Test from DreamHost:
+> 
+> ```bash
+> ssh -T git@github.com
+> ```
+> 
+> A successful GitHub response often says something like “Hi jrising/chatwrap! You've successfully authenticated…” or “Hi USERNAME! … shell access is not provided.”
+> 
+> ## 3. Adjust the server Git commands in your script
+> 
+> Because your server seems to fetch submodules during the parent fetch, make this change to avoid failing before the updated `.gitmodules` is pulled.
+> 
+> Replace this in the remote block:
+> 
+> ```bash
+> git fetch origin "$branch"
+> git checkout "$branch"
+> git pull --ff-only origin "$branch"
+> ```
+> 
+> with:
+> 
+> ```bash
+> git -c fetch.recurseSubmodules=false fetch origin "$branch"
+> git checkout "$branch"
+> git -c fetch.recurseSubmodules=false pull --ff-only origin "$branch"
+> 
+> git submodule sync --recursive
+> git submodule update --init --recursive
+> ```
+> 
+> Important: **do not** use:
+> 
+> ```bash
+> git submodule update --remote
+> ```
+> 
+> unless you want the server to float to the newest `chatwrap` commit. For reproducible deployment, the parent `arachne` repo should pin the exact `chatwrap` commit.
+> 
+> ## 4. If GitHub refuses the same key elsewhere
+> 
+> GitHub deploy keys are normally tied to one repository. Since this key is only for `chatwrap`, that is fine.
+> 
+> If later you need SSH access to multiple private repos from DreamHost, you may want either:
+> 
+> - a GitHub machine-user account with one SSH key, or
+> - separate SSH keys plus host aliases like `github.com-chatwrap`.
+> 
+> For now, the simple deploy-key setup above should solve this failure.
+**user**:
+> Adding the public key worked (at least, I got the right message), and I made the other changes, but on trying again I see:
+> ```
+> % ./remote-update.sh 
+> committing and pushing local code
+> ## master...origin/master
+>  M logs/log_2026-10-11_20-25-46_24307.log
+>  M remote-update.sh
+> Generating requirements.txt from local virtual environment...
+> requirements.txt already up to date.
+> Committing and pushing submodules...
+> Updating submodule: chatwrap
+> No committed file changes in submodule: chatwrap
+> The authenticity of host 'github.com (140.82.114.4)' can't be established.
+> ED25519 key fingerprint is: SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU
+> This key is not known by any other names.
+> Are you sure you want to continue connecting (yes/no/[fingerprint])? yes
+> Warning: Permanently added 'github.com' (ED25519) to the list of known hosts.
+> git@github.com: Permission denied (publickey).
+> fatal: Could not read from remote repository.
+> 
+> Please make sure you have the correct access rights
+> and the repository exists.
+> 
+> Deployment failed.
+>   Status:  128
+>   Step:    committing and pushing local code
+>   Line:    128
+>   Command: git -C "$submodule_path" push origin "HEAD:$submodule_branch"
+> 
+> Deployment failed (exit status 128).
+> No remote backup was completed, so automatic rollback is unavailable.
+> ```
+**assistant**:
+> This failure is now happening **locally**, before the server is touched:
+> 
+> ```text
+> Command: git -C "$submodule_path" push origin "HEAD:$submodule_branch"
+> ```
+> 
+> So the DreamHost deploy key worked, but your **local machine** cannot push to `git@github.com:jrising/chatwrap.git`.
+> 
+> The deploy key you added on GitHub is for the **server reading** `chatwrap`. It does not give your laptop permission to push.
+> 
+> ## Fix local GitHub access for `chatwrap`
+> 
+> On your local machine, check:
+> 
+> ```bash
+> cd ~/projects/arachne/chatwrap
+> git remote -v
+> ssh -T git@github.com
+> ```
+> 
+> If `ssh -T` says permission denied, add your **local machine’s** SSH public key to your GitHub account:
+> 
+> ```bash
+> ls ~/.ssh/*.pub
+> cat ~/.ssh/id_ed25519.pub
+> ```
+> 
+> Then add that key at:
+> 
+> ```text
+> GitHub → Settings → SSH and GPG keys → New SSH key
+> ```
+> 
+> Not as a deploy key on the repo — as an account key, because your local machine needs push permission.
+> 
+> If you do not have a local key:
+> 
+> ```bash
+> ssh-keygen -t ed25519 -C "local-arachne-deploy"
+> cat ~/.ssh/id_ed25519.pub
+> ```
+> 
+> Then test again:
+> 
+> ```bash
+> ssh -T git@github.com
+> git -C ~/projects/arachne/chatwrap push origin HEAD:master
+> ```
+> 
+> Use the actual `chatwrap` branch if not `master`.
+> 
+> ## Improve the script: don’t push submodules unnecessarily
+> 
+> Right now the script pushes `chatwrap` even when it says:
+> 
+> ```text
+> No committed file changes in submodule: chatwrap
+> ```
+> 
+> That is over-aggressive. Replace this line:
+> 
+> ```bash
+> git -C "$submodule_path" push origin "HEAD:$submodule_branch"
+> ```
+> 
+> with:
+> 
+> ```bash
+> upstream="$(git -C "$submodule_path" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+> 
+> if [[ -z "$upstream" ]]; then
+>     echo "No upstream configured for submodule $submodule; pushing and setting upstream."
+>     git -C "$submodule_path" push -u origin "HEAD:$submodule_branch"
+> else
+>     ahead_count="$(git -C "$submodule_path" rev-list --count "$upstream..HEAD")"
+> 
+>     if [[ "$ahead_count" -gt 0 ]]; then
+>         echo "Submodule $submodule is $ahead_count commit(s) ahead of $upstream; pushing."
+>         git -C "$submodule_path" push
+>     else
+>         echo "Submodule $submodule has no unpushed commits."
+>     fi
+> fi
+> ```
+> 
+> ## Also improve the status label
+> 
+> Before the submodule loop, set:
+> 
+> ```bash
+> CURRENT_STEP="committing and pushing submodules"
+> ```
+> 
+> Inside the loop, add:
+> 
+> ```bash
+> CURRENT_STEP="committing and pushing submodule: $submodule"
+> ```
+> 
+> That way future failures won’t misleadingly say only “committing and pushing local code.”
+> 
+> In short: DreamHost now likely has read access; your laptop still needs write access to `chatwrap`, or the script should skip pushing when there are no unpushed submodule commits.
