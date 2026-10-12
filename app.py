@@ -343,7 +343,6 @@ def completion_reader():
             with open(metadatapath, 'w') as fp:
                 json.dump(metadata, fp, indent=4)
         except:
-            print("A")
             return "Cannot load metadata."
             
         try:
@@ -353,11 +352,9 @@ def completion_reader():
             page = reader.pages[nextpage - 1]
             text = page.extract_text(extraction_mode="layout", layout_mode_space_vertically=False, layout_mode_strip_rotated=False)
         except:
-            print("B")
             return "Cannot read PDF."
             
         try:
-            print("OK")
             ## Process images
             imagetexts = []
             for count, image_file_object in enumerate(page.images):
@@ -381,11 +378,9 @@ def completion_reader():
 
                 imagetexts.append(completion.choices[0].message.content)
         except:
-            print("C")
             return "Cannot process images."
 
         try:
-            print("KK")
             if nextpage == 1:
                 prompt = "Here is the first page of a PDF, in a text-based layout:\n===\n" + text + "\n===\n"
             else:
@@ -403,7 +398,6 @@ def completion_reader():
 
             return Response(strm, mimetype='text/event-stream')
         except:
-            print("D")
             return "Cannot create translation."
     else:
         return completion()
