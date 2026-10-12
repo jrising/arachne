@@ -8,7 +8,7 @@ HOST="existencia"
 LOCAL_PATH="$HOME/projects/arachne"
 
 # Use absolute paths on the remote server.
-REMOTE_PATH="/home/jrising/projects/arachne"
+REMOTE_PATH="/home/jrising/projects/arachne.existencia.org"
 BACKUP_ROOT="/home/jrising/projects/arachne-backups"
 
 BRANCH="master"
