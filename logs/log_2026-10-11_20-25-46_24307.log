@@ -1,0 +1,766 @@
+**user**:
+> You helped me design a script to easily send all updates to a remote server, with the potential for roll-back. Here's the current script:
+> ```
+> #!/usr/bin/env bash
+> set -Eeuo pipefail
+> 
+> # ---- Configuration ----------------------------------------------------------
+> 
+> HOST="existencia"
+> 
+> LOCAL_PATH="$HOME/projects/arachne"
+> 
+> # Use absolute paths on the remote server.
+> REMOTE_PATH="/home/jrising/projects/arachne"
+> BACKUP_ROOT="/home/jrising/projects/arachne-backups"
+> 
+> BRANCH="main"
+> UPDATE_CHECK_URL="https://arachne.existencia.org/checkupdate"
+> 
+> # Files/directories that are deliberately not managed by Git, but should be
+> # copied from local to remote during deployment.
+> FILE_PATHS=(
+>     "logs"
+>     "database"
+>     "knowledge/entries.txt"
+>     "memory/bayesian.txt"
+> )
+> 
+> # Unique deployment marker, e.g. 20260803T142530Z-12345
+> DEPLOY_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+> BACKUP_PATH="$BACKUP_ROOT/$DEPLOY_ID"
+> BACKUP_READY=0
+> 
+> # ---- Rollback ---------------------------------------------------------------
+> 
+> rollback() {
+>     local status=$?
+> 
+>     # Do not invoke this trap again if rollback itself encounters an error.
+>     trap - ERR
+> 
+>     echo >&2
+>     echo "Deployment failed (exit status $status)." >&2
+> 
+>     if [[ "$BACKUP_READY" -eq 1 ]]; then
+>         echo "Restoring remote backup: $BACKUP_PATH" >&2
+> 
+>         ssh "$HOST" bash -s -- "$REMOTE_PATH" "$BACKUP_PATH" <<'REMOTE'
+> set -Eeuo pipefail
+> 
+> remote_path=$1
+> backup_path=$2
+> 
+> if [[ ! -d "$backup_path" ]]; then
+>     echo "Cannot roll back: backup does not exist: $backup_path" >&2
+>     exit 1
+> fi
+> 
+> rm -rf -- "$remote_path"
+> cp -a -- "$backup_path" "$remote_path"
+> 
+> echo "Rollback complete."
+> REMOTE
+>     else
+>         echo "No remote backup was completed, so automatic rollback is unavailable." >&2
+>     fi
+> 
+>     # Optional: macOS desktop notification. Safe to ignore on non-macOS systems.
+>     osascript \
+>         -e 'display notification "Deployment failed; rollback attempted." with title "Arachne Deployment"' \
+>         2>/dev/null || true
+> 
+>     exit "$status"
+> }
+> 
+> # Define this before doing deployment work.
+> trap rollback ERR
+> 
+> # ---- Local Git push ---------------------------------------------------------
+> 
+> echo "Committing and pushing local code..."
+> 
+> git -C "$LOCAL_PATH" add -A
+> 
+> # `git commit` exits nonzero if there is nothing to commit, so test first.
+> if ! git -C "$LOCAL_PATH" diff --cached --quiet; then
+>     git -C "$LOCAL_PATH" commit -m "Automated deployment: $DEPLOY_ID"
+>     git -C "$LOCAL_PATH" push origin "$BRANCH"
+> else
+>     echo "No Git changes to commit."
+> fi
+> 
+> # ---- Remote backup ----------------------------------------------------------
+> 
+> echo "Creating remote backup..."
+> 
+> ssh "$HOST" bash -s -- "$REMOTE_PATH" "$BACKUP_ROOT" "$BACKUP_PATH" <<'REMOTE'
+> set -Eeuo pipefail
+> 
+> remote_path=$1
+> backup_root=$2
+> backup_path=$3
+> 
+> if [[ ! -d "$remote_path" ]]; then
+>     echo "Remote project directory does not exist: $remote_path" >&2
+>     exit 1
+> fi
+> 
+> mkdir -p -- "$backup_root"
+> 
+> # The backup path must not already exist; this avoids mixing deployments.
+> if [[ -e "$backup_path" ]]; then
+>     echo "Backup path unexpectedly already exists: $backup_path" >&2
+>     exit 1
+> fi
+> 
+> cp -a -- "$remote_path" "$backup_path"
+> 
+> echo "Backup created at: $backup_path"
+> REMOTE
+> 
+> BACKUP_READY=1
+> 
+> # ---- Sync non-Git state -----------------------------------------------------
+> 
+> echo "Syncing non-Git files and directories..."
+> 
+> for path in "${FILE_PATHS[@]}"; do
+>     local_item="$LOCAL_PATH/$path"
+>     remote_item="$REMOTE_PATH/$path"
+> 
+>     if [[ ! -e "$local_item" ]]; then
+>         echo "Warning: skipping missing local item: $local_item" >&2
+>         continue
+>     fi
+> 
+>     # Ensure the remote parent directory exists, especially for individual files.
+>     remote_parent="$(dirname "$remote_item")"
+>     ssh "$HOST" "mkdir -p -- $(printf '%q' "$remote_parent")"
+> 
+>     if [[ -d "$local_item" ]]; then
+>         # A trailing slash means “copy the directory's contents,” rather than
+>         # potentially creating logs/logs or database/database.
+>         rsync -az --delete \
+>             "$local_item/" \
+>             "$HOST:$remote_item/"
+>     else
+>         rsync -az \
+>             "$local_item" \
+>             "$HOST:$remote_item"
+>     fi
+> done
+> 
+> # ---- Deploy on remote -------------------------------------------------------
+> 
+> echo "Updating code and dependencies on DreamHost..."
+> 
+> ssh "$HOST" bash -s -- \
+>     "$REMOTE_PATH" \
+>     "$BRANCH" \
+>     "$DEPLOY_ID" <<'REMOTE'
+> set -Eeuo pipefail
+> 
+> remote_path=$1
+> branch=$2
+> deploy_id=$3
+> 
+> cd -- "$remote_path"
+> 
+> # `git pull --ff-only` refuses unexpected merge commits. This is desirable:
+> # the server should not contain hand-edited Git-tracked code.
+> git fetch origin "$branch"
+> git checkout "$branch"
+> git pull --ff-only origin "$branch"
+> 
+> # Do not `source venv/bin/activate` in deployment scripts.
+> # Calling the virtual environment's Python directly is clearer and safer.
+> if [[ ! -x "venv/bin/python" ]]; then
+>     echo "Remote virtual environment missing; creating it."
+>     python3 -m venv venv
+> fi
+> 
+> venv/bin/python -m pip install --upgrade pip
+> 
+> # This is conditional until you adopt a dependency file.
+> if [[ -f "requirements.txt" ]]; then
+>     venv/bin/python -m pip install -r requirements.txt
+> else
+>     echo "No requirements.txt found; leaving remote virtual environment unchanged."
+> fi
+> 
+> # This is the value that /checkupdate should return.
+> printf '%s\n' "$deploy_id" > last_updated.txt
+> 
+> # If this is a DreamHost Passenger application, uncomment the appropriate
+> # restart mechanism if needed:
+> #
+> # touch tmp/restart.txt
+> #
+> # Or, depending on your setup:
+> # touch passenger_wsgi.py
+> REMOTE
+> 
+> # ---- Verify that the deployed application is live --------------------------
+> 
+> echo "Checking deployment status..."
+> 
+> # `-f`: treat HTTP 4xx/5xx as an error
+> # `-sS`: silent except for meaningful errors
+> #
+> # grep -F: fixed-string matching
+> # grep -x: require the entire response line to equal DEPLOY_ID
+> if curl --fail --silent --show-error "$UPDATE_CHECK_URL" |
+>     tr -d '\r' |
+>     grep -Fqx "$DEPLOY_ID"; then
+> 
+>     echo "Deployment successful: $DEPLOY_ID"
+>     trap - ERR
+> 
+>     osascript \
+>         -e 'display notification "Deployment succeeded." with title "Arachne Deployment"' \
+>         2>/dev/null || true
+> else
+>     echo "Update check did not return expected deployment ID: $DEPLOY_ID" >&2
+>     exit 1
+> fi
+> ```
+> 
+> Now I see I was overzealous:
+> 1. There are subdirectories that are other git repos. `Llama-2-Open-Source-LLM-CPU-Inference`, `chatwrap`, `stable-diffusion-webui`.
+> 2. There are also files and subdirectories I don't want to commit. `appx.py`, "image*.png", "venv*".
+> 3. The script eventually fails with:
+> ```
+> error: src refspec main does not match any
+> error: failed to push some refs to 'https://github.com/jrising/arachne.git'
+> 
+> Deployment failed (exit status 1).
+> No remote backup was completed, so automatic rollback is unavailable.
+> ```
+> I think I can roll things back by hand by just turning the most recent unpushed commit back into unstaged changes. But I don't know where things failed. The last message from the script seems to be "Committing and pushing local code...". I don't know if it's possible to update the script to give any more information on where things failed, in case I need to manual intervene in the future.
+**assistant**:
+> Yes — this failed during the **local Git push**, before any remote backup was created. The key line is:
+> 
+> ```text
+> error: src refspec main does not match any
+> ```
+> 
+> That usually means your local repo does **not** have a branch named `main`. You may be on `master`, or another branch, while the script says:
+> 
+> ```bash
+> BRANCH="main"
+> git -C "$LOCAL_PATH" push origin "$BRANCH"
+> ```
+> 
+> So the commit may have succeeded locally, then the push failed.
+> 
+> ## 1. To undo the most recent local commit into unstaged changes
+> 
+> First inspect:
+> 
+> ```bash
+> cd ~/projects/arachne
+> git status
+> git log --oneline -5
+> git branch --show-current
+> ```
+> 
+> If the top commit is the automated deployment commit and you want to undo it while keeping all file changes:
+> 
+> ```bash
+> git reset --mixed HEAD~1
+> ```
+> 
+> That turns the commit back into ordinary unstaged changes.
+> 
+> If you only want to unstage but keep the commit, don’t use this. But from what you described, `git reset --mixed HEAD~1` is probably right.
+> 
+> ## 2. Add ignores for things you never want committed
+> 
+> Put these in `.gitignore`:
+> 
+> ```gitignore
+> # Nested repos / external projects
+> Llama-2-Open-Source-LLM-CPU-Inference/
+> chatwrap/
+> stable-diffusion-webui/
+> 
+> # Local experiments / generated files
+> appx.py
+> image*.png
+> 
+> # Virtual environments
+> venv/
+> venv*/
+> ```
+> 
+> Then remove anything already staged/tracked by accident:
+> 
+> ```bash
+> git rm -r --cached Llama-2-Open-Source-LLM-CPU-Inference chatwrap stable-diffusion-webui 2>/dev/null || true
+> git rm --cached appx.py image*.png 2>/dev/null || true
+> git rm -r --cached venv venv* 2>/dev/null || true
+> ```
+> 
+> Then check carefully:
+> 
+> ```bash
+> git status
+> ```
+> 
+> ## 3. Fix the push line
+> 
+> If you want the script to deploy whatever branch you are currently on to remote `main`, use:
+> 
+> ```bash
+> git -C "$LOCAL_PATH" push origin "HEAD:$BRANCH"
+> ```
+> 
+> instead of:
+> 
+> ```bash
+> git -C "$LOCAL_PATH" push origin "$BRANCH"
+> ```
+> 
+> That avoids the “local branch named main does not exist” problem.
+> 
+> Alternatively, if you intend the local branch really to be `main`, rename/check it out:
+> 
+> ```bash
+> git branch -M main
+> git push -u origin main
+> ```
+> 
+> ## 4. Improve failure diagnostics
+> 
+> Add this near the top after configuration:
+> 
+> ```bash
+> CURRENT_STEP="initializing"
+> 
+> fail_report() {
+>     local status=$1
+>     local line=$2
+>     local command=$3
+> 
+>     echo >&2
+>     echo "Deployment failed." >&2
+>     echo "  Status:  $status" >&2
+>     echo "  Step:    $CURRENT_STEP" >&2
+>     echo "  Line:    $line" >&2
+>     echo "  Command: $command" >&2
+> }
+> ```
+> 
+> Then modify `rollback()` to accept diagnostics:
+> 
+> ```bash
+> rollback() {
+>     local status=${1:-$?}
+>     local line=${2:-unknown}
+>     local command=${3:-unknown}
+> 
+>     trap - ERR
+> 
+>     fail_report "$status" "$line" "$command"
+> ```
+> 
+> And replace the trap with:
+> 
+> ```bash
+> trap 'rollback "$?" "$LINENO" "$BASH_COMMAND"' ERR
+> ```
+> 
+> Then before each major block, set:
+> 
+> ```bash
+> CURRENT_STEP="committing and pushing local code"
+> ```
+> 
+> For example:
+> 
+> ```bash
+> CURRENT_STEP="committing and pushing local code"
+> echo "Committing and pushing local code..."
+> ```
+> 
+> Use similar values before backup, rsync, remote deploy, and verification.
+> 
+> ## 5. I’d also make the Git block more explicit
+> 
+> Replace your local Git section with something like:
+> 
+> ```bash
+> CURRENT_STEP="committing and pushing local code"
+> echo "Committing and pushing local code..."
+> 
+> git -C "$LOCAL_PATH" status --short --branch
+> 
+> git -C "$LOCAL_PATH" add -A
+> 
+> if ! git -C "$LOCAL_PATH" diff --cached --quiet; then
+>     git -C "$LOCAL_PATH" commit -m "Automated deployment: $DEPLOY_ID"
+> else
+>     echo "No Git changes to commit."
+> fi
+> 
+> echo "Pushing current HEAD to origin/$BRANCH..."
+> git -C "$LOCAL_PATH" push origin "HEAD:$BRANCH"
+> ```
+> 
+> This gives you better logs and fixes the immediate refspec problem. The most important permanent fix, though, is adding the `.gitignore` entries so the deployment script is not trying to manage giant nested repos, virtualenvs, generated images, or scratch files.
+**user**:
+> Of the three subrepos, chatwrap is the one that needs to be maintained consistently across the server and locally. Does the current script do this?
+> 
+> Also, venv2026 is the new location where an accurate representation of the python package environment is stored. How is this currently synced across to the server? (On the server, it's called venv instead, but the server does also have a virtual environment.)
+**assistant**:
+> No, the current script does **not** reliably keep `chatwrap` consistent across local and server.
+> 
+> ## 1. What happens to `chatwrap` now?
+> 
+> Currently, `chatwrap` is not in:
+> 
+> ```bash
+> FILE_PATHS=(...)
+> ```
+> 
+> so it is **not rsynced**.
+> 
+> It is also a nested Git repository. With:
+> 
+> ```bash
+> git -C "$LOCAL_PATH" add -A
+> ```
+> 
+> Git may treat `chatwrap` as an **embedded Git repo / gitlink**, not as ordinary files. That means the parent `arachne` repo may record “`chatwrap` should be at commit XYZ,” but the deployment script does **not** run:
+> 
+> ```bash
+> git submodule update --init --recursive
+> ```
+> 
+> nor does it independently `git pull` inside `chatwrap`.
+> 
+> So unless you have additional machinery not shown here, `chatwrap` is **not being kept in sync**. The server’s `chatwrap` could easily remain stale.
+> 
+> My recommendation: make `chatwrap` an explicit submodule or explicit separately-managed repo. For deployment, I’d probably add a remote step like:
+> 
+> ```bash
+> if [[ -d "chatwrap/.git" ]]; then
+>     git -C chatwrap fetch origin
+>     git -C chatwrap checkout main
+>     git -C chatwrap pull --ff-only origin main
+> fi
+> ```
+> 
+> Or, if `chatwrap` should track the exact commit referenced by `arachne`, use a proper submodule and add:
+> 
+> ```bash
+> git submodule update --init --recursive
+> ```
+> 
+> after the parent repo pull.
+> 
+> ## 2. What happens to `venv2026` now?
+> 
+> The current script does **not** intentionally sync `venv2026` to the server.
+> 
+> This part:
+> 
+> ```bash
+> FILE_PATHS=(
+>     "logs"
+>     "database"
+>     "knowledge/entries.txt"
+>     "memory/bayesian.txt"
+> )
+> ```
+> 
+> does not include `venv2026`.
+> 
+> And the remote deploy section manages only this server-side environment:
+> 
+> ```bash
+> if [[ ! -x "venv/bin/python" ]]; then
+>     python3 -m venv venv
+> fi
+> 
+> venv/bin/python -m pip install --upgrade pip
+> 
+> if [[ -f "requirements.txt" ]]; then
+>     venv/bin/python -m pip install -r requirements.txt
+> else
+>     echo "No requirements.txt found; leaving remote virtual environment unchanged."
+> fi
+> ```
+> 
+> So the server’s `venv` is updated **only from `requirements.txt`**, if that file exists. If there is no `requirements.txt`, the server environment is basically left as-is, apart from `pip` being upgraded.
+> 
+> If `venv2026` is your accurate local environment, the deploy script currently ignores that fact.
+> 
+> ## 3. What I would do
+> 
+> Do **not** rsync `venv2026` itself. Virtual environments are usually machine-specific and brittle across systems.
+> 
+> Instead, generate a dependency file from `venv2026`, commit that, and let the server rebuild/update `venv` from it.
+> 
+> For example, locally:
+> 
+> ```bash
+> cd ~/projects/arachne
+> venv2026/bin/python -m pip freeze > requirements.txt
+> ```
+> 
+> Then the existing remote section will install from `requirements.txt`.
+> 
+> Also add this to `.gitignore`:
+> 
+> ```gitignore
+> venv/
+> venv*/
+> venv2026/
+> ```
+> 
+> while keeping `requirements.txt` tracked.
+> 
+> So: `chatwrap` is not reliably synced right now, and `venv2026` is not synced except indirectly if you manually export its packages into `requirements.txt`.
+> 
+> No.
+> 
+> ## `chatwrap`
+> 
+> The current script does **not** deliberately keep `chatwrap` consistent between local and server.
+> 
+> It only syncs these non-Git paths:
+> 
+> ```bash
+> FILE_PATHS=(
+>     "logs"
+>     "database"
+>     "knowledge/entries.txt"
+>     "memory/bayesian.txt"
+> )
+> ```
+> 
+> So `chatwrap` is not copied by the `rsync` section.
+> 
+> Because `chatwrap` is a separate Git repo nested inside `arachne`, the parent repo will not normally commit all of `chatwrap`’s files as part of the parent project. At most, depending on how it is configured, the parent repo may record it as a gitlink/submodule-like entry. But your remote deployment section only does this in the parent repo:
+> 
+> ```bash
+> git fetch origin "$branch"
+> git checkout "$branch"
+> git pull --ff-only origin "$branch"
+> ```
+> 
+> It does **not** run anything like:
+> 
+> ```bash
+> git -C chatwrap pull
+> ```
+> 
+> or:
+> 
+> ```bash
+> git submodule update --init --recursive
+> ```
+> 
+> So the server’s `chatwrap` can easily be stale even after deployment.
+> 
+> If `chatwrap` needs consistency, you should make it explicit. Either:
+> 
+> ### Option A: manage `chatwrap` as its own repo
+> 
+> Add this to the remote deployment block after updating the parent repo:
+> 
+> ```bash
+> if [[ -d "chatwrap/.git" ]]; then
+>     echo "Updating chatwrap..."
+>     git -C chatwrap fetch origin
+>     git -C chatwrap pull --ff-only
+> else
+>     echo "Warning: chatwrap/.git not found; chatwrap was not updated." >&2
+> fi
+> ```
+> 
+> ### Option B: make it a proper Git submodule
+> 
+> Then add:
+> 
+> ```bash
+> git submodule update --init --recursive
+> ```
+> 
+> after the parent repo pull.
+> 
+> I slightly prefer Option A if `chatwrap` is an independently edited working repo; I prefer Option B if `arachne` should pin `chatwrap` to an exact known commit.
+> 
+> ## `venv2026`
+> 
+> The current script also does **not** sync `venv2026` itself.
+> 
+> The only server virtualenv logic is:
+> 
+> ```bash
+> if [[ ! -x "venv/bin/python" ]]; then
+>     python3 -m venv venv
+> fi
+> 
+> venv/bin/python -m pip install --upgrade pip
+> 
+> if [[ -f "requirements.txt" ]]; then
+>     venv/bin/python -m pip install -r requirements.txt
+> else
+>     echo "No requirements.txt found; leaving remote virtual environment unchanged."
+> fi
+> ```
+> 
+> So the server’s `venv` is updated only from `requirements.txt`, if that file exists. Your local `venv2026` is ignored unless you generate `requirements.txt` from it first.
+> 
+> I would **not** rsync `venv2026` to the server as `venv`; virtualenvs often contain absolute paths and platform-specific binaries. Better:
+> 
+> ```bash
+> cd "$HOME/projects/arachne"
+> venv2026/bin/python -m pip freeze > requirements.txt
+> git add requirements.txt
+> git commit -m "Update Python requirements"
+> ```
+> 
+> Then the existing deployment script will cause the server’s `venv` to install those packages.
+> 
+> So the short version is:
+> 
+> - `chatwrap`: **not currently kept consistent**; add explicit Git update or submodule handling.
+> - `venv2026`: **not synced directly**; only represented on the server if you export it to `requirements.txt`, which the script installs into remote `venv`.
+**user**:
+> I think that chatwrap is considered a submodule. When I ask for status and it has changes I see something like:
+> `modified:   chatwrap (new commits)`
+> 
+> What should I add to keep it synced between the servers?
+> 
+> As far as venv2026 <-> venv, can you suggest a specific add that automatically generates the requirements.txt file and keeps it up to date?
+**assistant**:
+> Yes: `modified: chatwrap (new commits)` means `chatwrap` is acting as a Git submodule. To keep it synced, you need **two things**:
+> 
+> 1. Push the `chatwrap` submodule commit to its own remote.
+> 2. Commit/push the parent repo’s updated pointer to that `chatwrap` commit.
+> 3. On the server, run `git submodule update --init --recursive` after pulling the parent repo.
+> 
+> ## Add this config near the top
+> 
+> ```bash
+> SUBMODULE_PATHS=(
+>     "chatwrap"
+> )
+> 
+> LOCAL_VENV_PATH="$LOCAL_PATH/venv2026"
+> REQUIREMENTS_FILE="$LOCAL_PATH/requirements.txt"
+> ```
+> 
+> ## Add this before `git -C "$LOCAL_PATH" add -A`
+> 
+> Put it in the **Local Git push** section, before staging the parent repo:
+> 
+> ```bash
+> echo "Generating requirements.txt from local virtual environment..."
+> 
+> if [[ ! -x "$LOCAL_VENV_PATH/bin/python" ]]; then
+>     echo "Local virtual environment Python not found: $LOCAL_VENV_PATH/bin/python" >&2
+>     exit 1
+> fi
+> 
+> tmp_requirements="$(mktemp)"
+> "$LOCAL_VENV_PATH/bin/python" -m pip freeze > "$tmp_requirements"
+> 
+> if [[ ! -f "$REQUIREMENTS_FILE" ]] || ! cmp -s "$tmp_requirements" "$REQUIREMENTS_FILE"; then
+>     mv "$tmp_requirements" "$REQUIREMENTS_FILE"
+>     echo "Updated requirements.txt from venv2026."
+> else
+>     rm "$tmp_requirements"
+>     echo "requirements.txt already up to date."
+> fi
+> ```
+> 
+> This makes `requirements.txt` the bridge between local `venv2026` and server `venv`. The server will still use:
+> 
+> ```bash
+> venv/bin/python -m pip install -r requirements.txt
+> ```
+> 
+> which is the right pattern.
+> 
+> ## Add this before staging the parent repo
+> 
+> Also before:
+> 
+> ```bash
+> git -C "$LOCAL_PATH" add -A
+> ```
+> 
+> add:
+> 
+> ```bash
+> echo "Committing and pushing submodules..."
+> 
+> for submodule in "${SUBMODULE_PATHS[@]}"; do
+>     submodule_path="$LOCAL_PATH/$submodule"
+> 
+>     if [[ ! -d "$submodule_path/.git" && ! -f "$submodule_path/.git" ]]; then
+>         echo "Expected submodule Git metadata not found: $submodule_path" >&2
+>         exit 1
+>     fi
+> 
+>     echo "Updating submodule: $submodule"
+> 
+>     git -C "$submodule_path" add -A
+> 
+>     if ! git -C "$submodule_path" diff --cached --quiet; then
+>         git -C "$submodule_path" commit -m "Automated deployment: $DEPLOY_ID"
+>     else
+>         echo "No committed file changes in submodule: $submodule"
+>     fi
+> 
+>     submodule_branch="$(git -C "$submodule_path" branch --show-current)"
+> 
+>     if [[ -z "$submodule_branch" ]]; then
+>         echo "Submodule is in detached HEAD state: $submodule" >&2
+>         echo "Check it out to a branch before deploying." >&2
+>         exit 1
+>     fi
+> 
+>     git -C "$submodule_path" push origin "HEAD:$submodule_branch"
+> done
+> ```
+> 
+> Then your existing parent repo block:
+> 
+> ```bash
+> git -C "$LOCAL_PATH" add -A
+> ```
+> 
+> will notice the updated `chatwrap` pointer and commit it in the parent repo.
+> 
+> ## Add this on the remote after parent `git pull`
+> 
+> Inside the remote deployment block, after:
+> 
+> ```bash
+> git pull --ff-only origin "$branch"
+> ```
+> 
+> add:
+> 
+> ```bash
+> git submodule sync --recursive
+> git submodule update --init --recursive
+> ```
+> 
+> Do **not** use `git submodule update --remote` unless you want the server to ignore the exact commit pinned by the parent repo. For consistency, the pinned-commit version above is better.
+> 
+> ## Also add to `.gitignore`
+> 
+> ```gitignore
+> venv/
+> venv*/
+> venv2026/
+> ```
+> 
+> Do **not** ignore `requirements.txt`; that file should be committed.

@@ -1,0 +1,45 @@
+**user**:
+> Do standard IV methods propagate the uncertainty of the stage to the final outcome uncertainty?
+**assistant**:
+> Yes—**standard IV/2SLS methods do propagate first-stage uncertainty into the final outcome uncertainty**, *provided you use an IV estimator’s standard errors*, not a naïve second-stage OLS regression on fitted values.
+> 
+> Key distinctions:
+> 
+> - In **2SLS**, the coefficient estimate can be computed by:
+>   1. regress endogenous $X$ on instruments $Z$ and controls to get $\hat X$;
+>   2. regress outcome $Y$ on $\hat X$ and controls.
+> 
+> - But the **correct standard errors are not the ordinary OLS SEs from step 2**. Those would treat $\hat X$ as known data and generally understate uncertainty.
+> 
+> - Standard IV software—e.g. `ivreg`, Stata `ivregress`, R `fixest`, `AER::ivreg`, Python `linearmodels`—uses the proper 2SLS/IV variance formula, which accounts for the fact that $\hat X$ was estimated in the first stage.
+> 
+> - In matrix form, the usual IV variance is based on something like
+> 
+>   \[
+>   \widehat{\mathrm{Var}}(\hat\beta_{IV})
+>   =
+>   (X'P_ZX)^{-1}
+>   X'P_Z \hat\Omega P_ZX
+>   (X'P_ZX)^{-1},
+>   \]
+> 
+>   where $P_Z$ is the projection onto the instrument space. This formulation incorporates the first-stage projection rather than treating fitted values as fixed.
+> 
+> Important caveat: with **weak instruments**, conventional IV standard errors and confidence intervals can be misleading even though they are “standard.” In that case, use weak-instrument-robust inference, such as Anderson–Rubin tests, Kleibergen–Paap diagnostics, conditional likelihood ratio tests, or report first-stage strength diagnostics.
+> 
+> So the short answer is: **yes, standard IV/2SLS inference propagates first-stage uncertainty; naïve two-step OLS inference does not.**
+> 
+> Yes. **Standard IV/2SLS standard errors do account for the fact that the endogenous regressor was estimated in the first stage**—as long as you use an actual IV/2SLS estimator’s variance-covariance matrix.
+> 
+> The common confusion is this:
+> 
+> 1. **Correct 2SLS/IV inference**  
+>    Estimate the model using an IV routine, e.g. Stata `ivregress`, R `ivreg`, `fixest::feols(... | ...)`, Python `linearmodels.IV2SLS`, etc.  
+>    These use the IV variance formula and properly reflect first-stage estimation uncertainty.
+> 
+> 2. **Incorrect “manual two-step” inference**  
+>    If you manually regress $X$ on instruments, save $\hat X$, then run OLS of $Y$ on $\hat X$ and use the ordinary OLS standard errors from that second regression, those SEs are generally wrong because they treat $\hat X$ as if it were observed rather than estimated.
+> 
+> A compact way to say it: **the 2SLS coefficient can be computed by a two-step procedure, but its standard errors cannot be obtained by naïvely applying OLS to the second step.**
+> 
+> One caveat: if the instruments are weak, conventional IV standard errors may still give misleading inference. Then you want weak-instrument-robust methods such as Anderson–Rubin, Kleibergen–Paap diagnostics, or conditional likelihood ratio tests.

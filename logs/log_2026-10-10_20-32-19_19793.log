@@ -1,0 +1,74 @@
+**user**:
+> When you're performing a bootstrap for a panel regression, should you resample only the units, or only the years within each unit, or both?
+**assistant**:
+> It depends on what dependence structure you need the bootstrap to preserve. For a standard panel regression, the safest default is usually:
+> 
+> **Resample whole units, not individual observations or years within each unit.**
+> 
+> That is, draw units/clusters with replacement and keep each selected unit’s full time series intact. This is the usual **cluster bootstrap by unit**. It preserves within-unit serial correlation, heteroskedasticity, and the panel structure.
+> 
+> Use cases:
+> 
+> - **If units are independent but observations within a unit are correlated:**  
+>   Resample **units**. This is the common choice for panel data.
+> 
+> - **If years have common shocks that correlate all units in the same year:**  
+>   Resampling only units may understate uncertainty. Consider **clustering by year**, **two-way cluster-robust inference**, or a **two-way/multiway bootstrap**.
+> 
+> - **If both unit-level serial dependence and year-level common shocks matter:**  
+>   Use methods designed for two-way dependence, e.g. **two-way cluster bootstrap**, **wild cluster bootstrap**, or inference based on **two-way clustered standard errors**.
+> 
+> - **If the time dimension is long and serial dependence is central:**  
+>   You might use a **block bootstrap over time**, often within units or with blocks that preserve temporal dependence.
+> 
+> - **Avoid resampling years independently within each unit** unless you are confident there is no meaningful serial dependence. It scrambles each unit’s time series and can break lag structures, trends, autocorrelation, treatment timing, and fixed-effect dynamics.
+> 
+> So, in shorthand:
+> 
+> \[
+> \text{Default panel bootstrap: resample units, keep all years for each sampled unit.}
+> \]
+> 
+> If there is strong cross-sectional dependence by year, then resampling only units is not enough; use a method that accounts for **both unit and time clustering**. For many applied panel regressions with unit fixed effects and serial correlation, I would start with **cluster bootstrap by unit** or **cluster-robust SEs by unit**, then check robustness to two-way clustering if common time shocks are plausible.
+> 
+> For a panel regression, the usual bootstrap choice is:
+> 
+> > **Resample the cross-sectional units, keeping each selected unit’s full time series intact.**
+> 
+> So if your panel is individuals, firms, countries, counties, etc., you draw those units with replacement and include all years for each drawn unit. This is the standard **cluster bootstrap by unit**.
+> 
+> Why? Because panel observations within a unit are usually correlated over time. If you resample years independently within each unit, you often destroy:
+> 
+> - serial correlation,
+> - lag structures,
+> - treatment timing,
+> - unit-specific trends,
+> - dynamic relationships,
+> - within-unit dependence induced by fixed effects.
+> 
+> So, as a default:
+> 
+> \[
+> \text{bootstrap sample} = \{i_1, i_2, \dots, i_N\}, \quad i_j \sim \text{Uniform}\{1,\dots,N\},
+> \]
+> 
+> and for each selected unit $i_j$, include all years $t=1,\dots,T$.
+> 
+> However, the right answer depends on the dependence structure:
+> 
+> 1. **Within-unit correlation only**  
+>    Resample **units**. This is the common panel bootstrap.
+> 
+> 2. **Common shocks by year**  
+>    If all units in a given year are affected by shared shocks, use **two-way clustering** or a bootstrap that accounts for both unit and year dependence.
+> 
+> 3. **Long time series with serial dependence as the main concern**  
+>    Consider a **block bootstrap over time**, rather than resampling individual years.
+> 
+> 4. **Few clusters**  
+>    A standard cluster bootstrap can perform poorly. A **wild cluster bootstrap** is often better.
+> 
+> 5. **Treatment assigned at unit level**  
+>    Resample at the treatment-assignment level, usually the unit or cluster.
+> 
+> So the short answer is: **usually resample units, not years within units**. Resampling both units and years is generally not the default, because it can break the panel’s dependence structure unless done with a carefully designed block or multiway bootstrap.
