@@ -17,7 +17,7 @@ UPDATE_CHECK_URL="https://arachne.existencia.org/checkupdate"
 # Files/directories that are deliberately not managed by Git, but should be
 # copied from local to remote during deployment.
 FILE_PATHS=(
-    "database"
+    "database/logs"
     "knowledge/entries.txt"
     "memory/bayesian.txt"
 )

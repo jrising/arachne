@@ -494,3 +494,207 @@
 > - This should be much faster because it turns hundreds/thousands of SSH+rsync calls into one call per directory.
 > 
 > For log names, I’d strongly prefer including hostname as well as PID, e.g. `inputs-2025-09-01-existencia-12345.log`, because PIDs alone are not globally unique.
+**user**:
+> I also have a problem with the memory database. I get the error:
+> ```
+> Updating 2214c16..5adf421
+> error: The following untracked working tree files would be overwritten by merge:
+> 	database/whoosh/MAIN_1zumhr7ds4fatf08.seg
+> 	database/whoosh/MAIN_6sviqudghyr88vz5.seg
+> 	database/whoosh/MAIN_c0y6sewcxn28dyjs.seg
+> 	database/whoosh/MAIN_ju30mfgcs5qypvou.seg
+> 	database/whoosh/MAIN_k0kykfihir21aibm.seg
+> 	database/whoosh/MAIN_tm7b5beooyhbzfan.seg
+> 	database/whoosh/MAIN_x08cgs218nw9vw2g.seg
+> 	database/whoosh/_MAIN_3157.toc
+> Please move or remove them before you merge.
+> Aborting
+> 
+> Deployment failed.
+>   Status:  1
+>   Step:    Updating code and dependencies on DreamHost...
+>   Line:    347
+>   Command: ssh "$HOST" bash -s -- "$REMOTE_PATH" "$BRANCH" "$DEPLOY_ID"  <<'REMOTE'
+> ```
+> 
+> I imagine that this is because the code on the server also updates the whoosh database as content comes in, so now we have two whoosh databases that are not in sync. Since this represents the knowledge base of the AI, it would be nice for these to be properly merged. Would it make sense to have a python script that does this process-- or a pair of them so we run python on the server to get whoosh additions, run python locally to add those additions, and then copy the updated database to the server?
+**assistant**:
+> Yes, but I would **not** try to merge Whoosh databases by syncing their files. Whoosh segment/toc files are Lucene-like generated index artifacts; they are not safely mergeable with `rsync` or Git.
+> 
+> The immediate error means Git is trying to check out tracked files under:
+> 
+> ```text
+> database/whoosh/
+> ```
+> 
+> but the server already has untracked runtime-generated files at the same paths. So first: make Whoosh indexes **not Git-managed**.
+> 
+> Add to `.gitignore`:
+> 
+> ```gitignore
+> database/whoosh/
+> ```
+> 
+> Then locally:
+> 
+> ```bash
+> git -C "$LOCAL_PATH" rm -r --cached database/whoosh || true
+> git -C "$LOCAL_PATH" add .gitignore
+> git -C "$LOCAL_PATH" commit -m "Stop tracking generated Whoosh index"
+> ```
+> 
+> Also stop syncing the whole `database` directory blindly if it contains generated indexes. Replace:
+> 
+> ```bash
+> FILE_PATHS=(
+>     "database"
+>     ...
+> )
+> ```
+> 
+> with narrower paths, excluding Whoosh, e.g.:
+> 
+> ```bash
+> FILE_PATHS=(
+>     "database/some-canonical-memory-file.sqlite"
+>     "database/logs/running.log"
+>     "knowledge/entries.txt"
+>     "memory/bayesian.txt"
+> )
+> ```
+> 
+> For the merge design: the robust pattern is:
+> 
+> 1. Treat **canonical memory records** as the source of truth.
+> 2. Sync/merge those records bidirectionally.
+> 3. Rebuild Whoosh from the canonical records on each machine.
+> 
+> If the only copy of some knowledge is currently inside Whoosh, then yes: write Python scripts, but make them operate at the **document level**, not the segment-file level:
+> 
+> ```text
+> remote Whoosh -> export JSONL
+> local Whoosh  -> export JSONL
+> merge JSONL by stable document id
+> rebuild local Whoosh atomically
+> copy/export merged canonical records to server
+> rebuild server Whoosh atomically
+> ```
+> 
+> Ideally each indexed document has fields like:
+> 
+> ```text
+> id
+> source
+> created_at
+> updated_at
+> content
+> metadata
+> ```
+> 
+> Then merging is straightforward: union by `id`, choose newer `updated_at` for conflicts, and log true conflicts.
+> 
+> Deployment-wise, I’d add something like:
+> 
+> ```bash
+> GENERATED_CLEAN_PATHS=(
+>     "database/whoosh"
+> )
+> ```
+> 
+> and on the remote before `git pull`:
+> 
+> ```bash
+> git clean -fd -- database/whoosh
+> ```
+> 
+> But only after you’ve backed up or exported anything valuable.
+> 
+> My strong recommendation: make Whoosh disposable. Preserve memories in JSONL/SQLite/logs; rebuild Whoosh as a cache. That will make deployment, rollback, and cross-server synchronization much saner.
+**user**:
+> I suppose that whoosh is disposable. My current process is to write to it when I process the logs, and I do have that information stored elsewhere. But how often should I rebuild whoosh? It's thousands of files, and I was hoping to run this remote-update script daily.
+**assistant**:
+> Yes: if Whoosh is disposable, **don’t rebuild it on every `remote-update` unless you need to**. Treat it as a local cache derived from canonical data/logs.
+> 
+> My recommended policy:
+> 
+> 1. **Never sync or Git-track `database/whoosh/`.**
+>    Add:
+> 
+>    ```gitignore
+>    database/whoosh/
+>    ```
+> 
+>    and remove it from Git:
+> 
+>    ```bash
+>    git -C "$LOCAL_PATH" rm -r --cached database/whoosh
+>    git -C "$LOCAL_PATH" commit -m "Stop tracking generated Whoosh index"
+>    ```
+> 
+> 2. **Do not include the whole `database` directory in `FILE_PATHS`.**
+>    Instead sync only canonical files. If `database/whoosh` is inside `database`, then this is risky:
+> 
+>    ```bash
+>    FILE_PATHS=( "database" )
+>    ```
+> 
+>    Better:
+> 
+>    ```bash
+>    FILE_PATHS=(
+>        "knowledge/entries.txt"
+>        "memory/bayesian.txt"
+>        # specific canonical database files only
+>    )
+>    ```
+> 
+> 3. **Update Whoosh incrementally daily.**
+>    Since you already process logs into Whoosh, keep doing that. The daily deploy should sync logs/canonical memory, then run something like:
+> 
+>    ```bash
+>    venv/bin/python scripts/update_whoosh.py
+>    ```
+> 
+>    where `update_whoosh.py` only indexes new/unprocessed records.
+> 
+> 4. **Full rebuild only occasionally.**
+>    I’d rebuild Whoosh when:
+>    - the index schema changes,
+>    - the indexing code changes materially,
+>    - the index is corrupted,
+>    - you suspect drift,
+>    - or on a scheduled weekly/monthly maintenance run.
+> 
+>    Daily full rebuild is probably unnecessary unless it is fast enough and the site can tolerate it.
+> 
+> 5. **Make rebuild atomic.**
+>    Rebuild into a temporary directory, then swap:
+> 
+>    ```text
+>    database/whoosh.tmp/
+>    database/whoosh/
+>    ```
+> 
+>    so the app never sees a half-built index.
+> 
+> 6. **Use a lock.**
+>    Whoosh does not love multiple writers. Your updater/rebuilder should take a lock so the web app and deployment script do not write simultaneously.
+> 
+> A good deployment pattern would be:
+> 
+> ```bash
+> # sync bidirectional logs/canonical memory
+> # pull code
+> # install deps
+> venv/bin/python scripts/update_whoosh.py --incremental
+> ```
+> 
+> Then perhaps separately, from cron:
+> 
+> ```bash
+> venv/bin/python scripts/rebuild_whoosh.py --atomic
+> ```
+> 
+> weekly or monthly.
+> 
+> My opinion: Whoosh should be treated exactly like `__pycache__`, thumbnails, or compiled assets: important for performance, but disposable and locally regenerated.
