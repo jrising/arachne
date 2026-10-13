@@ -17,14 +17,26 @@ UPDATE_CHECK_URL="https://arachne.existencia.org/checkupdate"
 # Files/directories that are deliberately not managed by Git, but should be
 # copied from local to remote during deployment.
 FILE_PATHS=(
-    "logs"
     "database"
     "knowledge/entries.txt"
     "memory/bayesian.txt"
 )
 
+BIDIRECTIONAL_MERGE_PATHS=(
+    "logs"
+)
+
 SUBMODULE_PATHS=(
     "chatwrap"
+)
+
+REMOTE_IMPORT_PATHS=(
+    "readdocs"
+)
+
+LOCAL_WINS_PATHS=(
+    "database/logs/running.log"
+    "database/logs/titles.pkl"
 )
 
 LOCAL_VENV_PATH="$LOCAL_PATH/venv2026"
@@ -154,6 +166,39 @@ for submodule in "${SUBMODULE_PATHS[@]}"; do
     git -C "$submodule_path" push origin "HEAD:$submodule_branch"
 done
 
+echo "Importing remote runtime changes where local copy is unchanged..."
+
+for root in "${REMOTE_IMPORT_PATHS[@]}"; do
+    ssh "$HOST" "cd $(printf '%q' "$REMOTE_PATH") && find $(printf '%q' "$root") -type f -print0 2>/dev/null" |
+    while IFS= read -r -d '' relpath; do
+        local_file="$LOCAL_PATH/$relpath"
+        local_dir="$(dirname "$local_file")"
+
+        mkdir -p "$local_dir"
+
+        if [[ ! -e "$local_file" ]]; then
+            echo "Importing new remote file: $relpath"
+            rsync -az "$HOST:$REMOTE_PATH/$relpath" "$local_file"
+        elif git -C "$LOCAL_PATH" diff --quiet -- "$relpath"; then
+            echo "Importing remote-modified file unchanged locally: $relpath"
+            rsync -az "$HOST:$REMOTE_PATH/$relpath" "$local_file"
+        else
+            echo "Keeping local version of locally modified file: $relpath"
+        fi
+    done
+done
+
+echo "Merging bidirectional remote state into local copy..."
+
+for path in "${BIDIRECTIONAL_MERGE_PATHS[@]}"; do
+    mkdir -p "$LOCAL_PATH/$path"
+    ssh "$HOST" "mkdir -p -- $(printf '%q' "$REMOTE_PATH/$path")"
+
+    rsync -azu --itemize-changes \
+        "$HOST:$REMOTE_PATH/$path/" \
+        "$LOCAL_PATH/$path/"
+done
+
 git -C "$LOCAL_PATH" add -A
 
 if ! git -C "$LOCAL_PATH" diff --cached --quiet; then
@@ -228,6 +273,21 @@ for path in "${FILE_PATHS[@]}"; do
     fi
 done
 
+CURRENT_STEP="Merging bidirectional local state to remote..."
+echo "$CURRENT_STEP"
+
+for path in "${BIDIRECTIONAL_MERGE_PATHS[@]}"; do
+    local_item="$LOCAL_PATH/$path"
+    remote_item="$REMOTE_PATH/$path"
+
+    mkdir -p "$local_item"
+    ssh "$HOST" "mkdir -p -- $(printf '%q' "$remote_item")"
+
+    rsync -azu --itemize-changes \
+        "$local_item/" \
+        "$HOST:$remote_item/"
+done
+
 # ---- Deploy on remote -------------------------------------------------------
 
 CURRENT_STEP="Updating code and dependencies on DreamHost..."
@@ -244,6 +304,10 @@ branch=$2
 deploy_id=$3
 
 cd -- "$remote_path"
+
+echo "Resetting remote working tree before pulling..."
+git reset --hard
+git clean -fd -- logs readdocs database/logs
 
 # `git pull --ff-only` refuses unexpected merge commits. This is desirable:
 # the server should not contain hand-edited Git-tracked code.
