@@ -17,13 +17,13 @@ UPDATE_CHECK_URL="https://arachne.existencia.org/checkupdate"
 # Files/directories that are deliberately not managed by Git, but should be
 # copied from local to remote during deployment.
 FILE_PATHS=(
-    "database/logs"
     "knowledge/entries.txt"
     "memory/bayesian.txt"
 )
 
 BIDIRECTIONAL_MERGE_PATHS=(
     "logs"
+    "database/logs"
 )
 
 SUBMODULE_PATHS=(
@@ -35,8 +35,6 @@ REMOTE_IMPORT_PATHS=(
 )
 
 LOCAL_WINS_PATHS=(
-    "database/logs/running.log"
-    "database/logs/titles.pkl"
 )
 
 LOCAL_VENV_PATH="$LOCAL_PATH/venv2026"
