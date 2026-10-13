@@ -698,3 +698,288 @@
 > weekly or monthly.
 > 
 > My opinion: Whoosh should be treated exactly like `__pycache__`, thumbnails, or compiled assets: important for performance, but disposable and locally regenerated.
+**user**:
+> Okay, back to logs. These were previously in git, and now the copy from the script means that the git fails because it can't sync those files over because the git pull would overwrite existing files.
+> 
+> How can I clean up my git repo so it no longer has the logs?
+**assistant**:
+> To make Git stop managing logs **without deleting your local log files**, use `git rm --cached`, add ignore rules, commit, and push.
+> 
+> From your local machine:
+> 
+> ```bash
+> cd "$HOME/projects/arachne"
+> 
+> # 1. Ignore generated/runtime log state from now on.
+> cat >> .gitignore <<'EOF'
+> 
+> # Runtime-generated logs; synced outside Git.
+> logs/
+> database/logs/
+> database/whoosh/
+> EOF
+> 
+> # 2. Remove these paths from Git's index, but keep files on disk.
+> git rm -r --cached logs database/logs database/whoosh 2>/dev/null || true
+> 
+> # 3. Confirm that this is only removing from Git tracking.
+> git status --short
+> 
+> # 4. Commit and push.
+> git add .gitignore
+> git commit -m "Stop tracking runtime logs and generated indexes"
+> git push origin master
+> ```
+> 
+> After that, these files should show as ignored rather than tracked:
+> 
+> ```bash
+> git check-ignore -v logs/some-file.log
+> ```
+> 
+> The tricky part is the **first deployment after this change**, because the remote may have untracked files in paths that Git still thinks it needs to update. I would do a one-time cleanup on the server, preserving the logs first:
+> 
+> ```bash
+> ssh existencia
+> cd /home/jrising/projects/arachne.existencia.org
+> 
+> # Save runtime state outside the repo.
+> mkdir -p /home/jrising/projects/arachne-runtime-stash
+> rsync -a logs/ /home/jrising/projects/arachne-runtime-stash/logs/ 2>/dev/null || true
+> rsync -a database/logs/ /home/jrising/projects/arachne-runtime-stash/database-logs/ 2>/dev/null || true
+> 
+> # Remove obstructing copies inside the repo.
+> rm -rf logs database/logs database/whoosh
+> 
+> # Move the repo exactly to the cleaned-up Git state.
+> git fetch origin master
+> git reset --hard origin/master
+> 
+> # Restore runtime logs as ignored/untracked files.
+> mkdir -p logs database/logs
+> rsync -a /home/jrising/projects/arachne-runtime-stash/logs/ logs/ 2>/dev/null || true
+> rsync -a /home/jrising/projects/arachne-runtime-stash/database-logs/ database/logs/ 2>/dev/null || true
+> ```
+> 
+> Then adjust your deployment script so logs are handled only by your bidirectional `rsync` logic, not by Git and not with `--delete`.
+> 
+> One more thing: this removes logs from the current Git tree, but not from Git history. That is usually fine. If the logs contain secrets or huge data you want erased from history, use `git filter-repo` or BFG, but that rewrites history and requires more care.
+**user**:
+> I'm now getting a problem that the venv on the server is 3.10 and my local packages require 3.11 (I have 3.14 there). I can just replace the venv on the server with a new one, but I was wondering if there's a better or worse way to do that.
+**assistant**:
+> Yes: replacing the server venv is the right move, but do it **atomically-ish and explicitly**, not by trying to mutate a 3.10 venv into 3.11+. Python venvs are tied to the interpreter they were created with.
+> 
+> Recommended server-side process:
+> 
+> ```bash
+> ssh existencia
+> cd /home/jrising/projects/arachne.existencia.org
+> 
+> # Confirm available Python versions.
+> python3 --version
+> python3.11 --version  # or python3.12, etc.
+> ```
+> 
+> If `python3.11` exists:
+> 
+> ```bash
+> # Stop/restart-sensitive apps if needed, or rely on Passenger restart later.
+> 
+> # Preserve old venv temporarily.
+> mv venv venv.py310.$(date -u +%Y%m%dT%H%M%SZ)
+> 
+> # Create fresh venv with the desired interpreter.
+> python3.11 -m venv venv
+> 
+> # Install dependencies.
+> venv/bin/python -m pip install --upgrade pip setuptools wheel
+> venv/bin/python -m pip install -r requirements.txt
+> 
+> # Restart Passenger.
+> touch tmp/restart.txt
+> ```
+> 
+> Then test:
+> 
+> ```bash
+> venv/bin/python --version
+> venv/bin/python -m pip check
+> curl --fail --silent --show-error https://arachne.existencia.org/checkupdate
+> ```
+> 
+> I’d also update your deployment script to enforce the required Python version instead of silently using whatever `python3` means:
+> 
+> ```bash
+> REMOTE_PYTHON="python3.11"
+> ```
+> 
+> Pass it into the remote deployment block, then replace:
+> 
+> ```bash
+> python3 -m venv venv
+> ```
+> 
+> with:
+> 
+> ```bash
+> if ! command -v "$remote_python" >/dev/null 2>&1; then
+>     echo "Required Python not found on remote: $remote_python" >&2
+>     exit 1
+> fi
+> 
+> if [[ ! -x "venv/bin/python" ]] ||
+>    [[ "$(venv/bin/python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" != "3.11" ]]; then
+>     echo "Recreating remote virtual environment with $remote_python"
+>     rm -rf venv
+>     "$remote_python" -m venv venv
+> fi
+> ```
+> 
+> My opinion: pin the deployment to **3.11 or 3.12**, not 3.14, unless you have a specific reason. Python 3.14 is very new; hosting providers and packages may lag. Also consider generating requirements with the same major/minor Python version you deploy to, because `pip freeze` from 3.14 can include versions or environment markers that are awkward on 3.11. Ideally your local deploy venv should match production.Yes — if DreamHost only offers Python 3.10, the cleanest path is to make your **production-compatible local venv use Python 3.10** and generate `requirements.txt` from that, not from your Python 3.14 venv.
+> 
+> For `numpy`, the issue is probably that your local `pip freeze` captured a version requiring newer Python. Use a version compatible with 3.10. For example:
+> 
+> ```bash
+> cd "$HOME/projects/arachne"
+> 
+> # Create a production-compatible local venv.
+> python3.10 -m venv venv310
+> venv310/bin/python -m pip install --upgrade pip setuptools wheel
+> 
+> # Install deps, pinning numpy if needed.
+> venv310/bin/python -m pip install "numpy<2.3"
+> venv310/bin/python -m pip install -r requirements.in  # if you have one
+> ```
+> 
+> If you only have `requirements.txt`, edit or constrain the problematic line:
+> 
+> ```text
+> numpy<2.3
+> ```
+> 
+> or more conservatively:
+> 
+> ```text
+> numpy==2.2.6
+> ```
+> 
+> `numpy 2.2.x` supports Python 3.10; newer NumPy lines may not.
+> 
+> Then regenerate your deployment requirements from the Python 3.10 venv:
+> 
+> ```bash
+> venv310/bin/python -m pip freeze > requirements.txt
+> git add requirements.txt
+> git commit -m "Pin dependencies for Python 3.10 production"
+> git push origin master
+> ```
+> 
+> I would also change your deployment script config from:
+> 
+> ```bash
+> LOCAL_VENV_PATH="$LOCAL_PATH/venv2026"
+> ```
+> 
+> to:
+> 
+> ```bash
+> LOCAL_VENV_PATH="$LOCAL_PATH/venv310"
+> REMOTE_PYTHON="python3.10"
+> ```
+> 
+> and create the remote venv explicitly with:
+> 
+> ```bash
+> python3.10 -m venv venv
+> ```
+> 
+> rather than `python3 -m venv venv`.
+> 
+> My stronger recommendation: stop using raw `pip freeze` from your daily development environment as the production dependency source. Use either:
+> 
+> - `requirements.in` for human-chosen top-level packages, plus `pip-compile` to produce `requirements.txt`, or
+> - a dedicated `venv310` solely for production compatibility.
+> 
+> That way your Python 3.14 experiments won’t accidentally break DreamHost deployment.
+**user**:
+> Looks like dreamhost doesn't have anything above python 3.10. Maybe I should downgrade packages locally so they will work on 3.10? numpy is the offending package right now.
+**assistant**:
+> 
+**user**:
+> I don't think I use pip freeze. requirements.txt is being generated by the script. I would rather not create a whole new environment-- there are lots of packages. Instead, how can I get the version choice in requirements.txt to just be something like numpy>2.0?
+**assistant**:
+> You actually **are using `pip freeze`** here:
+> 
+> ```bash
+> "$LOCAL_VENV_PATH/bin/python" -m pip freeze > "$tmp_requirements"
+> ```
+> 
+> That is why `requirements.txt` gets exact pins like:
+> 
+> ```text
+> numpy==2.3.4
+> ```
+> 
+> If you want `numpy` to be flexible for DreamHost/Python 3.10, post-process the generated requirements before comparing/committing.
+> 
+> For Python 3.10, I would use:
+> 
+> ```text
+> numpy>=2.0,<2.3
+> ```
+> 
+> not just `numpy>2.0`, because NumPy 2.3+ requires newer Python. Modern `pip` *should* avoid incompatible versions, but an explicit upper bound is cleaner.
+> 
+> Replace this part:
+> 
+> ```bash
+> tmp_requirements="$(mktemp)"
+> "$LOCAL_VENV_PATH/bin/python" -m pip freeze > "$tmp_requirements"
+> ```
+> 
+> with:
+> 
+> ```bash
+> tmp_requirements="$(mktemp)"
+> tmp_requirements_raw="$(mktemp)"
+> 
+> "$LOCAL_VENV_PATH/bin/python" -m pip freeze > "$tmp_requirements_raw"
+> 
+> # Relax packages that need to remain production-compatible with DreamHost's
+> # Python 3.10, even if the local venv is newer.
+> grep -v -E '^numpy==' "$tmp_requirements_raw" > "$tmp_requirements"
+> printf '%s\n' 'numpy>=2.0,<2.3' >> "$tmp_requirements"
+> 
+> rm "$tmp_requirements_raw"
+> ```
+> 
+> If you want this to scale to more packages, define overrides:
+> 
+> ```bash
+> REQUIREMENT_OVERRIDES=(
+>     "numpy>=2.0,<2.3"
+> )
+> ```
+> 
+> Then:
+> 
+> ```bash
+> tmp_requirements="$(mktemp)"
+> tmp_requirements_raw="$(mktemp)"
+> 
+> "$LOCAL_VENV_PATH/bin/python" -m pip freeze > "$tmp_requirements_raw"
+> cp "$tmp_requirements_raw" "$tmp_requirements"
+> 
+> for requirement in "${REQUIREMENT_OVERRIDES[@]}"; do
+>     package="${requirement%%[<>=!~]*}"
+> 
+>     grep -v -E "^${package}==" "$tmp_requirements" > "$tmp_requirements.next"
+>     mv "$tmp_requirements.next" "$tmp_requirements"
+> 
+>     printf '%s\n' "$requirement" >> "$tmp_requirements"
+> done
+> 
+> rm "$tmp_requirements_raw"
+> ```
+> 
+> My opinion: this is an acceptable pragmatic fix, but it is slightly brittle. The cleaner long-term version is to maintain a small human-edited `requirements.in` with lines like `numpy>=2.0,<2.3`, then generate/install from that. But for your current deployment script, the post-processing approach is probably the quickest sane solution.

@@ -23,6 +23,7 @@ FILE_PATHS=(
 
 BIDIRECTIONAL_MERGE_PATHS=(
     "logs"
+    "readdocs"
     "database/logs"
 )
 
@@ -31,11 +32,16 @@ SUBMODULE_PATHS=(
 )
 
 REMOTE_IMPORT_PATHS=(
-    "readdocs"
 )
 
 LOCAL_WINS_PATHS=(
 )
+
+REQUIREMENT_OVERRIDES=(
+    "numpy>=2.0,<2.3"
+    "pandas>=2.2.2"
+)
+
 
 LOCAL_VENV_PATH="$LOCAL_PATH/venv2026"
 REQUIREMENTS_FILE="$LOCAL_PATH/requirements.txt"
@@ -123,7 +129,21 @@ if [[ ! -x "$LOCAL_VENV_PATH/bin/python" ]]; then
 fi
 
 tmp_requirements="$(mktemp)"
-"$LOCAL_VENV_PATH/bin/python" -m pip freeze > "$tmp_requirements"
+tmp_requirements_raw="$(mktemp)"
+
+"$LOCAL_VENV_PATH/bin/python" -m pip freeze > "$tmp_requirements_raw"
+cp "$tmp_requirements_raw" "$tmp_requirements"
+
+for requirement in "${REQUIREMENT_OVERRIDES[@]}"; do
+    package="${requirement%%[<>=!~]*}"
+
+    grep -v -E "^${package}==" "$tmp_requirements" > "$tmp_requirements.next"
+    mv "$tmp_requirements.next" "$tmp_requirements"
+
+    printf '%s\n' "$requirement" >> "$tmp_requirements"
+done
+
+rm "$tmp_requirements_raw"
 
 if [[ ! -f "$REQUIREMENTS_FILE" ]] || ! cmp -s "$tmp_requirements" "$REQUIREMENTS_FILE"; then
     mv "$tmp_requirements" "$REQUIREMENTS_FILE"
