@@ -402,13 +402,7 @@ fi
 # This is the value that /checkupdate should return.
 printf '%s\n' "$deploy_id" > last_updated.txt
 
-# If this is a DreamHost Passenger application, uncomment the appropriate
-# restart mechanism if needed:
-#
-touch tmp/restart.txt
-#
-# Or, depending on your setup:
-# touch passenger_wsgi.py
+systemctl --user restart gunicorn
 REMOTE
 
 # ---- Verify that the deployed application is live --------------------------
