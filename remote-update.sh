@@ -23,7 +23,6 @@ FILE_PATHS=(
 
 BIDIRECTIONAL_MERGE_PATHS=(
     "logs"
-    "readdocs"
     "database/logs"
 )
 
@@ -32,6 +31,7 @@ SUBMODULE_PATHS=(
 )
 
 REMOTE_IMPORT_PATHS=(
+    "readdocs"
 )
 
 LOCAL_WINS_PATHS=(
@@ -40,6 +40,8 @@ LOCAL_WINS_PATHS=(
 REQUIREMENT_OVERRIDES=(
     "numpy>=2.0,<2.3"
     "pandas>=2.2.2"
+    "scikit-learn>=1.4.2"
+    "scipy>=1.13.0"
 )
 
 
