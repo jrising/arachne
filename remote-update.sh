@@ -42,6 +42,9 @@ REQUIREMENT_OVERRIDES=(
     "pandas>=2.2.2"
     "scikit-learn>=1.4.2"
     "scipy>=1.13.0"
+    "protobuf>=5.26.1,<6.0.0dev"
+    "google-ai-generativelanguage>=0.6.15"
+    "grpcio-status>=1.71.0"
 )
 
 
@@ -186,28 +189,6 @@ for submodule in "${SUBMODULE_PATHS[@]}"; do
     git -C "$submodule_path" push origin "HEAD:$submodule_branch"
 done
 
-echo "Importing remote runtime changes where local copy is unchanged..."
-
-for root in "${REMOTE_IMPORT_PATHS[@]}"; do
-    ssh "$HOST" "cd $(printf '%q' "$REMOTE_PATH") && find $(printf '%q' "$root") -type f -print0 2>/dev/null" |
-    while IFS= read -r -d '' relpath; do
-        local_file="$LOCAL_PATH/$relpath"
-        local_dir="$(dirname "$local_file")"
-
-        mkdir -p "$local_dir"
-
-        if [[ ! -e "$local_file" ]]; then
-            echo "Importing new remote file: $relpath"
-            rsync -az "$HOST:$REMOTE_PATH/$relpath" "$local_file"
-        elif git -C "$LOCAL_PATH" diff --quiet -- "$relpath"; then
-            echo "Importing remote-modified file unchanged locally: $relpath"
-            rsync -az "$HOST:$REMOTE_PATH/$relpath" "$local_file"
-        else
-            echo "Keeping local version of locally modified file: $relpath"
-        fi
-    done
-done
-
 echo "Merging bidirectional remote state into local copy..."
 
 for path in "${BIDIRECTIONAL_MERGE_PATHS[@]}"; do
@@ -222,9 +203,73 @@ done
 git -C "$LOCAL_PATH" add -A
 
 if ! git -C "$LOCAL_PATH" diff --cached --quiet; then
-    git -C "$LOCAL_PATH" commit -m "Automated deployment: $DEPLOY_ID"
+    git -C "$LOCAL_PATH" commit -m "Automated local pre-deployment changes: $DEPLOY_ID"
 else
-    echo "No Git changes to commit."
+    echo "No local Git changes to commit before remote import."
+fi
+
+echo "Committing remote-generated Git-tracked files..."
+
+ssh "$HOST" bash -s -- "$REMOTE_PATH" "$BRANCH" "$DEPLOY_ID" "${REMOTE_IMPORT_PATHS[@]}" <<'REMOTE'
+set -Eeuo pipefail
+
+remote_path=$1
+branch=$2
+deploy_id=$3
+shift 3
+import_paths=("$@")
+
+cd -- "$remote_path"
+
+current_branch="$(git branch --show-current)"
+if [[ "$current_branch" != "$branch" ]]; then
+    echo "Remote repo is on branch '$current_branch', expected '$branch'." >&2
+    exit 1
+fi
+
+# Only stage the paths that are expected to be modified by the running app.
+git add -- "${import_paths[@]}"
+
+if ! git diff --cached --quiet -- "${import_paths[@]}"; then
+    git \
+        -c user.name="Arachne Deployment" \
+        -c user.email="arachne-deploy@localhost" \
+        commit -m "Remote runtime updates: $deploy_id" -- "${import_paths[@]}"
+else
+    echo "No remote Git-tracked runtime changes to commit."
+fi
+REMOTE
+
+
+echo "Fetching remote-server commits into local repository..."
+
+REMOTE_IMPORT_REF="refs/remotes/existencia-runtime/$BRANCH"
+
+git -C "$LOCAL_PATH" fetch "$HOST:$REMOTE_PATH" \
+    "$BRANCH:$REMOTE_IMPORT_REF"
+
+
+echo "Merging remote-server runtime commits locally..."
+
+if git -C "$LOCAL_PATH" merge --no-edit "$REMOTE_IMPORT_REF"; then
+    echo "Merged remote runtime commits cleanly."
+else
+    echo "Merge had conflicts; resolving configured remote-import paths with local wins."
+
+    for path in "${REMOTE_IMPORT_PATHS[@]}"; do
+        # For conflicts in these paths, keep our local version.
+        git -C "$LOCAL_PATH" checkout --ours -- "$path" || true
+        git -C "$LOCAL_PATH" add -- "$path"
+    done
+
+    # If conflicts remain elsewhere, abort rather than guessing.
+    if git -C "$LOCAL_PATH" diff --name-only --diff-filter=U | grep -q .; then
+        echo "Unresolved merge conflicts remain outside REMOTE_IMPORT_PATHS:" >&2
+        git -C "$LOCAL_PATH" diff --name-only --diff-filter=U >&2
+        exit 1
+    fi
+
+    git -C "$LOCAL_PATH" commit --no-edit
 fi
 
 echo "Pushing current HEAD to origin/$BRANCH..."
