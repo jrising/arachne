@@ -372,7 +372,7 @@ cd -- "$remote_path"
 
 echo "Resetting remote working tree before pulling..."
 git reset --hard
-git clean -fd -- logs readdocs database/logs
+git clean -fd -- logs database/logs
 
 # `git pull --ff-only` refuses unexpected merge commits. This is desirable:
 # the server should not contain hand-edited Git-tracked code.
