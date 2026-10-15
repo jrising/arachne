@@ -1,7 +1,6 @@
 from flask import Flask, render_template, request, Response
 
 import os, pickle, subprocess, time, random, glob, json, base64
-from pathlib import Path
 import regex as re
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
@@ -16,6 +15,7 @@ import memory.default, memory.integration_short_term
 import utils
 from utils import create_chat, fillin_training_end, chat_tokens, chat_tokens_each, chat_tokens_one
 from chatwrap.planner import PlannerEnvironment, PlannerContext
+from streaming import CompletionEventStream
 
 app = Flask(__name__)
 
@@ -75,42 +75,56 @@ def stream(input_text, past_messages, log_filename, history_text="",
                                                     temperature=1, verbosity="medium")
 
         response = ""
-        for line in completion:
+        def process_chunk(line):
             if line.choices[0].delta.content:
                 token = line.choices[0].delta.content
                 response += token
-                yield token
+                return token
+
+        for event in CompletionEventStream(map(process_chunk, completion)):
+            yield event
             if break_streaming:
                 break
     else:
         messages = create_chat(input_text, past_messages, custom_system=custom_system)
-
         memory_user_id = custom_userid or user_id
-    
-        planner_context = PlannerContext(
-            user_id_for_memory=memory_user_id,
-            history_list_raw_data=history_text,
-            current_timestamp=time.time(),
-        )
 
         planner = environment.planner(conversation_id=log_filename)
 
-        response_stream = planner.stream_response(
-            messages,
-            max_tokens=3000 if len(messages) < 4 else 2500,
-            context=planner_context,
-        )
+        def source(progress_sink):
+            planner_context = PlannerContext(
+                user_id_for_memory=memory_user_id,
+                history_list_raw_data=history_text,
+                current_timestamp=time.time(),
+                metadata={
+                    "progress_sink": progress_sink,
+                }
+            )
 
-        print(planner.current_plan_text())
+            response_stream = planner.stream_response(
+                messages,
+                max_tokens=3000 if len(messages) < 4 else 2500,
+                context=planner_context,
+            )
 
-        response = ""
-        for token in response_stream:
-            response += token
-            yield token
+            progress_sink(
+                phase="streaming",
+                message=f"Streaming response from {response_stream.model}…",
+            )
+
+            print(planner.current_plan_text())
+
+            return response_stream
+
+        ces = CompletionEventStream(source)
+        for event in ces:
+            yield event
             if break_streaming:
                 break
 
-        print(planner.explain(response_stream.id))
+        response = ces.response
+
+        print(planner.explain(ces.streamresponse.id))
 
     messages.append({"role": "assistant", "content": response})
         

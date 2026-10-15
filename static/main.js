@@ -84,6 +84,9 @@ async function asyncSubmit() {
     let userinput = document.getElementById('input_text').value;
     let upperdiv = document.getElementById('pastmessages');
 
+    setThinking(true, "Sending…");
+    document.getElementById("thinking-details").textContent = "";
+
     if (userinput != "") {
 	escapedinput = htmlEscape(userinput);
 	upperdiv.innerHTML += `<div class="message">
@@ -114,6 +117,8 @@ async function asyncSubmit() {
             body: formData
         });
         const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
 	
 	upperdiv.innerHTML += `<div class="message">
                 <div class="appmessagediv">
@@ -126,15 +131,49 @@ async function asyncSubmit() {
 	let temprend = document.getElementById('temprend');
         while (true) {
             const {done, value} = await reader.read();
-            const text = new TextDecoder().decode(value);
-            if (done) {
-                endResponse(temp, temprend);
-		break;
+	    if (done) break;
+
+	    buffer += decoder.decode(value, {stream: true});
+
+	    let newline;
+	    while ((newline = buffer.indexOf("\n")) >= 0) {
+		const line = buffer.slice(0, newline).trim();
+		buffer = buffer.slice(newline + 1);
+
+		if (!line) continue;
+
+		console.log(line)
+		
+		let event;
+		try {
+		    event = JSON.parse(line);
+		} catch (err) {
+		    console.error("Bad stream event:", line);
+		    continue;
+		}
+
+		if (event.type === "delta") {
+		    addToResponse(event.text || "", temp, temprend);
+		} else if (event.type === "status") {
+		    updateThinking(event);
+		} else if (event.type === "done") {
+		    setThinking(false);
+		} else if (event.type === "error") {
+		    updateThinking({
+			phase: "error",
+			message: event.message || "Error"
+		    });
+		    setThinking(false, "Error");
+		}
 	    }
-            addToResponse(text, temp, temprend);
-        }
+	}
+
+	endResponse(temp, temprend);
+	setThinking(false);
+
     } catch (error) {
         console.error(error);
+	setThinking(false);
     }
 }
             
@@ -224,4 +263,27 @@ function recycle() {
     }
     $(this).closest('.message').remove();
     asyncSubmit();
+}
+
+function setThinking(on, label = "Thinking…") {
+    const box = document.getElementById("thinking-status");
+    const lab = document.getElementById("thinking-label");
+    if (!box || !lab) return;
+
+    lab.textContent = label;
+    box.classList.toggle("hidden", !on);
+}
+
+function updateThinking(event) {
+    setThinking(true, event.message || "Thinking…");
+
+    const details = document.getElementById("thinking-details");
+    if (!details) return;
+
+    let line = `[${event.phase || event.type}] ${event.message || ""}`;
+    if (event.plan) line += `\n${event.plan}`;
+    if (event.code) line += `\n\n${event.code}`;
+    if (!event.plan && !event.ocde) line += `\n${JSON.stringify(event, null, 2)}`;
+
+    details.textContent += line + "\n\n";
 }
