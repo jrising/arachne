@@ -407,6 +407,11 @@ REMOTE
 
 # ---- Verify that the deployed application is live --------------------------
 
+CURRENT_STEP="Waiting for restart..."
+echo $CURRENT_STEP
+
+sleep 5
+
 CURRENT_STEP="Checking deployment status..."
 echo $CURRENT_STEP
 
