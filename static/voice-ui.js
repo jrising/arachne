@@ -1,0 +1,892 @@
+"use strict";
+
+const state = {
+    mode: null,
+    peerConnection: null,
+    dataChannel: null,
+    localStream: null,
+    liveEpoch: 0,
+    liveConnecting: false,
+    
+    economyAbortController: null,
+
+    messages: [],
+    
+    liveAssistantMessages: new Map(),
+    liveUserMessages: new Map(),
+    pendingLiveUserMessages: [],
+
+    livePersistedUserItems: new Set(),
+    livePersistedAssistantResponses: new Set()
+};
+
+Object.assign(state, {
+  economyRecorder: null,
+  economyAudioChunks: [],
+  economyMicStream: null,
+  economyRecording: false,
+  speechVoice: null
+});
+
+
+const el = {
+  status: document.getElementById("status"),
+  transcript: document.getElementById("transcript"),
+  emptyTranscript: document.getElementById("empty-transcript"),
+  textForm: document.getElementById("text-form"),
+  textInput: document.getElementById("text-input"),
+  sendButton: document.getElementById("send-button"),
+  liveConnectButton: document.getElementById("live-connect-button"),
+  interruptButton: document.getElementById("interrupt-button"),
+  agentAudio: document.getElementById("agent-audio"),
+  modeButtons: document.querySelectorAll("[data-mode]"),
+  readerDocument: document.getElementById("reader-document"),
+  readerStatus: document.getElementById("reader-status")
+};
+
+Object.assign(el, {
+  economyMicButton: document.getElementById("economy-mic-button"),
+  speechPreview: document.getElementById("speech-preview"),
+  speechVoice: document.getElementById("speech-voice"),
+  speechRate: document.getElementById("speech-rate"),
+  speechPitch: document.getElementById("speech-pitch"),
+  speechRateValue: document.getElementById("speech-rate-value"),
+  speechPitchValue: document.getElementById("speech-pitch-value")
+});
+
+function setStatus(text) {
+  el.status.textContent = text;
+}
+
+function scrollTranscriptToBottom() {
+  el.transcript.scrollTop = el.transcript.scrollHeight;
+}
+
+function addMessage(role, text = "", { partial = false } = {}) {
+  el.emptyTranscript?.remove();
+
+  const message = document.createElement("div");
+  message.className = `message ${role}${partial ? " partial" : ""}`;
+  message.textContent = text;
+
+  el.transcript.appendChild(message);
+  scrollTranscriptToBottom();
+  return message;
+}
+
+function appendMessageText(message, text) {
+  message.textContent += text;
+  scrollTranscriptToBottom();
+}
+
+function finalizeMessage(message) {
+  message.classList.remove("partial");
+  scrollTranscriptToBottom();
+}
+
+function selectedDocument() {
+  return el.readerDocument?.value || "";
+}
+
+function setMode(mode) {
+  if (state.mode === mode) return;
+
+  // Economy must not leave an active microphone/Reatime session behind.
+  if (mode === "economy" && state.peerConnection) {
+    disconnectLive();
+  }
+
+  // Avoid a running Economy request continuing after entering Live.
+  if (mode === "live") {
+    stopEconomyRequest();
+  }
+
+  state.mode = mode;
+
+  for (const button of el.modeButtons) {
+    button.classList.toggle("active", button.dataset.mode === mode);
+  }
+
+  if (mode === "live") {
+    el.liveConnectButton.hidden = false;
+    el.textInput.placeholder = "Type a message, or connect to speak live…";
+    setStatus("Live mode selected. Connect microphone to begin.");
+  } else {
+    el.liveConnectButton.hidden = true;
+    el.textInput.placeholder = "Type a message…";
+    setStatus("Economy mode ready.");
+  }
+}
+
+function stopEconomyRequest() {
+  if (state.economyAbortController) {
+    state.economyAbortController.abort();
+    state.economyAbortController = null;
+  }
+}
+
+function createPendingLiveUserMessage() {
+  const message = addMessage("user", "…", { partial: true });
+  state.pendingLiveUserMessages.push(message);
+  return message;
+}
+
+function completePendingLiveUserMessage(transcript) {
+  const message = state.pendingLiveUserMessages.shift()
+    || addMessage("user", "", { partial: true });
+
+  message.textContent = transcript || "[No speech recognized]";
+  finalizeMessage(message);
+  return message;
+}
+
+function disconnectLive() {
+  // Invalidates callbacks from this and all prior Live sessions.
+  state.liveEpoch += 1;
+  state.liveConnecting = false;
+
+  const dataChannel = state.dataChannel;
+  const peerConnection = state.peerConnection;
+  const localStream = state.localStream;
+
+  state.dataChannel = null;
+  state.peerConnection = null;
+  state.localStream = null;
+
+  if (dataChannel) dataChannel.close();
+  if (peerConnection) peerConnection.close();
+
+  for (const track of localStream?.getTracks() || []) {
+    track.stop();
+  }
+
+  el.agentAudio.pause();
+  el.agentAudio.srcObject = null;
+  el.liveConnectButton.textContent = "Connect live voice";
+  el.interruptButton.disabled = !state.economyAbortController;
+
+  // These IDs are only meaningful within one Realtime session.
+  state.liveAssistantMessages.clear();
+  state.liveUserMessages.clear();
+    state.pendingLiveUserMessages = [];
+
+    state.livePersistedUserItems.clear();
+    state.livePersistedAssistantResponses.clear();
+
+}
+
+function interruptEverything() {
+  stopEconomyRecording();
+  stopEconomyRequest();
+  window.speechSynthesis?.cancel();
+
+  if (state.peerConnection) {
+    disconnectLive();
+  }
+
+  setStatus("Stopped.");
+}
+
+async function connectLive() {
+    if (state.liveConnecting) return;
+
+    if (state.peerConnection) {
+	disconnectLive();
+	setStatus("Live voice disconnected.");
+	return;
+    }
+
+    state.liveConnecting = true;
+    const epoch = ++state.liveEpoch;
+
+    try {
+	setStatus("Requesting microphone access…");
+
+	const params = new URLSearchParams({
+	    log_filename: window.VOICE_CONFIG.log_filename
+	});
+
+	const secretResponse = await fetch(
+	    `${window.VOICE_ENDPOINTS.realtimeSession}?${params}`
+	);
+	const secretData = await secretResponse.json();
+	
+	if (!secretResponse.ok || secretData.error) {
+	    throw new Error(secretData.error || "Could not create Realtime session.");
+	}
+	
+	const ephemeralToken = secretData.value;
+	if (!ephemeralToken) {
+	    throw new Error("Realtime session response did not contain a token.");
+	}
+
+	state.localStream = await navigator.mediaDevices.getUserMedia({
+	    audio: {
+		echoCancellation: true,
+		noiseSuppression: true,
+		autoGainControl: true
+	    }
+	});
+	
+	const pc = new RTCPeerConnection();
+	state.peerConnection = pc;
+
+	pc.onconnectionstatechange = () => {
+	    if (epoch !== state.liveEpoch || state.peerConnection !== pc) return;
+
+	    if (pc.connectionState === "connected") {
+		setStatus("Live voice connected. Speak naturally.");
+		el.liveConnectButton.textContent = "Disconnect live voice";
+		el.interruptButton.disabled = false;
+	    } else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
+		if (pc.connectionState !== "closed") {
+		    setStatus(`Live connection ${pc.connectionState}.`);
+		}
+	    }
+	};
+	
+	pc.ontrack = event => {
+	    el.agentAudio.srcObject = event.streams[0];
+	    // iOS may require this explicit call despite autoplay.
+	    el.agentAudio.play().catch(() => {});
+	};
+	
+	const dataChannel = pc.createDataChannel("oai-events");
+	state.dataChannel = dataChannel;
+
+	dataChannel.onmessage = event => {
+	    if (epoch !== state.liveEpoch || state.dataChannel !== dataChannel) return;
+
+	    try {
+		handleRealtimeEvent(JSON.parse(event.data));
+	    } catch (error) {
+		console.warn("Could not parse Realtime event:", error, event.data);
+	    }
+	};
+	
+	dataChannel.onerror = error => console.error("Realtime data-channel error:", error);
+
+	for (const track of state.localStream.getTracks()) {
+	    pc.addTrack(track, state.localStream);
+	}
+
+	const offer = await pc.createOffer();
+	await pc.setLocalDescription(offer);
+
+	setStatus("Connecting to live voice…");
+
+	const answerResponse = await fetch("https://api.openai.com/v1/realtime/calls", {
+	    method: "POST",
+	    headers: {
+		"Authorization": `Bearer ${ephemeralToken}`,
+		"Content-Type": "application/sdp"
+	    },
+	    body: offer.sdp
+	});
+	
+	if (!answerResponse.ok) {
+	    throw new Error(await answerResponse.text());
+	}
+	
+	await pc.setRemoteDescription({
+	    type: "answer",
+	    sdp: await answerResponse.text()
+	});
+	
+    } catch (error) {
+	console.error(error);
+	disconnectLive();
+	setStatus(`Live connection error: ${error.message}`);
+    } finally {
+	if (epoch === state.liveEpoch) {
+	    state.liveConnecting = false;
+	}
+    }
+}
+
+async function persistLiveMessage(role, content) {
+  if (!content?.trim()) return;
+
+  try {
+    const response = await fetch(window.VOICE_ENDPOINTS.liveMessage, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        log_filename: window.VOICE_CONFIG.log_filename,
+        role,
+        content
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+  } catch (error) {
+    console.error("Could not persist Live message:", error);
+  }
+}
+
+
+function responseMessageFor(event) {
+  const responseId = event.response_id || event.response?.id || "unidentified-response";
+
+  if (!state.liveAssistantMessages.has(responseId)) {
+    state.liveAssistantMessages.set(
+      responseId,
+      addMessage("assistant", "", { partial: true })
+    );
+  }
+
+  return state.liveAssistantMessages.get(responseId);
+}
+
+function handleRealtimeEvent(event) {
+  /*
+    Event naming has changed across Realtime API versions. These aliases make
+    transcript rendering resilient while you inspect events in DevTools.
+  */
+  switch (event.type) {
+  case "input_audio_buffer.speech_started":
+      createPendingLiveUserMessage();
+      break;
+
+  case "conversation.item.input_audio_transcription.completed": {
+      const itemId = event.item_id || crypto.randomUUID();
+
+      if (!state.liveUserMessages.has(itemId)) {
+	  const transcript = event.transcript || "";
+	  const message = completePendingLiveUserMessage(transcript);
+	  
+	  state.liveUserMessages.set(itemId, message);
+	  state.messages.push({ role: "user", content: transcript });
+	  
+	  if (transcript.trim() && !state.livePersistedUserItems.has(itemId)) {
+	      state.livePersistedUserItems.add(itemId);
+	      persistLiveMessage("user", transcript);
+	  }
+      }
+      break;
+  }
+
+    case "response.created":
+      responseMessageFor(event);
+      break;
+
+    case "response.output_audio_transcript.delta":
+    case "response.audio_transcript.delta": {
+      appendMessageText(responseMessageFor(event), event.delta || "");
+      break;
+    }
+
+    case "response.output_audio_transcript.done":
+    case "response.audio_transcript.done": {
+	const message = responseMessageFor(event);
+	
+	if (!message.textContent && event.transcript) {
+	    message.textContent = event.transcript;
+	}
+	
+	finalizeMessage(message);
+	break;
+    }
+
+    case "response.done": {
+	const responseId =
+	      event.response_id || event.response?.id || "unidentified-response";
+	
+	const message = responseMessageFor(event);
+	finalizeMessage(message);
+	
+	const text = message.textContent.trim();
+
+	if (text && !state.livePersistedAssistantResponses.has(responseId)) {
+	    state.livePersistedAssistantResponses.add(responseId);
+	    state.messages.push({ role: "assistant", content: text });
+	    persistLiveMessage("assistant", text);
+	}
+	break;
+    }
+      
+    case "error":
+      console.error("OpenAI Realtime error:", event);
+      setStatus(`Realtime error: ${event.error?.message || "unknown error"}`);
+      break;
+  }
+}
+
+async function sendEconomyText(inputText, {
+  speakResponse = false,
+  ...extraFields
+} = {}) {
+    const text = inputText.trim();
+    if (!text) return;
+
+    stopEconomyRequest();
+
+    addMessage("user", text);
+    state.messages.push({ role: "user", content: text });
+    const assistantMessage = addMessage("assistant", "", { partial: true });
+
+    const formData = new FormData();
+    formData.set("input_text", text);
+    formData.set("log_filename", window.VOICE_CONFIG.log_filename);
+    formData.set("task", window.VOICE_TASK);
+    
+    if (selectedDocument()) {
+	formData.set("document", selectedDocument());
+    }
+    
+    for (const [key, value] of Object.entries(extraFields)) {
+	formData.set(key, value);
+    }
+
+    const controller = new AbortController();
+    state.economyAbortController = controller;
+    el.interruptButton.disabled = false;
+
+    try {
+	setStatus("Thinking…");
+	
+	const response = await fetch(window.VOICE_ENDPOINTS.completion, {
+	    method: "POST",
+	    body: formData,
+	    signal: controller.signal
+	});
+
+	if (!response.ok) {
+	    throw new Error(await response.text() || `HTTP ${response.status}`);
+	}
+
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let result = "";
+
+	while (true) {
+	    const { done, value } = await reader.read();
+	    if (done) break;
+	    
+	    const chunk = decoder.decode(value, { stream: true });
+	    result += chunk;
+	    appendMessageText(assistantMessage, chunk);
+	}
+	
+	const finalChunk = decoder.decode();
+	if (finalChunk) {
+	    result += finalChunk;
+	    appendMessageText(assistantMessage, finalChunk);
+	}
+
+	finalizeMessage(assistantMessage);
+	state.messages.push({ role: "assistant", content: result });
+
+	if (speakResponse) {
+	    speakText(result);
+	}
+
+
+	setStatus("Ready.");
+
+    } catch (error) {
+	if (error.name === "AbortError") {
+	    appendMessageText(assistantMessage, "\n\n[Stopped]");
+	    finalizeMessage(assistantMessage);
+	    setStatus("Stopped.");
+	} else {
+	    console.error(error);
+	    assistantMessage.textContent = `Error: ${error.message}`;
+	    finalizeMessage(assistantMessage);
+	    setStatus("Request failed.");
+	}
+    } finally {
+	if (state.economyAbortController === controller) {
+	    state.economyAbortController = null;
+	    el.interruptButton.disabled = !state.peerConnection;
+	}
+    }
+}
+
+async function streamReaderRequest(endpoint, formData, userLabel) {
+  addMessage("user", userLabel);
+  const assistantMessage = addMessage("assistant", "", { partial: true });
+
+  const controller = new AbortController();
+  state.economyAbortController = controller;
+  el.interruptButton.disabled = false;
+
+  try {
+    setStatus("Reading…");
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      body: formData,
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let result = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value, { stream: true });
+      result += chunk;
+      appendMessageText(assistantMessage, chunk);
+    }
+
+    finalizeMessage(assistantMessage);
+    state.messages.push({ role: "assistant", content: result });
+
+    speakText(result);
+    setStatus("Ready.");
+
+  } catch (error) {
+    assistantMessage.textContent =
+      error.name === "AbortError" ? "[Stopped]" : `Error: ${error.message}`;
+    finalizeMessage(assistantMessage);
+    setStatus(error.name === "AbortError" ? "Stopped." : "Reader failed.");
+
+  } finally {
+    if (state.economyAbortController === controller) {
+      state.economyAbortController = null;
+      el.interruptButton.disabled = !state.peerConnection;
+    }
+  }
+}
+
+
+function emitReaderAction(action) {
+  const document = selectedDocument();
+
+  if (action === "document-status") {
+    const params = new URLSearchParams({
+      document,
+      log_filename: window.VOICE_CONFIG.log_filename
+    });
+
+    fetch(`${window.VOICE_ENDPOINTS.readerStatus}?${params}`)
+      .then(response => response.json())
+      .then(status => {
+        el.readerStatus.textContent =
+          `Next page: ${status.nextpage} of ${status.total}.`;
+      })
+      .catch(() => {
+        el.readerStatus.textContent = "Could not get document status.";
+      });
+
+    return;
+  }
+
+  const formData = new FormData();
+  formData.set("document", document);
+  formData.set("log_filename", window.VOICE_CONFIG.log_filename);
+
+  if (action === "read-next") {
+    streamReaderRequest(
+      window.VOICE_ENDPOINTS.readerRead,
+      formData,
+      "[Reader: read next page]"
+    );
+  }
+
+  if (action === "summarize") {
+    streamReaderRequest(
+      window.VOICE_ENDPOINTS.readerSummary,
+      formData,
+      "[Reader: summarize document]"
+    );
+  }
+}
+
+function speakText(text) {
+  if (!("speechSynthesis" in window) || !text?.trim()) return;
+
+  window.speechSynthesis.cancel();
+
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = 1.05;
+  utterance.pitch = 1.0;
+
+  window.speechSynthesis.speak(utterance);
+}
+
+el.textForm.addEventListener("submit", event => {
+  event.preventDefault();
+  const text = el.textInput.value;
+  el.textInput.value = "";
+  el.textInput.style.height = "";
+
+  // Typed requests use the cheaper text route even if Live is connected.
+  sendEconomyText(text);
+});
+
+el.textInput.addEventListener("input", () => {
+  el.textInput.style.height = "auto";
+  el.textInput.style.height = `${Math.min(el.textInput.scrollHeight, 128)}px`;
+});
+
+el.modeButtons.forEach(button => {
+  button.addEventListener("click", () => {
+    setMode(button.dataset.mode);
+  });
+});
+
+el.liveConnectButton.addEventListener("click", connectLive);
+el.interruptButton.addEventListener("click", interruptEverything);
+
+document.querySelectorAll("[data-reader-action]").forEach(button => {
+  button.addEventListener("click", () => emitReaderAction(button.dataset.readerAction));
+});
+
+window.addEventListener("beforeunload", disconnectLive);
+
+setMode("economy");
+
+function populateSpeechVoices() {
+  const voices = window.speechSynthesis?.getVoices() || [];
+  const priorValue = el.speechVoice.value;
+
+  el.speechVoice.replaceChildren();
+
+  for (const voice of voices) {
+    const option = document.createElement("option");
+    option.value = voice.voiceURI;
+    option.textContent = `${voice.name} (${voice.lang})`;
+    el.speechVoice.appendChild(option);
+  }
+
+  const preferred =
+    voices.find(v => /Samantha|Karen|Ava|Zoe|Google US English/i.test(v.name)) ||
+    voices.find(v => v.lang.startsWith("en")) ||
+    voices[0];
+
+  if (priorValue && voices.some(v => v.voiceURI === priorValue)) {
+    el.speechVoice.value = priorValue;
+  } else if (preferred) {
+    el.speechVoice.value = preferred.voiceURI;
+  }
+}
+
+function selectedSpeechVoice() {
+  const uri = el.speechVoice.value;
+  return (window.speechSynthesis?.getVoices() || [])
+    .find(voice => voice.voiceURI === uri) || null;
+}
+
+function speakText(text) {
+  if (!text?.trim() || !("speechSynthesis" in window)) return;
+
+  window.speechSynthesis.cancel();
+
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.voice = selectedSpeechVoice();
+  utterance.rate = Number(el.speechRate.value);
+  utterance.pitch = Number(el.speechPitch.value);
+
+  utterance.onstart = () => setStatus("Speaking. Hold mic button to interrupt.");
+  utterance.onend = () => {
+    if (!state.economyRecording) setStatus("Ready.");
+  };
+  utterance.onerror = () => {
+    if (!state.economyRecording) setStatus("Ready.");
+  };
+
+  window.speechSynthesis.speak(utterance);
+}
+
+if ("speechSynthesis" in window) {
+  speechSynthesis.addEventListener("voiceschanged", populateSpeechVoices);
+  populateSpeechVoices();
+}
+
+el.speechRate.addEventListener("input", () => {
+  el.speechRateValue.value = el.speechRate.value;
+  el.speechRateValue.textContent = el.speechRate.value;
+});
+
+el.speechPitch.addEventListener("input", () => {
+  el.speechPitchValue.value = el.speechPitch.value;
+  el.speechPitchValue.textContent = el.speechPitch.value;
+});
+
+async function startEconomyRecording() {
+  if (state.economyRecording) return;
+
+  // Speaking must never feed back into the microphone interaction.
+  window.speechSynthesis?.cancel();
+  stopEconomyRequest();
+
+  try {
+    state.economyMicStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
+
+    const recorder = new MediaRecorder(state.economyMicStream, {
+      mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : undefined
+    });
+
+    state.economyRecorder = recorder;
+    state.economyAudioChunks = [];
+    state.economyRecording = true;
+
+    recorder.ondataavailable = event => {
+      if (event.data.size > 0) state.economyAudioChunks.push(event.data);
+    };
+
+    recorder.onstop = transcribeEconomyRecording;
+
+    recorder.start();
+    el.economyMicButton.textContent = "Release to send";
+    el.speechPreview.textContent = "Listening…";
+    setStatus("Listening…");
+
+  } catch (error) {
+    console.error(error);
+    setStatus(`Microphone error: ${error.message}`);
+  }
+}
+
+function stopEconomyRecording() {
+  if (!state.economyRecording || !state.economyRecorder) return;
+
+  state.economyRecording = false;
+  el.economyMicButton.textContent = "Hold to speak";
+  state.economyRecorder.stop();
+}
+
+async function transcribeEconomyRecording() {
+  const stream = state.economyMicStream;
+  const chunks = state.economyAudioChunks;
+
+  state.economyRecorder = null;
+  state.economyMicStream = null;
+  state.economyAudioChunks = [];
+
+  for (const track of stream?.getTracks() || []) track.stop();
+
+  if (!chunks.length) {
+    el.speechPreview.textContent = "";
+    setStatus("Ready.");
+    return;
+  }
+
+  try {
+    setStatus("Transcribing…");
+
+    const blob = new Blob(chunks, { type: "audio/webm" });
+    const form = new FormData();
+    form.set("audio", blob, "speech.webm");
+
+    const response = await fetch(window.VOICE_ENDPOINTS.economyTranscribe, {
+      method: "POST",
+      body: form
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Transcription failed.");
+    }
+
+    const text = data.text.trim();
+    el.speechPreview.textContent = text;
+
+    if (text) {
+      await dispatchSpokenRequest(text);
+    } else {
+      setStatus("I did not catch that.");
+    }
+
+  } catch (error) {
+    console.error(error);
+    setStatus(`Transcription failed: ${error.message}`);
+  }
+}
+
+el.economyMicButton.addEventListener("pointerdown", event => {
+  event.preventDefault();
+  el.economyMicButton.setPointerCapture?.(event.pointerId);
+  startEconomyRecording();
+});
+
+for (const eventName of ["pointerup", "pointercancel", "lostpointercapture"]) {
+  el.economyMicButton.addEventListener(eventName, stopEconomyRecording);
+}
+
+async function dispatchSpokenRequest(text) {
+    const normalized = text
+	  .trim()
+	  .toLowerCase()
+	  .replace(/[^\w\s]/g, " ")  // commas, punctuation, etc.
+	  .replace(/\s+/g, " ")
+	  .trim();
+
+    if (
+	/^(?:next|read next|next page|read the next page)(?: please)?$/
+	    .test(normalized)
+    ) {
+	emitReaderAction("read-next");
+	return;
+    }
+
+    if (
+	/^(?:summarize|summary|summarize document|summarize this document)(?: please)?$/
+	    .test(normalized)
+    ) {
+	emitReaderAction("summarize");
+	return;
+    }
+    
+    if (
+	/^(?:document status|status|where are we|what page are we on)(?: please)?$/
+	    .test(normalized)
+    ) {
+	emitReaderAction("document-status");
+	return;
+    }
+
+    const noteMatch = text.match(
+	/^(?:note|make a note|reader note)\s*[:,]?\s+(.+)/i
+    );
+
+    if (noteMatch) {
+	await saveReaderNote(noteMatch[1]);
+	return;
+    }
+
+    // Ordinary spoken conversational question.
+    sendEconomyText(text, { speakResponse: true });
+}
+
+async function saveReaderNote(note) {
+  const form = new FormData();
+  form.set("document", selectedDocument());
+  form.set("log_filename", window.VOICE_CONFIG.log_filename);
+  form.set("input_text", note);
+
+  const response = await fetch(window.VOICE_ENDPOINTS.readerNote, {
+    method: "POST",
+    body: form
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text() || "Could not save note.");
+  }
+
+  addMessage("user", `[Reader note] ${note}`);
+  addMessage("assistant", "Noted.");
+  speakText("Noted.");
+  setStatus("Note saved.");
+}
+

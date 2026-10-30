@@ -7,6 +7,9 @@ import utils
 
 load_dotenv()
 
+## . venv2026/bin/activate
+## flask --app realtime run --port=5001
+
 app = Flask(__name__)
 
 # Ensure your key exists

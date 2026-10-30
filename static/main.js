@@ -40,8 +40,8 @@ function addButtons(temprend, uid) {
     $(temprend).parent().append("[<span class=\"vote-icons up-vote\" data-link-id=\"" + uid + "\">👍</span><span class=\"vote-icons down-vote\" data-link-id=\"" + uid + "\">👎</span><span class=\"vote-icons recycle\" data-link-id=\"" + uid + "\">♻</span>]");
 }
 
-function endResponse(temp, temprend) {
-    addButtons(temprend, "response-" + $('.appmessagediv').length);
+function endResponse(temp, temprend, responseId) {
+    addButtons(temprend, responseId);
     temp.removeAttribute('id');
     temprend.removeAttribute('id');
 }
@@ -129,6 +129,8 @@ async function asyncSubmit() {
 	      
         let temp = document.getElementById('temp');
 	let temprend = document.getElementById('temprend');
+	let responseId = null;
+	
         while (true) {
             const {done, value} = await reader.read();
 	    if (done) break;
@@ -142,8 +144,6 @@ async function asyncSubmit() {
 
 		if (!line) continue;
 
-		console.log(line)
-		
 		let event;
 		try {
 		    event = JSON.parse(line);
@@ -152,9 +152,21 @@ async function asyncSubmit() {
 		    continue;
 		}
 
+		if (event.type != "delta")
+		    console.log(line);
+		
 		if (event.type === "delta") {
 		    addToResponse(event.text || "", temp, temprend);
+		} else if (event.type === "response_id") {
+		    responseId = event.response_id;
+		    temprend.closest(".appmessagediv")
+			.setAttribute("data-response-id", responseId);
 		} else if (event.type === "status") {
+		    if (event.phase === "initialize") {
+			responseId = event.message
+			temprend.closest(".appmessagediv")
+			    .setAttribute("data-response-id", responseId);
+		    }
 		    updateThinking(event);
 		} else if (event.type === "done") {
 		    setThinking(false);
@@ -168,7 +180,7 @@ async function asyncSubmit() {
 	    }
 	}
 
-	endResponse(temp, temprend);
+	endResponse(temp, temprend, responseId);
 	setThinking(false);
 
     } catch (error) {
@@ -220,39 +232,6 @@ $(function() {
 // Function to apply the shake effect to newly added vote icons
 function applyShakeEffect() {
     $('.vote-icons.clickable').last().effect('shake', {distance: 5}, 300);
-}
-
-// Function to handle up/down-vote and make AJAX call
-function voteUp() {
-    $(this).effect('shake', {distance: 5}, 300);
-    var linkId = $(this).closest('.vote-icons').data('link-id');
-    let upperdiv = document.getElementById('pastmessages');
-    $.get({
-        url: '/vote-updown',
-	data: { id: linkId, prob: 1, past_messages: document.getElementById('pastmessages').innerHTML },
-	function (data) {
-            // Handle successful up-vote
-            console.log('Up-vote successful for link ID:', linkId);
-        }}).fail(function() {
-            // Handle errors
-            console.error('Error occurred.');
-        });
-}
-
-function voteDown() {
-    $(this).effect('shake', {distance: 5}, 300);
-    var linkId = $(this).closest('.vote-icons').data('link-id');
-    let upperdiv = document.getElementById('pastmessages');
-    $.get({
-        url: '/vote-updown',
-	data: { id: linkId, prob: 0, past_messages: document.getElementById('pastmessages').innerHTML },
-	function (data) {
-            // Handle successful up-vote
-            console.log('Down-vote successful for link ID:', linkId);
-        }}).fail(function() {
-            // Handle errors
-            console.error('Error occurred.');
-        });
 }
 
 function recycle() {

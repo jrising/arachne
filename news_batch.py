@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 from knowledge import bulletin, collect, feed_collect, news
+from chatwrap import streaming
 import utils
 
 def get_texts(engine, items):
@@ -43,7 +44,7 @@ def make_batchfile(texts):
     prompt = open('prompts/news.md', 'r').read()
     prompt = prompt.replace("[CONTEXT]", "\n\n".join(prompttexts))
     
-    messages = utils.create_chat(prompt, [])
+    messages = streaming.create_chat(prompt, [])
     utils.fillin_training_end(messages, 'gpt-4o')
     
     line = dict(custom_id="sole",

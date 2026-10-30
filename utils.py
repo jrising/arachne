@@ -14,7 +14,7 @@ Default to <= 350 words and <= 8 bullets unless the user explicitly asks for det
 Avoid repetition and exhaustive edge cases.
 End with a complete sentence; do not promise a continuation.
 
-Your answer will be rendered as Markdown, with MathJax for LaTeX (use $...$ and \[...\])."""
+Your answer will be rendered as Markdown, with MathJax for LaTeX (use $...$ and \\[...\\])."""
 
 def get_log_filename(subdir=None):
     # Get current date and time without milliseconds
@@ -30,28 +30,6 @@ def get_log_filename(subdir=None):
         return filename
     else:
         return os.path.join(subdir, filename)
-
-def create_chat(input_text, past_messages, history_text="", custom_system=None):
-    if custom_system:
-        system_message = custom_system
-    else:
-        system_message = get_default_system_message()
-
-    print(history_text)
-
-    if history_text:
-        system_message += "\n\n" + history_text
-
-    system_message += "\n\n" + get_default_response_policy()
-    
-    messages = [{"role": "system", "content": system_message}]
-
-    if past_messages:
-        for message in past_messages:
-            messages.append(message)
-    messages.append({"role": "user", "content": input_text})
-
-    return messages
 
 def chat_tokens_one(text):
     encoding = tiktoken.get_encoding("cl100k_base")

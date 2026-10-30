@@ -1,0 +1,256 @@
+I am rewriting my audio AI subsystem. I previously tried out both OpenAI's realtime system (works great) and a more fleshed-out system for audio-to-text-to-audio interaction (very flaky). Now, I'm working to integrate both of these ideas, but also to improve the system generally, so I can choose an "economy" mode of interaction that doesn't pay the realtime costs but works much better.
+
+Here is the current code:
+=====
+gfind voice_ui -name "*.py" -print -exec cat {} \; -printf "\n=====\n"
+
+templates/voice_ui.html
+cat templates/voice_ui.html
+
+static/voice-ui.js
+cat static/voice-ui.js
+
+routes currently in app.py:
+```
+@app.route('/completion_reader', methods=['GET', 'POST'])
+def completion_reader():
+    if request.method == "POST":
+        try:
+            data = request.form
+
+            log_filename = data["log_filename"]
+
+            if os.path.basename(log_filename) != log_filename:
+                return "Invalid log filename.", 400
+
+            metadata = load_reader_metadata(data['document'], data['log_filename'])
+            metadatapath = data['document'].replace('.pdf', '.json')
+
+            if 'page' in data:
+                nextpage = int(data['page'])
+            else:
+                nextpage = metadata.get('next-page', 0) + 1
+            metadata['next-page'] = nextpage
+            with open(metadatapath, 'w') as fp:
+                json.dump(metadata, fp, indent=4)
+        except:
+            return "Cannot load metadata."
+            
+        try:
+            reader = PdfReader(data['document'])
+            print(reader)
+
+            page = reader.pages[nextpage - 1]
+            text = page.extract_text(extraction_mode="layout", layout_mode_space_vertically=False, layout_mode_strip_rotated=False)
+        except:
+            return "Cannot read PDF."
+            
+        try:
+            ## Process images
+            imagetexts = []
+            for count, image_file_object in enumerate(page.images):
+                if len(image_file_object.data) > 1024 * 1024 * 4:
+                    detail = "low"
+                else:
+                    detail = "high"
+                encoded = base64.b64encode(image_file_object.data).decode("utf-8")
+
+                completion = client.chat.completions.create(
+                    model="gpt-5.6-luna",
+                    messages=[
+                        { "role": "user",
+                          "content": [
+                              { "type": "text", "text": "Please describe this image in detail." },
+                              { "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{encoded}",
+                                    "detail": detail
+                                }}]}])
+
+                imagetexts.append(completion.choices[0].message.content)
+        except:
+            return "Cannot process images."
+
+        try:
+            if nextpage == 1:
+                prompt = "Here is the first page of a PDF, in a text-based layout:\n===\n" + text + "\n===\n"
+            else:
+                prompt = f"Here is page {nextpage} of a PDF, in a text-based layout:\n===\n" + text + "\n===\n"
+            if len(imagetexts) > 0:
+                prompt += "In addition, the page has the following images, as described below:\n===\n" + "\n===\n".join(imagetexts) + "\n===\n"
+
+            log_path = os.path.join("logs", log_filename)
+
+            if os.path.exists(log_path):
+                messages = chatlog.load_log(
+                    utils.get_default_system_message(),
+                    log_path,
+                )
+                history = messages[-2:]
+            else:
+                history = []
+
+            strm = streaming.stream_text(prompt + "Please write this in a stream appropriate for a text-to-speech reader which does not handle symbols well (it names each one). Use only the provided text, and include everything except background images unless there are number-heavy tables, which you can summarize. Incorporate abbreviated footnote material into the text stream and specify references as Name et al. YYYY (for academic papers) or Report Title YYYY (for institution reports).", history, None, on_stream_end=lambda response: log_summary(prompt, response, log_filename), user_id=user_id)
+
+            return Response(strm, mimetype='text/event-stream')
+        except:
+            return "Cannot create translation."
+    else:
+        return completion()
+
+@app.route('/completion_reader_summary', methods=['POST'])
+def completion_reader_summary():
+    data = request.form
+
+    log_filename = data["log_filename"]
+    log_path = os.path.join("logs", log_filename)
+
+    messages = chatlog.load_log(
+        utils.get_default_system_message(),
+        log_path,
+    )
+
+    metadata = load_reader_metadata(data['document'], data['log_filename'])
+
+    strm = streaming.stream_text("Now, please provide a summary of the entire document to this point and any notes from me.", messages, None, user_id=user_id)
+
+    return Response(strm, mimetype='text/event-stream')
+
+@app.route('/reader_document', methods=['GET'])
+def reader_document():
+    metadata = load_reader_metadata(request.args.get('document'), request.args.get('log_filename'))
+
+    pagenum = metadata.get('next-page', 0)
+    reader = PdfReader(request.args.get('document'))
+    
+    return {"total": len(reader.pages), "nextpage": pagenum+1}
+
+@app.route('/reader_note', methods=['POST'])
+def reader_note():
+    data = request.form
+    log_filename = data["log_filename"]
+    log_path = os.path.join("logs", log_filename)
+
+    messages = chatlog.load_log(
+        utils.get_default_system_message(),
+        log_path,
+    )
+
+    metadata = load_reader_metadata(data['document'], data['log_filename'])
+
+    chatlog.save_log(log_path, messages + [{'role': "user", 'content': data['input_text']}])
+
+    return '', 200  # Respond with success status
+```
+
+Now, I would like to get the reader system working properly, ideally
+with a cheap economy-style (but better than before) voice
+interface. In addition to improving the economy setup, this will
+require using or repurposing code that I have that is still inside of
+my main app.py:
+```
+@app.route('/completion_reader', methods=['GET', 'POST'])
+def completion_reader():
+    if request.method == "POST":
+        try:
+            data = request.form
+            
+            metadata = load_reader_metadata(data['document'], data['log_filename'])
+            metadatapath = data['document'].replace('.pdf', '.json')
+
+            if 'page' in data:
+                nextpage = int(data['page'])
+            else:
+                nextpage = metadata.get('next-page', 0) + 1
+            metadata['next-page'] = nextpage
+            with open(metadatapath, 'w') as fp:
+                json.dump(metadata, fp, indent=4)
+        except:
+            return "Cannot load metadata."
+            
+        try:
+            reader = PdfReader(data['document'])
+            print(reader)
+
+            page = reader.pages[nextpage - 1]
+            text = page.extract_text(extraction_mode="layout", layout_mode_space_vertically=False, layout_mode_strip_rotated=False)
+        except:
+            return "Cannot read PDF."
+            
+        try:
+            ## Process images
+            imagetexts = []
+            for count, image_file_object in enumerate(page.images):
+                if len(image_file_object.data) > 1024 * 1024 * 4:
+                    detail = "low"
+                else:
+                    detail = "high"
+                encoded = base64.b64encode(image_file_object.data).decode("utf-8")
+
+                completion = client.chat.completions.create(
+                    model="gpt-5.6-luna",
+                    messages=[
+                        { "role": "user",
+                          "content": [
+                              { "type": "text", "text": "Please describe this image in detail." },
+                              { "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{encoded}",
+                                    "detail": detail
+                                }}]}])
+
+                imagetexts.append(completion.choices[0].message.content)
+        except:
+            return "Cannot process images."
+
+        try:
+            if nextpage == 1:
+                prompt = "Here is the first page of a PDF, in a text-based layout:\n===\n" + text + "\n===\n"
+            else:
+                prompt = f"Here is page {nextpage} of a PDF, in a text-based layout:\n===\n" + text + "\n===\n"
+            if len(imagetexts) > 0:
+                prompt += "In addition, the page has the following images, as described below:\n===\n" + "\n===\n".join(imagetexts) + "\n===\n"
+
+            if os.path.exists(os.path.join("logs", metadata['log-filename'])):
+                messages = chatlog.load_log(utils.get_default_system_message(), os.path.join("logs", metadata['log-filename']))
+                history = messages[-2:]
+            else:
+                history = []
+            
+            strm = streaming.stream_text(prompt + "Please write this in a stream appropriate for a text-to-speech reader which does not handle symbols well (it names each one). Use only the provided text, and include everything except background images unless there are number-heavy tables, which you can summarize. Incorporate abbreviated footnote material into the text stream and specify references as Name et al. YYYY (for academic papers) or Report Title YYYY (for institution reports).", history, None, on_stream_end=lambda response: log_summary(prompt, response, metadata['log-filename']), user_id=user_id)
+
+            return Response(strm, mimetype='text/event-stream')
+        except:
+            return "Cannot create translation."
+    else:
+        return completion()
+
+@app.route('/completion_reader_summary', methods=['POST'])
+def completion_reader_summary():
+    data = request.form
+    metadata = load_reader_metadata(data['document'], data['log_filename'])
+    messages = chatlog.load_log(utils.get_default_system_message(), os.path.join("logs", metadata['log-filename']))
+
+    strm = streaming.stream_text("Now, please provide a summary of the entire document to this point and any notes from me.", messages, None, user_id=user_id)
+
+    return Response(strm, mimetype='text/event-stream')
+
+@app.route('/reader_document', methods=['GET'])
+def reader_document():
+    metadata = load_reader_metadata(request.args.get('document'), request.args.get('log_filename'))
+
+    pagenum = metadata.get('next-page', 0)
+    reader = PdfReader(request.args.get('document'))
+    
+    return {"total": len(reader.pages), "nextpage": pagenum+1}
+
+@app.route('/reader_note', methods=['POST'])
+def reader_note():
+    data = request.form
+    metadata = load_reader_metadata(data['document'], data['log_filename'])
+    messages = chatlog.load_log(utils.get_default_system_message(), os.path.join("logs", metadata['log-filename']))
+
+    chatlog.save_log(os.path.join("logs", metadata['log-filename']), messages + [{'role': "user", 'content': data['input_text']}])
+
+    return '', 200  # Respond with success status
+```

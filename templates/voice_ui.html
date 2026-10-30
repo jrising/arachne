@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, viewport-fit=cover"
+  >
+  <title>{{ config.title }}</title>
+
+  <link
+    rel="stylesheet"
+    href="{{ url_for('static', filename='voice-ui.css') }}"
+  >
+</head>
+
+<body>
+  <main class="voice-app">
+    <header class="app-header">
+      <div>
+        <h1>{{ config.title }}</h1>
+        <p id="status" aria-live="polite">Ready.</p>
+      </div>
+
+      <div class="mode-picker" role="group" aria-label="Voice mode">
+        <button class="mode-button active" data-mode="economy" type="button">
+          Economy
+        </button>
+        <button class="mode-button" data-mode="live" type="button">
+          Live
+        </button>
+      </div>
+    </header>
+
+    {% if config.reader %}
+    <section class="reader-panel" id="reader-panel">
+      <label for="reader-document">Document</label>
+      <select id="reader-document">
+        {% for path, metadata in config.reader.documents.items() %}
+        <option value="{{ path }}">
+          {{ metadata.get('title', path) }}
+        </option>
+        {% endfor %}
+      </select>
+
+      <div class="reader-buttons">
+        <button type="button" data-reader-action="read-next">Read next page</button>
+        <button type="button" data-reader-action="summarize">Summarize</button>
+        <button type="button" data-reader-action="document-status">Document status</button>
+      </div>
+
+      <p id="reader-status" class="reader-status"></p>
+    </section>
+    {% endif %}
+
+    <section
+      id="transcript"
+      class="transcript"
+      aria-label="Conversation transcript"
+      aria-live="polite"
+    >
+      <div class="empty-transcript" id="empty-transcript">
+        Speak in Live mode, or type a message in Economy mode.
+      </div>
+    </section>
+
+    <section class="composer">
+      <form id="text-form">
+        <label class="sr-only" for="text-input">Message</label>
+        <textarea
+          id="text-input"
+          rows="1"
+          placeholder="Type a message…"
+          autocomplete="off"
+        ></textarea>
+
+        <button id="send-button" type="submit">Send</button>
+      </form>
+
+      <div class="voice-controls">
+        <button id="live-connect-button" type="button">
+          Connect live voice
+        </button>
+
+	<button id="economy-mic-button" type="button">
+	  Hold to speak
+	</button>
+
+	<span id="speech-preview" aria-live="polite"></span>
+	
+        <button
+          id="interrupt-button"
+          class="danger"
+          type="button"
+          disabled
+        >
+          Stop
+        </button>
+      </div>
+
+      <p class="mode-help" id="mode-help">
+        Economy mode currently uses text input. Live mode uses OpenAI’s
+        low-latency audio conversation and displays a transcript here.
+      </p>
+    </section>
+
+    <section class="speech-settings">
+      <label>
+	Voice
+	<select id="speech-voice"></select>
+      </label>
+
+      <label>
+	Rate
+	<input id="speech-rate" type="range"
+               min="0.7" max="1.6" step="0.05" value="1.15">
+	<output id="speech-rate-value">1.15</output>
+      </label>
+
+      <label>
+	Pitch
+	<input id="speech-pitch" type="range"
+               min="0.5" max="1.5" step="0.05" value="0.9">
+	<output id="speech-pitch-value">0.9</output>
+      </label>
+    </section>
+  </main>
+
+  <!-- Remote audio from the Realtime WebRTC connection. -->
+  <audio id="agent-audio" autoplay></audio>
+
+  <script>
+    window.VOICE_CONFIG = {{ config | tojson }};
+    window.VOICE_TASK = {{ task | tojson }};
+
+    /*
+      These are relative to the blueprint mount point.  If you register the
+      blueprint with url_prefix="/voice", Flask will render e.g.
+      /voice/realtime-session correctly.
+    */
+    window.VOICE_ENDPOINTS = {
+	realtimeSession: {{ url_for('voice_ui.realtime_session') | tojson }},
+	completion: {{ url_for('voice_ui.completion_voice') | tojson }},
+
+	readerRead: {{ url_for('completion_reader') | tojson }},
+	readerSummary: {{ url_for('completion_reader_summary') | tojson }},
+	readerStatus: {{ url_for('reader_document') | tojson }},
+	readerNote: {{ url_for('reader_note') | tojson }},
+	economyTranscribe: {{ url_for('voice_ui.economy_transcribe') | tojson }},
+	liveMessage: {{ url_for('voice_ui.live_message') | tojson }}
+    };
+  </script>
+
+  <script
+    defer
+    src="{{ url_for('static', filename='voice-ui.js') }}"
+  ></script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, Response
+from flask import Flask, render_template, request, Response, jsonify, abort
 
 import os, pickle, subprocess, time, random, glob, json, base64
 from pathlib import Path
@@ -10,26 +10,22 @@ from dotenv import load_dotenv
 import numpy as np
 from pypdf import PdfReader
 
-from chatwrap import chatlog
+from chatwrap import chatlog, streaming
 import memory
 import memory.default, memory.integration_short_term
 import utils
-from utils import create_chat, fillin_training_end, chat_tokens, chat_tokens_each, chat_tokens_one
-from chatwrap.planner import PlannerEnvironment, PlannerContext
-from streaming import CompletionEventStream
+from utils import fillin_training_end, chat_tokens, chat_tokens_each, chat_tokens_one
+
+from voice_ui import create_voice_blueprint
 
 app = Flask(__name__)
+app.register_blueprint(
+    create_voice_blueprint(system_message=utils.get_default_system_message()))
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
 user_id = "jar"
-
-break_streaming = False
-
-environment = PlannerEnvironment()
-environment.register_defaults()
-
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -51,98 +47,9 @@ def index():
         else:
             return render_template('index.html', log_filename=utils.get_log_filename(), menu_html=get_menu())
  
-def stream(input_text, past_messages, log_filename, history_text="",
-           custom_system=None, custom_model=None, on_stream_end=None, custom_userid=None):
-    global break_streaming
-    break_streaming = False
-    print(input_text)
-
-    if custom_model:
-        messages = create_chat(input_text, past_messages, history_text=history_text, custom_system=custom_system)
-
-        max_completion_tokens = 3000
-        if custom_model == 'cheap':
-            model = 'gpt-5-nano'
-        elif custom_model == "gpt-5.6-terra-long":
-            model = "gpt-5.6-terra"
-            max_completion_tokens = 28000
-        elif custom_model:
-            model = custom_model
-            
-        fillin_training_end(messages, model)
-        print(model)
-        completion = client.chat.completions.create(model=model, messages=messages,
-                                                    stream=True, max_completion_tokens=max_completion_tokens,
-                                                    temperature=1, verbosity="medium")
-
-        response = ""
-        def process_chunk(line):
-            if line.choices[0].delta.content:
-                token = line.choices[0].delta.content
-                response += token
-                return token
-
-        for event in CompletionEventStream(map(process_chunk, completion)):
-            yield event
-            if break_streaming:
-                break
-    else:
-        messages = create_chat(input_text, past_messages, custom_system=custom_system)
-        memory_user_id = custom_userid or user_id
-
-        planner = environment.planner(conversation_id=log_filename)
-
-        def source(progress_sink):
-            planner_context = PlannerContext(
-                user_id_for_memory=memory_user_id,
-                history_list_raw_data=history_text,
-                current_timestamp=time.time(),
-                metadata={
-                    "progress_sink": progress_sink,
-                }
-            )
-
-            response_stream = planner.stream_response(
-                messages,
-                max_tokens=3000 if len(messages) < 4 else 2500,
-                context=planner_context,
-            )
-
-            progress_sink(
-                phase="streaming",
-                message=f"Streaming response from {response_stream.model}…",
-            )
-
-            print(planner.current_plan_text())
-
-            return response_stream
-
-        ces = CompletionEventStream(source)
-        for event in ces:
-            yield event
-            if break_streaming:
-                break
-
-        response = ces.response
-
-        print(planner.explain(ces.streamresponse.id))
-
-    messages.append({"role": "assistant", "content": response})
-        
-    ## Write all out to logs
-    if log_filename:
-        if custom_userid:
-            chatlog.save_log(os.path.join("logs", log_filename), [{"role": "memory", "content": custom_userid}] + messages)
-        else:
-            chatlog.save_log(os.path.join("logs", log_filename), messages)
-
-    if on_stream_end:
-        on_stream_end(response)
-
 @app.route('/stop-stream', methods=['POST'])
 def stop_stream():
-    global break_streaming
-    break_streaming = True
+    streaming.break_streaming = True
     return {"status": "success", "message": "Streaming stopped"}
 
 @app.route('/completion', methods=['GET', 'POST'])
@@ -153,7 +60,6 @@ def completion():
         return Response(None, mimetype='text/event-stream')
         
 def completion_api(custom_system=None, custom_model=None, custom_context=""):
-    global break_streaming
     data = request.form
 
     print("Collecting conversation...")
@@ -196,8 +102,9 @@ def completion_api(custom_system=None, custom_model=None, custom_context=""):
     else:
         history_text = data.get('history', '')
 
-    return stream(input_text, past_messages, data['log_filename'], history_text,
-                  custom_system=custom_system, custom_model=custom_model, custom_userid=(myuser_id if myuser_id != user_id else None))
+    return streaming.stream_events(input_text, past_messages, data['log_filename'], history_text,
+                                   custom_system=custom_system, custom_model=custom_model,
+                                   user_id=(myuser_id if myuser_id != user_id else None))
 
 ## Custom AIs
 
@@ -225,7 +132,6 @@ def get_logs():
     else:
         results = utils.get_logs_raw()
         lines = [result['line'] for result in results]
-    print(results)
         
     ## Replace lines with titles, where available
     if os.path.exists("database/logs/titles.pkl"):
@@ -264,31 +170,12 @@ def save_notes():
         fp.write("> " + data['transcript'])
     return '', 200  # Respond with success status
 
-@app.route('/audio', methods=['GET'])
-def audio():
-    return render_template('audio.html', log_filename=utils.get_log_filename())
-
 @app.route('/completion_audio', methods=['GET', 'POST'])
 def completion_audio():
     if request.method == "POST":
         return Response(completion_api(custom_system=utils.get_default_system_message().replace("Your answer will be rendered as Markdown.", "You are interacting through a speech-to-text and text-to-speech system, which does not handle Markdown. There may be speech misinterpretations in the input text.")), mimetype='text/event-stream')
     else:
         return Response(None, mimetype='text/event-stream')
-
-def load_document_metadata(docsdir):
-    ## Metadata: { pdfpath: { 'next-page': N, 'log-filename': ..., 'context': ... } }
-    metadocs = {}
-    for root, dirs, files in os.walk(docsdir, followlinks=True):
-        for filename in files:
-            fullpath = os.path.join(root, filename)
-            if os.path.splitext(filename)[1] == '.pdf':
-                if fullpath not in metadocs:
-                    metadocs[fullpath] = {}
-            elif os.path.splitext(filename)[1] == '.json':
-                with open(fullpath, 'r') as fp:
-                    metadocs[fullpath.replace(".json", ".pdf")] = json.load(fp)
-
-    return metadocs
 
 @app.route('/reader', methods=['GET'])
 def reader():
@@ -347,7 +234,12 @@ def completion_reader():
     if request.method == "POST":
         try:
             data = request.form
-            
+
+            log_filename = data["log_filename"]
+
+            if os.path.basename(log_filename) != log_filename:
+                return "Invalid log filename.", 400
+
             metadata = load_reader_metadata(data['document'], data['log_filename'])
             metadatapath = data['document'].replace('.pdf', '.json')
 
@@ -393,7 +285,8 @@ def completion_reader():
                                 }}]}])
 
                 imagetexts.append(completion.choices[0].message.content)
-        except:
+        except Exception as ex:
+            print(ex)
             return "Cannot process images."
 
         try:
@@ -404,13 +297,18 @@ def completion_reader():
             if len(imagetexts) > 0:
                 prompt += "In addition, the page has the following images, as described below:\n===\n" + "\n===\n".join(imagetexts) + "\n===\n"
 
-            if os.path.exists(os.path.join("logs", metadata['log-filename'])):
-                messages = chatlog.load_log(utils.get_default_system_message(), os.path.join("logs", metadata['log-filename']))
+            log_path = os.path.join("logs", log_filename)
+
+            if os.path.exists(log_path):
+                messages = chatlog.load_log(
+                    utils.get_default_system_message(),
+                    log_path,
+                )
                 history = messages[-2:]
             else:
                 history = []
-            
-            strm = stream(prompt + "Please write this in a stream appropriate for a text-to-speech reader which does not handle symbols well (it names each one). Use only the provided text, and include everything except background images unless there are number-heavy tables, which you can summarize. Incorporate abbreviated footnote material into the text stream and specify references as Name et al. YYYY (for academic papers) or Report Title YYYY (for institution reports).", history, None, on_stream_end=lambda response: log_summary(prompt, response, metadata['log-filename']))
+
+            strm = streaming.stream_text(prompt + "Please write this in a stream appropriate for a text-to-speech reader which does not handle symbols well (it names each one). Use only the provided text, and include everything except background images unless there are number-heavy tables, which you can summarize. Incorporate abbreviated footnote material into the text stream and specify references as Name et al. YYYY (for academic papers) or Report Title YYYY (for institution reports).", history, None, on_stream_end=lambda response: log_summary(prompt, response, log_filename), user_id=user_id)
 
             return Response(strm, mimetype='text/event-stream')
         except:
@@ -421,10 +319,18 @@ def completion_reader():
 @app.route('/completion_reader_summary', methods=['POST'])
 def completion_reader_summary():
     data = request.form
-    metadata = load_reader_metadata(data['document'], data['log_filename'])
-    messages = chatlog.load_log(utils.get_default_system_message(), os.path.join("logs", metadata['log-filename']))
 
-    strm = stream("Now, please provide a summary of the entire document to this point and any notes from me.", messages, None)
+    log_filename = data["log_filename"]
+    log_path = os.path.join("logs", log_filename)
+
+    messages = chatlog.load_log(
+        utils.get_default_system_message(),
+        log_path,
+    )
+
+    metadata = load_reader_metadata(data['document'], data['log_filename'])
+
+    strm = streaming.stream_text("Now, please provide a summary of the entire document to this point and any notes from me.", messages, None, user_id=user_id)
 
     return Response(strm, mimetype='text/event-stream')
 
@@ -440,10 +346,17 @@ def reader_document():
 @app.route('/reader_note', methods=['POST'])
 def reader_note():
     data = request.form
-    metadata = load_reader_metadata(data['document'], data['log_filename'])
-    messages = chatlog.load_log(utils.get_default_system_message(), os.path.join("logs", metadata['log-filename']))
+    log_filename = data["log_filename"]
+    log_path = os.path.join("logs", log_filename)
 
-    chatlog.save_log(os.path.join("logs", metadata['log-filename']), messages + [{'role': "user", 'content': data['input_text']}])
+    messages = chatlog.load_log(
+        utils.get_default_system_message(),
+        log_path,
+    )
+
+    metadata = load_reader_metadata(data['document'], data['log_filename'])
+
+    chatlog.save_log(log_path, messages + [{'role': "user", 'content': data['input_text']}])
 
     return '', 200  # Respond with success status
 
@@ -526,7 +439,7 @@ def news():
     
     welcome = now.strftime('# Daily Bulletin: %Y-%m-%d') + prev.strftime(' (<a href="/news?date=%Y-%m-%d">Previous</a>)\n\n') + process_bulletin(messages[1]['content'], texts, lambda ids: bulletin.incremenet_uses(engine, items, ids, 1))
 
-    return render_template('index.html', welcome=welcome, log_filename=filepath.replace('.pkl', '.log'))
+    return render_template('news.html', welcome=welcome, log_filename=filepath.replace('.pkl', '.log'))
 
 @app.route("/news-now", methods=["GET"])
 def news_now():
@@ -553,12 +466,12 @@ def news_now():
 
     log_filename = utils.get_log_filename('news')
     welcome = ""
-    for content in stream(prompt, [], log_filename):
+    for content in streaming.stream_events(prompt, [], log_filename, user_id=user_id):
         welcome += content
 
     welcome2 = process_bulletin(welcome, texts, lambda ids: bulletin.incremenet_uses(engine, items, ids, 1))
 
-    return render_template('index.html', welcome=welcome2, log_filename=log_filename)
+    return render_template('news.html', welcome=welcome2, log_filename=log_filename)
 
 @app.route("/news-nonet", methods=["GET"])
 def news_nonet():
@@ -578,7 +491,7 @@ def news_nonet():
     bulletin.incremenet_uses(engine, items, texts.keys(), 1 / 3. - 0.1)
         
     log_filename = utils.get_log_filename('news')
-    return render_template('index.html', welcome=welcome, log_filename=log_filename)
+    return render_template('news.html', welcome=welcome, log_filename=log_filename)
 
 def process_bulletin(welcome, texts, handle_ids):
     # Look for numbers in brackets
@@ -601,6 +514,24 @@ def vote_updown():
     prob = float(request.args.get('prob'))
     bulletin.vote_updown(id, prob)
     return "Success."
+
+@app.post("/api/responses/<response_id>/vote")
+def vote_response(response_id: str):
+    body = request.get_json(silent=True) or {}
+    value = body.get("value")
+
+    if value not in ("up", "down"):
+        return jsonify(error="value must be 'up' or 'down'"), 400
+
+    record = streaming.environment.repository.get_response_record(response_id)
+    if record is None:
+        return jsonify(error="unknown response"), 404
+
+    # Important in a multi-user application:
+    # verify record.conversation_id belongs to the authenticated requester here.
+
+    streaming.environment.vote(response_id, up=(value == "up"))
+    return jsonify(ok=True, response_id=response_id, value=value)
 
 @app.route("/checkupdate")
 def checkupdate():
