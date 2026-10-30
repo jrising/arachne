@@ -45,13 +45,19 @@ const el = {
 };
 
 Object.assign(el, {
-  economyMicButton: document.getElementById("economy-mic-button"),
-  speechPreview: document.getElementById("speech-preview"),
-  speechVoice: document.getElementById("speech-voice"),
-  speechRate: document.getElementById("speech-rate"),
-  speechPitch: document.getElementById("speech-pitch"),
-  speechRateValue: document.getElementById("speech-rate-value"),
-  speechPitchValue: document.getElementById("speech-pitch-value")
+    economyMicButton: document.getElementById("economy-mic-button"),
+    speechPreview: document.getElementById("speech-preview"),
+    speechVoice: document.getElementById("speech-voice"),
+    speechRate: document.getElementById("speech-rate"),
+    speechPitch: document.getElementById("speech-pitch"),
+    speechRateValue: document.getElementById("speech-rate-value"),
+    speechPitchValue: document.getElementById("speech-pitch-value"),
+    drivingOverlay: document.getElementById("driving-overlay"),
+    drivingPrimary: document.getElementById("driving-primary"),
+    drivingSecondary: document.getElementById("driving-secondary"),
+    drivingClose: document.getElementById("driving-close"),
+    drivingReopen: document.getElementById("driving-overlay-reopen"),
+    drivingReaderDocument: document.getElementById("driving-reader-document")
 });
 
 function setStatus(text) {
@@ -85,7 +91,7 @@ function finalizeMessage(message) {
 }
 
 function selectedDocument() {
-  return el.readerDocument?.value || "";
+  return el.drivingReaderDocument?.value || el.readerDocument?.value || "";
 }
 
 function setMode(mode) {
@@ -890,3 +896,96 @@ async function saveReaderNote(note) {
   setStatus("Note saved.");
 }
 
+// Driving overlay
+
+function updateDrivingOverlay() {
+  const live = state.mode === "live";
+  const reader = window.VOICE_TASK === "reader";
+
+  el.drivingOverlay.classList.toggle("live", live);
+
+  if (live) {
+    el.drivingPrimary.querySelector(".driving-label").textContent =
+      "Switch to Economy mode";
+    el.drivingPrimary.querySelector(".driving-icon").textContent = "◁";
+    el.drivingSecondary.hidden = true;
+  } else {
+    el.drivingPrimary.querySelector(".driving-label").textContent = "Push to talk";
+    el.drivingPrimary.querySelector(".driving-icon").textContent = "◯";
+    el.drivingSecondary.hidden = false;
+    el.drivingSecondary.querySelector(".driving-label").textContent =
+      reader ? "Next page" : "Switch to Live mode";
+    el.drivingSecondary.querySelector(".driving-icon").textContent =
+      reader ? "▷" : "◉";
+  }
+}
+
+const originalSetMode = setMode;
+setMode = function(mode) {
+  originalSetMode(mode);
+  updateDrivingOverlay();
+};
+
+el.drivingPrimary.addEventListener("pointerdown", event => {
+  event.preventDefault();
+  if (state.mode === "live") {
+    setMode("economy");
+  } else {
+    startEconomyRecording();
+  }
+});
+
+for (const eventName of ["pointerup", "pointercancel", "pointerleave"]) {
+  el.drivingPrimary.addEventListener(eventName, () => {
+    if (state.mode === "economy") stopEconomyRecording();
+  });
+}
+
+el.drivingSecondary.addEventListener("click", async () => {
+  if (window.VOICE_TASK === "reader") {
+    emitReaderAction("read-next");
+  } else {
+    setMode("live");
+    await connectLive();
+  }
+});
+
+el.drivingClose.addEventListener("click", () => {
+  el.drivingOverlay.hidden = true;
+  el.drivingReopen.hidden = false;
+});
+
+el.drivingReopen.addEventListener("click", () => {
+  el.drivingOverlay.hidden = false;
+  el.drivingReopen.hidden = true;
+  updateDrivingOverlay();
+});
+
+updateDrivingOverlay();
+
+if ("mediaSession" in navigator) {
+  navigator.mediaSession.setActionHandler("play", () => window.speechSynthesis.resume());
+  navigator.mediaSession.setActionHandler("pause", () => window.speechSynthesis.pause());
+
+  navigator.mediaSession.setActionHandler("nexttrack", () => {
+    if (window.VOICE_TASK === "reader") emitReaderAction("read-next");
+  });
+
+  navigator.mediaSession.setActionHandler("previoustrack", () => {
+    if (window.VOICE_TASK === "reader") emitReaderAction("read-previous");
+  });
+}
+
+function syncReaderDocument(value) {
+  if (el.readerDocument) el.readerDocument.value = value;
+  if (el.drivingReaderDocument) el.drivingReaderDocument.value = value;
+}
+
+el.readerDocument?.addEventListener("change", event => {
+  syncReaderDocument(event.target.value);
+});
+
+el.drivingReaderDocument?.addEventListener("change", event => {
+  syncReaderDocument(event.target.value);
+  el.readerStatus.textContent = "";
+});
