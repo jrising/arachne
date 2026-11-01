@@ -1,5 +1,7 @@
 import json, os
 import tempfile
+from dataclasses import dataclass
+from datetime import datetime
 
 from flask import Blueprint, Response, jsonify, render_template, request, stream_with_context
 from openai import OpenAI
@@ -10,23 +12,109 @@ from chatwrap import chatlog
 from chatwrap.streaming import stream_text
 from .realtime import create_realtime_secret
 from .reader import load_document_metadata
+import memory
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
-def live_history_context(log_filename, system_message, max_chars=14000):
+@dataclass(frozen=True)
+class VoiceProfile:
+    profile_id: str
+    user_id: str | None
+    title: str
+    system_message: callable
+    driving: bool = True
+
+def child_system_message(name, birth_year):
+    return (
+        'You are a helpful, super-intelligent AI assistant, called "Arachne" '
+        f'(she/her). You are having a conversation with {name} '
+        f'(born {birth_year}), which is being automatically transcribed and '
+        'synthesized. You support them in pursuing global sustainability and '
+        'a vibrant, enlightened life. You are creative, knowledgeable, and '
+        'friendly, and not afraid to express opinions based on your '
+        'technophilic, humanist good will for them and the future. Current time: '
+        + datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
+
+VOICE_PROFILES = {
+    "default": VoiceProfile("default", None, "Arachne",
+                            get_default_system_message),
+    "austin": VoiceProfile("austin", "austin", "Arachne and Austin",
+                           lambda: child_system_message("Austin", 2020), driving=False),
+}
+
+def get_profile(profile_id):
+    try:
+        return VOICE_PROFILES[profile_id]
+    except KeyError:
+        raise ValueError("Unknown voice profile")
+
+def get_log_path(log_filename):
     if not log_filename:
         return ""
 
     if os.path.basename(log_filename) != log_filename:
         raise ValueError("Invalid log filename")
 
-    log_path = os.path.join("logs", log_filename)
-    messages = chatlog.load_log(
-        get_default_system_message(),
-        log_path,
+    return os.path.join("logs", log_filename)
+
+    
+def ensure_profile_log_marker(log_path, profile):
+    messages = (
+        chatlog.load_log(profile.system_message(), log_path)
+        if os.path.exists(log_path)
+        else []
     )
 
+    if profile.user_id:
+        marker = {"role": "memory", "content": profile.user_id}
+        if not messages or messages[0] != marker:
+            messages.insert(0, marker)
+            chatlog.save_log(log_path, messages)
+
+    return messages
+
+def preserve_profile_marker(stream, log_path, profile):
+    try:
+        yield from stream
+    finally:
+        ensure_profile_log_marker(log_path, profile)
+
+def profile_memory_block(profile, query, past_messages):
+    if not profile.user_id:
+        return ""
+
+    # Do not send the bookkeeping marker to either memory or OpenAI.
+    conversation = [
+        message for message in past_messages
+        if message.get("role") != "memory"
+    ]
+
+    ltm = memory.default.create_long_term()
+    return memory.integration_short_term.build_memory_block(
+        ltm,
+        user_id=profile.user_id,
+        input_text=query,
+        past_messages=conversation,
+    )
+
+def profile_system_context(profile, query, past_messages):
+    base = profile.system_message()
+    memory_block = profile_memory_block(profile, query, past_messages)
+    return f"{base}\n\n{memory_block}" if memory_block else base
+
+
+def live_history_context(log_filename, system_message, max_chars=14000):
+    log_path = get_log_path(log_filename)
+    if os.path.exists(log_path):
+        messages = chatlog.load_log(
+            system_message,
+            log_path,
+        )
+    else:
+        return ""
+        
     turns = []
     for message in messages:
         role = message.get("role")
@@ -73,7 +161,32 @@ def create_voice_blueprint(system_message: str):
             config={
                 "title": "Arachne",
                 "log_filename": log_filename,
-                "reader": None
+                "reader": None,
+                "profile_id": "default",
+                "driving": True
+            },
+        )
+
+    @bp.get("/austin")
+    def austin():
+        profile = get_profile("austin")
+        log_filename = get_log_filename()
+
+        ensure_profile_log_marker(
+            os.path.join("logs", log_filename),
+            profile,
+        )
+
+        return render_template(
+            "voice_ui.html",
+            task="chat",
+            system_message=profile.system_message(),
+            config={
+                "title": profile.title,
+                "log_filename": log_filename,
+                "profile_id": profile.profile_id,
+                "reader": None,
+                "driving": profile.driving,
             },
         )
 
@@ -90,6 +203,8 @@ def create_voice_blueprint(system_message: str):
                 "title": "Arachne: Reader",
                 "log_filename": log_filename,
                 "reader": {"documents": documents},
+                "profile_id": "default",
+                "driving": True
             },
         )
 
@@ -115,49 +230,65 @@ def create_voice_blueprint(system_message: str):
     def realtime_session():
         try:
             log_filename = request.args.get("log_filename", "").strip()
-            history = live_history_context(log_filename, system_message)
+            log_path = get_log_path(log_filename)
+            profile = get_profile(request.args.get("profile_id", "default"))
 
-            return jsonify(create_realtime_secret(
-                system_message + history
-            ))
+            past_messages = ensure_profile_log_marker(log_path, profile)
+
+            query = next(
+                (
+                    m["content"]
+                    for m in reversed(past_messages)
+                    if m.get("role") == "user" and m.get("content")
+                ),
+                "",
+            )
+
+            system_context = profile_system_context(
+                profile, query, past_messages
+            )
+
+            history = live_history_context(
+                log_filename,
+                profile.system_message(),
+            )
+
+            instructions = f"{system_context}\n{history}" if history else system_context
+
+            return jsonify(create_realtime_secret(instructions))
+
         except (ValueError, FileNotFoundError) as exc:
             return jsonify({"error": str(exc)}), 400
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
-    
+        
     @bp.post("/completion_voice")
     def completion_voice():
         input_text = request.form.get("input_text", "").strip()
         log_filename = request.form.get("log_filename", "").strip()
+        profile = get_profile(request.form.get("profile_id", "default"))
+        print(profile)
 
         if not input_text:
             return jsonify({"error": "input_text is required"}), 400
 
-        if not log_filename or os.path.basename(log_filename) != log_filename:
-            return jsonify({"error": "Invalid log filename"}), 400
-        log_path = os.path.join("logs", log_filename)
+        log_path = get_log_path(log_filename)
+
+        past_messages = ensure_profile_log_marker(log_path, profile)
 
         try:
-            if os.path.exists(log_path):
-                past_messages = chatlog.load_log(
-                    get_default_system_message(),
-                    log_path,
-                )
-            else:
-                past_messages = []
-
             print("HERE")
             print(past_messages)
 
             stream = stream_text(
                 input_text,
-                past_messages,
+                [m for m in past_messages if m.get("role") != "memory"],
                 log_filename,
-                custom_system=system_message,
+                custom_system=profile_system_context(profile, input_text, past_messages),
             )
 
             return Response(
-                stream_with_context(stream),
+                stream_with_context(preserve_profile_marker(stream, log_path, profile)),
                 mimetype="text/plain; charset=utf-8",
             )
         except Exception as exc:
@@ -195,13 +326,12 @@ def create_voice_blueprint(system_message: str):
     @bp.post("/live-message")
     def live_message():
         data = request.get_json(silent=True) or {}
+        profile = get_profile(data.get("profile_id", "default"))
 
         log_filename = (data.get("log_filename") or "").strip()
         role = data.get("role")
         content = (data.get("content") or "").strip()
-
-        if os.path.basename(log_filename) != log_filename or not log_filename:
-            return jsonify({"error": "Invalid log filename"}), 400
+        log_path = get_log_path(log_filename)
 
         if role not in {"user", "assistant"}:
             return jsonify({"error": "role must be user or assistant"}), 400
@@ -210,12 +340,7 @@ def create_voice_blueprint(system_message: str):
             return "", 204
 
         try:
-            log_path = os.path.join("logs", log_filename)
-
-            messages = chatlog.load_log(
-                get_default_system_message(),
-                log_path,
-            )
+            messages = ensure_profile_log_marker(log_path, profile)
 
             messages.append({
                 "role": role,

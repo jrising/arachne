@@ -95,33 +95,34 @@ function selectedDocument() {
 }
 
 function setMode(mode) {
-  if (state.mode === mode) return;
+    if (state.mode === mode) return;
 
-  // Economy must not leave an active microphone/Reatime session behind.
-  if (mode === "economy" && state.peerConnection) {
-    disconnectLive();
-  }
+    // Economy must not leave an active microphone/Reatime session behind.
+    if (mode === "economy" && state.peerConnection) {
+	disconnectLive();
+    }
 
-  // Avoid a running Economy request continuing after entering Live.
-  if (mode === "live") {
-    stopEconomyRequest();
-  }
+    // Avoid a running Economy request continuing after entering Live.
+    if (mode === "live") {
+	stopEconomyRequest();
+    }
 
-  state.mode = mode;
+    state.mode = mode;
 
-  for (const button of el.modeButtons) {
-    button.classList.toggle("active", button.dataset.mode === mode);
-  }
+    for (const button of el.modeButtons) {
+	button.classList.toggle("active", button.dataset.mode === mode);
+    }
 
-  if (mode === "live") {
-    el.liveConnectButton.hidden = false;
-    el.textInput.placeholder = "Type a message, or connect to speak live…";
-    setStatus("Live mode selected. Connect microphone to begin.");
-  } else {
-    el.liveConnectButton.hidden = true;
-    el.textInput.placeholder = "Type a message…";
-    setStatus("Economy mode ready.");
-  }
+    if (mode === "live") {
+	el.liveConnectButton.hidden = false;
+	el.textInput.placeholder = "Type a message, or connect to speak live…";
+	setStatus("Connecting live voice…");
+	void connectLive();
+    } else {
+	el.liveConnectButton.hidden = true;
+	el.textInput.placeholder = "Type a message…";
+	setStatus("Economy mode ready.");
+    }
 }
 
 function stopEconomyRequest() {
@@ -209,7 +210,8 @@ async function connectLive() {
 	setStatus("Requesting microphone access…");
 
 	const params = new URLSearchParams({
-	    log_filename: window.VOICE_CONFIG.log_filename
+	    log_filename: window.VOICE_CONFIG.log_filename,
+	    profile_id: window.VOICE_CONFIG.profile_id
 	});
 
 	const secretResponse = await fetch(
@@ -318,7 +320,8 @@ async function persistLiveMessage(role, content) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        log_filename: window.VOICE_CONFIG.log_filename,
+          log_filename: window.VOICE_CONFIG.log_filename,
+	  profile_id: window.VOICE_CONFIG.profile_id,
         role,
         content
       })
@@ -436,6 +439,7 @@ async function sendEconomyText(inputText, {
     const formData = new FormData();
     formData.set("input_text", text);
     formData.set("log_filename", window.VOICE_CONFIG.log_filename);
+    formData.set("profile_id", window.VOICE_CONFIG.profile_id);
     formData.set("task", window.VOICE_TASK);
     
     if (selectedDocument()) {
@@ -898,6 +902,8 @@ async function saveReaderNote(note) {
 
 // Driving overlay
 
+if (el.drivingOverlay) {
+    
 function updateDrivingOverlay() {
   const live = state.mode === "live";
   const reader = window.VOICE_TASK === "reader";
@@ -946,7 +952,6 @@ el.drivingSecondary.addEventListener("click", async () => {
     emitReaderAction("read-next");
   } else {
     setMode("live");
-    await connectLive();
   }
 });
 
@@ -989,3 +994,5 @@ el.drivingReaderDocument?.addEventListener("change", event => {
   syncReaderDocument(event.target.value);
   el.readerStatus.textContent = "";
 });
+
+}
