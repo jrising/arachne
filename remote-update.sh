@@ -425,6 +425,92 @@ if curl --fail --silent --show-error "$UPDATE_CHECK_URL" |
     grep -Fqx "$DEPLOY_ID"; then
 
     echo "Deployment successful: $DEPLOY_ID"
+
+CURRENT_STEP="Pruning old remote backups..."
+    echo "$CURRENT_STEP"
+
+    ssh "$HOST" python3 - "$BACKUP_ROOT" <<'PYTHON'
+import datetime as dt
+import pathlib
+import re
+import shutil
+import sys
+
+backup_root = pathlib.Path(sys.argv[1])
+now = dt.datetime.now(dt.timezone.utc)
+
+# Deployment backups have names such as 20261102T153000Z-12345.
+pattern = re.compile(r"^(\d{8}T\d{6}Z)-\d+$")
+
+backups = []
+for path in backup_root.iterdir():
+    if not path.is_dir():
+        continue
+
+    match = pattern.match(path.name)
+    if not match:
+        print(f"Skipping unrecognized backup directory: {path.name}")
+        continue
+
+    try:
+        created = dt.datetime.strptime(
+            match.group(1), "%Y%m%dT%H%M%SZ"
+        ).replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        print(f"Skipping backup with invalid timestamp: {path.name}")
+        continue
+
+    backups.append((created, path))
+
+if len(backups) <= 4:
+    print(f"Only {len(backups)} backups; nothing to prune.")
+    raise SystemExit(0)
+
+backups.sort()  # Oldest first.
+
+keep = set()
+
+# Preserve the oldest backup forever.
+keep.add(backups[0][1])
+
+# Preserve the three newest backups.
+for _, path in backups[-3:]:
+    keep.add(path)
+
+# Keep one backup in each progressively wider age bucket.
+# The newest backup within each bucket is retained.
+bucket_bounds_days = [
+    (3, 7),
+    (7, 14),
+    (14, 30),
+    (30, 60),
+    (60, 120),
+    (120, 240),
+    (240, 480),
+    (480, 960),
+    (960, float("inf")),
+]
+
+for minimum_days, maximum_days in bucket_bounds_days:
+    candidates = [
+        (created, path)
+        for created, path in backups
+        if minimum_days <= (now - created).total_seconds() / 86400 < maximum_days
+    ]
+    if candidates:
+        # Sorted oldest-first, so retain the newest in this age range.
+        keep.add(candidates[-1][1])
+
+removed = 0
+for _, path in backups:
+    if path not in keep:
+        print(f"Removing old backup: {path}")
+        shutil.rmtree(path)
+        removed += 1
+
+print(f"Backup pruning complete: kept {len(keep)}, removed {removed}.")
+PYTHON
+    
     trap - ERR
 
     osascript \
