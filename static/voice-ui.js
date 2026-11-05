@@ -17,7 +17,11 @@ const state = {
     pendingLiveUserMessages: [],
 
     livePersistedUserItems: new Set(),
-    livePersistedAssistantResponses: new Set()
+    livePersistedAssistantResponses: new Set(),
+
+    mailQueue: [],
+    mailCurrent: null,
+    mailDraftThreadId: null,
 };
 
 Object.assign(state, {
@@ -41,7 +45,11 @@ const el = {
   agentAudio: document.getElementById("agent-audio"),
   modeButtons: document.querySelectorAll("[data-mode]"),
   readerDocument: document.getElementById("reader-document"),
-  readerStatus: document.getElementById("reader-status")
+    readerStatus: document.getElementById("reader-status"),
+
+    mailNext: document.getElementById("mail-next"),
+    mailArchive: document.getElementById("mail-archive"),
+    mailDraft: document.getElementById("mail-draft"),
 };
 
 Object.assign(el, {
@@ -613,18 +621,6 @@ function emitReaderAction(action) {
   }
 }
 
-function speakText(text) {
-  if (!("speechSynthesis" in window) || !text?.trim()) return;
-
-  window.speechSynthesis.cancel();
-
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.rate = 1.05;
-  utterance.pitch = 1.0;
-
-  window.speechSynthesis.speak(utterance);
-}
-
 el.textForm.addEventListener("submit", event => {
   event.preventDefault();
   const text = el.textInput.value;
@@ -689,11 +685,11 @@ function selectedSpeechVoice() {
 }
 
 function speakText(text) {
-  if (!text?.trim() || !("speechSynthesis" in window)) return;
+    if (!text?.trim() || !("speechSynthesis" in window)) return;
 
-  window.speechSynthesis.cancel();
+    window.speechSynthesis.cancel();
 
-  const utterance = new SpeechSynthesisUtterance(text);
+    const utterance = new SpeechSynthesisUtterance(speechSafeText(text));
   utterance.voice = selectedSpeechVoice();
   utterance.rate = Number(el.speechRate.value);
   utterance.pitch = Number(el.speechPitch.value);
@@ -809,7 +805,12 @@ async function transcribeEconomyRecording() {
       throw new Error(data.error || "Transcription failed.");
     }
 
-    const text = data.text.trim();
+      const text = data.text.trim();
+      if (state.mailDraftThreadId) {
+	  el.speechPreview.textContent = text;
+	  await saveMailDraft(text);
+	  return;
+      }
     el.speechPreview.textContent = text;
 
     if (text) {
@@ -902,7 +903,7 @@ async function saveReaderNote(note) {
 
 // Driving overlay
 
-if (el.drivingOverlay) {
+if (el.drivingOverlay && window.VOICE_TASK !== "mail") {
     
 function updateDrivingOverlay() {
   const live = state.mode === "live";
@@ -995,4 +996,177 @@ el.drivingReaderDocument?.addEventListener("change", event => {
   el.readerStatus.textContent = "";
 });
 
+}
+
+// Mail Behavior
+
+function mailUrl(template, threadId) {
+  return template.replace("THREAD_ID", encodeURIComponent(threadId));
+}
+
+function spokenHeader(value) {
+  return (value || "")
+    // “Jane Doe <jane@example.com>” -> “Jane Doe”
+    .replace(/\s*<[^>\r\n]*>/g, "")
+    // A bare email address, if no display name was supplied.
+    .replace(/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/g, "email address omitted")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function speechSafeText(value) {
+  return (value || "")
+    // Never allow angle-bracket mail addresses / markup into platform TTS.
+    .replace(/<[^>\r\n]*>/g, "")
+    // URLs are unpleasant and may make voices stop or ramble.
+    .replace(/\bhttps?:\/\/[^\s<>"']+/gi, "link omitted")
+    .replace(/\bwww\.[^\s<>"']+/gi, "link omitted")
+    // Bare addresses are usually not useful to hear.
+    .replace(/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/g, "email address omitted")
+    // A few characters can produce unusually bad TTS behavior.
+    .replace(/[<>[\]{}|\\^_`~]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function mailSpeech(conversation) {
+  const latest = conversation.latest;
+
+  const sender = spokenHeader(latest.from) || "an unknown sender";
+  const subject = speechSafeText(latest.subject) || "no subject";
+  const body = speechSafeText(latest.body);
+
+  const header = [
+    conversation.unread ? "Unread conversation." : "Read conversation.",
+    `${conversation.message_count} message${
+      conversation.message_count === 1 ? "" : "s"
+    }.`,
+    `From ${sender}.`,
+    `Subject: ${subject}.`,
+  ].join(" ");
+
+  return body ? `${header} ${body}` : `${header} No readable message body.`;
+}
+
+async function loadMailQueue() {
+  setStatus("Loading inbox…");
+
+  const response = await fetch(window.VOICE_ENDPOINTS.mailConversations);
+  const data = await response.json();
+
+  if (!response.ok) throw new Error(data.error || "Could not load inbox.");
+
+  state.mailQueue = data.conversations || [];
+  state.mailCurrent = null;
+}
+
+async function playNextMail({ markCurrent = true } = {}) {
+  if (state.mailCurrent && markCurrent) {
+    await fetch(
+      mailUrl(window.VOICE_ENDPOINTS.mailRead, state.mailCurrent.thread_id),
+      { method: "POST" }
+    );
+  }
+
+  const summary = state.mailQueue.shift();
+
+  if (!summary) {
+    state.mailCurrent = null;
+    addMessage("assistant", "Your inbox queue is complete.");
+    speakText("Your inbox queue is complete.");
+    setStatus("Inbox complete.");
+    return;
+  }
+
+  setStatus("Loading conversation…");
+
+  const response = await fetch(
+    mailUrl(window.VOICE_ENDPOINTS.mailConversation, summary.thread_id)
+  );
+  const conversation = await response.json();
+
+  if (!response.ok) {
+    throw new Error(conversation.error || "Could not load conversation.");
+  }
+
+  state.mailCurrent = {
+    ...conversation,
+    unread: summary.unread
+  };
+
+  const spoken = mailSpeech(state.mailCurrent);
+  addMessage("assistant", spoken);
+  speakText(spoken);
+  setStatus("Reading mail.");
+}
+
+async function archiveCurrentMail() {
+  if (!state.mailCurrent) {
+    await playNextMail({ markCurrent: false });
+    return;
+  }
+
+  const threadId = state.mailCurrent.thread_id;
+
+  const response = await fetch(
+    mailUrl(window.VOICE_ENDPOINTS.mailArchive, threadId),
+    { method: "POST" }
+  );
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  speakText("Archived.");
+  await playNextMail({ markCurrent: false });
+}
+
+async function saveMailDraft(text) {
+  const threadId = state.mailDraftThreadId;
+  state.mailDraftThreadId = null;
+
+  if (!threadId || !text?.trim()) {
+    setStatus("No draft text received.");
+    return;
+  }
+
+  const response = await fetch(
+    mailUrl(window.VOICE_ENDPOINTS.mailDraft, threadId),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text })
+    }
+  );
+
+  if (!response.ok) throw new Error(await response.text());
+
+  addMessage("assistant", "Draft saved. It has not been sent.");
+  speakText("Draft saved. It has not been sent.");
+  setStatus("Draft saved.");
+}
+
+if (window.VOICE_TASK === "mail") {
+  el.mailNext?.addEventListener("click", () =>
+    playNextMail().catch(error => setStatus(`Mail error: ${error.message}`))
+  );
+
+  el.mailArchive?.addEventListener("click", () =>
+    archiveCurrentMail().catch(error => setStatus(`Mail error: ${error.message}`))
+  );
+
+  el.mailDraft?.addEventListener("click", () => {
+    if (!state.mailCurrent) {
+      speakText("There is no current conversation to reply to.");
+      return;
+    }
+
+    state.mailDraftThreadId = state.mailCurrent.thread_id;
+    el.speechPreview.textContent = "Dictate your draft reply, then release.";
+    startEconomyRecording();
+  });
+
+  loadMailQueue()
+    .then(() => playNextMail({ markCurrent: false }))
+    .catch(error => setStatus(`Mail error: ${error.message}`));
 }

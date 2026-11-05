@@ -64,7 +64,7 @@ def make_log(log_filename, ixwriter):
     tokenlen = num_tokens_from_string(content)
     if tokenlen > 4097 - 500 - 350: # error of 350 observed
         messages = chatlog.load_log('', 'logs/' + log_filename)
-        if messages[0]['role'] == 'memory':
+        while messages[0]['role'] == 'memory':
             messages.pop(0)
         maxperstate = int((4097 - 500 - 350) / len(messages)) - 10 # **word**: ...
         content = ""
@@ -200,7 +200,8 @@ if __name__ == '__main__':
             log4memory = chatlog.load_log(None, os.path.join("logs", done))
             if log4memory[0]['role'] == 'memory':
                 myuser_id = log4memory[0]['content'].strip()
-                log4memory.pop(0)
+                while log4memory[0]['role'] == 'memory':
+                    log4memory.pop(0)
             print('"' + myuser_id + '"')
             
             integration_long_term.ingest_conversation(

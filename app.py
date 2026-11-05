@@ -27,6 +27,21 @@ client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
 user_id = "jar"
 
+environment = os.environ.get("ARACHNE_ENV")
+if environment not in {"local", "production"}:
+    raise RuntimeError(
+        "ARACHNE_ENV must be explicitly set to 'local' or 'production'"
+    )
+
+app.config.update(
+    SECRET_KEY=os.environ["SECRET_KEY"],
+    SESSION_COOKIE_SECURE=environment == "production",
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+)
+
+
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.headers['Host'] == 'coupling.existencia.org':

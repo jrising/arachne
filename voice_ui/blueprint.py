@@ -6,16 +6,43 @@ from datetime import datetime
 from flask import Blueprint, Response, jsonify, render_template, request, stream_with_context
 from openai import OpenAI
 from dotenv import load_dotenv
+import secrets
+from functools import wraps
+
+from flask import (
+    Blueprint, Response, jsonify, render_template, request,
+    stream_with_context, session, redirect, url_for,
+)
+from werkzeug.security import check_password_hash
 
 from utils import get_log_filename, get_default_system_message
 from chatwrap import chatlog
 from chatwrap.streaming import stream_text
 from .realtime import create_realtime_secret
 from .reader import load_document_metadata
+from . import gmail
 import memory
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+MAIL_PASSWORD_HASH = os.environ.get("MAIL_ACCESS_PASSWORD_HASH")
+
+if not MAIL_PASSWORD_HASH:
+    raise RuntimeError("MAIL_ACCESS_PASSWORD_HASH is not set")
+
+def mail_authenticated():
+    return session.get("mail_authenticated") is True
+
+def require_mail_access(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not mail_authenticated():
+            if request.path.startswith("/mail/"):
+                return jsonify({"error": "Mail login required"}), 401
+            return redirect(url_for("voice_ui.mail_login"))
+        return view(*args, **kwargs)
+    return wrapped
+
 
 @dataclass(frozen=True)
 class VoiceProfile:
@@ -352,5 +379,101 @@ def create_voice_blueprint(system_message: str):
 
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
+
+    @bp.route("/mail/login", methods=["GET", "POST"])
+    def mail_login():
+        if mail_authenticated():
+            return redirect(url_for("voice_ui.mail"))
+
+        error = None
+
+        if request.method == "POST":
+            password = request.form.get("password", "")
+
+            if check_password_hash(MAIL_PASSWORD_HASH, password):
+                session.clear()
+                session.permanent = True
+                session["mail_authenticated"] = True
+                return redirect(url_for("voice_ui.mail"))
+
+            error = "Incorrect password."
+
+        return render_template("login.html", error=error)
+
+    @bp.post("/mail/logout")
+    @require_mail_access
+    def mail_logout():
+        session.clear()
+        return redirect(url_for("voice_ui.mail_login"))
     
+    @bp.get("/mail")
+    @require_mail_access
+    def mail():
+        log_filename = get_log_filename()
+
+        return render_template(
+            "voice_ui.html",
+            task="mail",
+            system_message=system_message,
+            config={
+                "title": "Arachne: Mail",
+                "log_filename": log_filename,
+                "profile_id": "default",
+                "reader": None,
+                "mail": True,
+                "driving": True,
+            },
+        )
+
+    @bp.get("/mail/conversations")
+    @require_mail_access
+    def mail_conversations():
+        try:
+            return jsonify({"conversations": gmail.inbox_threads()})
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
+    @bp.get("/mail/conversation/<thread_id>")
+    @require_mail_access
+    def mail_conversation(thread_id):
+        try:
+            return jsonify(gmail.get_thread(thread_id))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 404
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
+    @bp.post("/mail/<thread_id>/read")
+    @require_mail_access
+    def mail_mark_read(thread_id):
+        try:
+            gmail.mark_thread_read(thread_id)
+            return "", 204
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
+    @bp.post("/mail/<thread_id>/archive")
+    @require_mail_access
+    def mail_archive(thread_id):
+        try:
+            gmail.archive_thread(thread_id)
+            return "", 204
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
+    @bp.post("/mail/<thread_id>/draft")
+    @require_mail_access
+    def mail_draft(thread_id):
+        data = request.get_json(silent=True) or {}
+        text = (data.get("text") or "").strip()
+
+        if not text:
+            return jsonify({"error": "Draft text is required"}), 400
+
+        try:
+            gmail.create_reply_all_draft(thread_id, text)
+            return "", 204
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
     return bp
