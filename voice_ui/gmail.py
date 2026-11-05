@@ -26,6 +26,7 @@ def connect():
     client = imaplib.IMAP4_SSL(HOST)
     client.login(USER, PASSWORD)
     client.select("INBOX")
+
     return client
 
 
@@ -299,17 +300,66 @@ def mark_thread_read(thread_id):
 
 
 def archive_thread(thread_id):
-    """Remove the Inbox label; Gmail retains the messages in All Mail."""
+    """Archive a Gmail thread by removing Gmail's Inbox label."""
     client = connect()
+
     try:
-        for message in _thread_messages(client, thread_id):
-            status, _ = client.uid(
-                "store", message["uid"], "-X-GM-LABELS", r"(\Inbox)"
-            )
+        messages = _thread_messages(client, thread_id)
+        if not messages:
+            raise ValueError("Conversation was not found in Inbox")
+
+        uid_set = ",".join(message["uid"] for message in messages)
+
+        def labels_for_uids():
+            status, rows = client.uid("fetch", uid_set, "(UID X-GM-LABELS)")
             if status != "OK":
-                raise RuntimeError("Could not archive Gmail conversation")
-    finally:
+                raise RuntimeError(f"Could not fetch labels: {rows!r}")
+
+            labels = []
+
+            for row in rows:
+                if isinstance(row, tuple):
+                    metadata = row[0]
+                elif isinstance(row, bytes):
+                    metadata = row
+                else:
+                    continue
+
+                labels.append(metadata.decode("utf-8", errors="replace"))
+
+            return labels
+        
+        print("Before archive:", labels_for_uids())
+
+        # Gmail's definition of archive: remove its special Inbox label.
+        # Do not use .SILENT while diagnosing this.
+        status, response = client.uid(
+            "store",
+            uid_set,
+            "-X-GM-LABELS",
+            r"(\Inbox)",
+        )
+
+        print(
+            f"Archive thread {thread_id}; UIDs={uid_set}; "
+            f"status={status!r}; response={response!r}"
+        )
+
+        if status != "OK":
+            raise RuntimeError(f"Could not archive conversation: {response!r}")
+
+        after = labels_for_uids()
+        print("After archive:", after)
+
+        if any(r"\Inbox" in metadata for metadata in after):
+            raise RuntimeError(
+                f"Gmail retained the Inbox label after archive: {after!r}"
+            )
+
+        _inbox_cache["value"] = None
         _inbox_cache["expires"] = 0
+
+    finally:
         client.logout()
 
         

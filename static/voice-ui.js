@@ -1166,7 +1166,10 @@ if (window.VOICE_TASK === "mail") {
     startEconomyRecording();
   });
 
-  loadMailQueue()
-    .then(() => playNextMail({ markCurrent: false }))
-    .catch(error => setStatus(`Mail error: ${error.message}`));
+    loadMailQueue()
+	.then(() => {
+	    setStatus("Inbox loaded. Press Play next to begin.");
+	    addMessage("assistant", "Inbox loaded. Press Play next to begin.");
+	})
+	.catch(error => setStatus(`Mail error: ${error.message}`));
 }
