@@ -22,6 +22,8 @@ DRAFTS_FOLDER = os.getenv("GMAIL_DRAFTS_FOLDER", "[Gmail]/Drafts")
 
 _inbox_cache = {"expires": 0, "value": None}
 
+ARCHIVE_FOLDER = "aiarchive"
+
 def connect():
     client = imaplib.IMAP4_SSL(HOST)
     client.login(USER, PASSWORD)
@@ -173,7 +175,7 @@ def _thread_messages(client, thread_id):
 
         messages.append({
             "uid": message_uid,
-            "unread": r"\Seen" not in meta,
+            "unread": r"\Seen" not in metadata,
             "from": decode_text(msg.get("From")),
             "to": decode_text(msg.get("To")),
             "cc": decode_text(msg.get("Cc")),
@@ -312,9 +314,8 @@ def mark_thread_read(thread_id):
 
 
 def archive_thread(thread_id):
-    """Archive a Gmail thread by removing Gmail's Inbox label."""
-    client = connect()
-
+    """Label a Gmail thread aiarchive and remove it from Inbox."""
+    client = connect()  # selects INBOX
     try:
         messages = _thread_messages(client, thread_id)
         if not messages:
@@ -322,58 +323,26 @@ def archive_thread(thread_id):
 
         uid_set = ",".join(message["uid"] for message in messages)
 
-        def labels_for_uids():
-            status, rows = client.uid("fetch", uid_set, "(UID X-GM-LABELS)")
-            if status != "OK":
-                raise RuntimeError(f"Could not fetch labels: {rows!r}")
-
-            labels = []
-
-            for row in rows:
-                if isinstance(row, tuple):
-                    metadata = row[0]
-                elif isinstance(row, bytes):
-                    metadata = row
-                else:
-                    continue
-
-                labels.append(metadata.decode("utf-8", errors="replace"))
-
-            return labels
-        
-        print("Before archive:", labels_for_uids())
-
-        status, rows = client.uid(
-            "fetch",
-            uid_set,
-            "(UID X-GM-THRID X-GM-LABELS)",
-        )
-        print("Archive preflight:", status, rows)
-
-        # Gmail's definition of archive: remove its special Inbox label.
-        # Do not use .SILENT while diagnosing this.
-        status, response = client.uid(
-            "store",
-            uid_set,
-            "-X-GM-LABELS",
-            r"(\Inbox)",
-        )
-
-        print(
-            f"Archive thread {thread_id}; UIDs={uid_set}; "
-            f"status={status!r}; response={response!r}"
-        )
-
-        if status != "OK":
-            raise RuntimeError(f"Could not archive conversation: {response!r}")
-
-        after = labels_for_uids()
-        print("After archive:", after)
-
-        if any(r"\Inbox" in metadata for metadata in after):
+        # Gmail custom labels are IMAP folders. Create it if necessary.
+        status, response = client.create(ARCHIVE_FOLDER)
+        if status not in {"OK", "NO"}:
             raise RuntimeError(
-                f"Gmail retained the Inbox label after archive: {after!r}"
+                f"Could not create archive label {ARCHIVE_FOLDER!r}: {response!r}"
             )
+
+        # Retain a traceable system-specific label.
+        status, response = client.uid(
+            "store", uid_set, "+X-GM-LABELS.SILENT", f"({ARCHIVE_FOLDER})"
+        )
+        if status != "OK":
+            raise RuntimeError(f"Could not apply archive label: {response!r}")
+
+        # Gmail archive = remove Inbox label.
+        status, response = client.uid(
+            "store", uid_set, "-X-GM-LABELS.SILENT", r"(\Inbox)"
+        )
+        if status != "OK":
+            raise RuntimeError(f"Could not remove Inbox label: {response!r}")
 
         _inbox_cache["value"] = None
         _inbox_cache["expires"] = 0
