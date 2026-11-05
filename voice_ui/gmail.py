@@ -124,8 +124,12 @@ def _thread_messages(client, thread_id):
 
     messages = []
 
-    for uid in data[0].split():
-        status, rows = client.uid("fetch", uid, "(FLAGS RFC822)")
+    for search_uid in data[0].split():
+        status, rows = client.uid(
+            "fetch",
+            search_uid,
+            "(UID FLAGS BODY.PEEK[])",
+        )
         if status != "OK":
             continue
 
@@ -133,18 +137,26 @@ def _thread_messages(client, thread_id):
             (
                 row for row in rows
                 if (
-                    isinstance(row, tuple)
-                    and isinstance(row[0], bytes)
-                    and isinstance(row[1], bytes)
+                        isinstance(row, tuple)
+                        and isinstance(row[0], bytes)
+                        and isinstance(row[1], bytes)
                 )
             ),
             None,
         )
-
         if not fetched:
             continue
 
-        meta = fetched[0].decode("utf-8", errors="replace")
+        metadata = fetched[0].decode("utf-8", errors="replace")
+        uid_match = re.search(r"\bUID\s+(\d+)\b", metadata)
+
+        if not uid_match:
+            raise RuntimeError(
+                f"Gmail FETCH response omitted UID: {metadata!r}"
+            )
+
+        message_uid = uid_match.group(1)
+
         raw = fetched[1]
         msg = BytesParser(policy=policy.default).parsebytes(raw)
 
@@ -160,7 +172,7 @@ def _thread_messages(client, thread_id):
             date = datetime.min.replace(tzinfo=timezone.utc)
 
         messages.append({
-            "uid": uid.decode("ascii"),
+            "uid": message_uid,
             "unread": r"\Seen" not in meta,
             "from": decode_text(msg.get("From")),
             "to": decode_text(msg.get("To")),
@@ -330,6 +342,13 @@ def archive_thread(thread_id):
             return labels
         
         print("Before archive:", labels_for_uids())
+
+        status, rows = client.uid(
+            "fetch",
+            uid_set,
+            "(UID X-GM-THRID X-GM-LABELS)",
+        )
+        print("Archive preflight:", status, rows)
 
         # Gmail's definition of archive: remove its special Inbox label.
         # Do not use .SILENT while diagnosing this.
