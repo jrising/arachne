@@ -22,6 +22,9 @@ const state = {
     mailQueue: [],
     mailCurrent: null,
     mailDraftThreadId: null,
+
+    mailSpeechController: null,
+    mailSpeechUtterance: null
 };
 
 Object.assign(state, {
@@ -194,7 +197,8 @@ function interruptEverything() {
   stopEconomyRecording();
   stopEconomyRequest();
   window.speechSynthesis?.cancel();
-
+    stopMailPlayback();
+    
   if (state.peerConnection) {
     disconnectLive();
   }
@@ -903,6 +907,23 @@ async function saveReaderNote(note) {
 
 // Driving overlay
 
+function closeDrivingOverlay() {
+  el.drivingOverlay.hidden = true;
+  el.drivingReopen.hidden = false;
+}
+
+function reopenDrivingOverlay() {
+  el.drivingOverlay.hidden = false;
+  el.drivingReopen.hidden = true;
+
+  if (window.VOICE_TASK !== "mail") {
+    updateDrivingOverlay();
+  }
+}
+
+el.drivingClose?.addEventListener("click", closeDrivingOverlay);
+el.drivingReopen?.addEventListener("click", reopenDrivingOverlay);
+
 if (el.drivingOverlay && window.VOICE_TASK !== "mail") {
     
 function updateDrivingOverlay() {
@@ -954,17 +975,6 @@ el.drivingSecondary.addEventListener("click", async () => {
   } else {
     setMode("live");
   }
-});
-
-el.drivingClose.addEventListener("click", () => {
-  el.drivingOverlay.hidden = true;
-  el.drivingReopen.hidden = false;
-});
-
-el.drivingReopen.addEventListener("click", () => {
-  el.drivingOverlay.hidden = false;
-  el.drivingReopen.hidden = true;
-  updateDrivingOverlay();
 });
 
 updateDrivingOverlay();
@@ -1029,25 +1039,6 @@ function speechSafeText(value) {
     .trim();
 }
 
-function mailSpeech(conversation) {
-  const latest = conversation.latest;
-
-  const sender = spokenHeader(latest.from) || "an unknown sender";
-  const subject = speechSafeText(latest.subject) || "no subject";
-  const body = speechSafeText(latest.body);
-
-  const header = [
-    conversation.unread ? "Unread conversation." : "Read conversation.",
-    `${conversation.message_count} message${
-      conversation.message_count === 1 ? "" : "s"
-    }.`,
-    `From ${sender}.`,
-    `Subject: ${subject}.`,
-  ].join(" ");
-
-  return body ? `${header} ${body}` : `${header} No readable message body.`;
-}
-
 async function loadMailQueue() {
   setStatus("Loading inbox…");
 
@@ -1061,46 +1052,157 @@ async function loadMailQueue() {
 }
 
 async function playNextMail({ markCurrent = true } = {}) {
-  if (state.mailCurrent && markCurrent) {
-    await fetch(
-      mailUrl(window.VOICE_ENDPOINTS.mailRead, state.mailCurrent.thread_id),
-      { method: "POST" }
-    );
-  }
+    stopMailPlayback();
 
-  const summary = state.mailQueue.shift();
+    const controller = new AbortController();
+    state.mailSpeechController = controller;
+    const { signal } = controller;
 
-  if (!summary) {
-    state.mailCurrent = null;
-    addMessage("assistant", "Your inbox queue is complete.");
-    speakText("Your inbox queue is complete.");
-    setStatus("Inbox complete.");
-    return;
-  }
+    let assistantMessage = null;
 
-  setStatus("Loading conversation…");
+    try {
+        if (state.mailCurrent && markCurrent) {
+            const readResponse = await fetch(
+                mailUrl(
+                    window.VOICE_ENDPOINTS.mailRead,
+                    state.mailCurrent.thread_id
+                ),
+                { method: "POST", signal }
+            );
 
-  const response = await fetch(
-    mailUrl(window.VOICE_ENDPOINTS.mailConversation, summary.thread_id)
-  );
-  const conversation = await response.json();
+            if (!readResponse.ok) {
+                throw new Error("Could not mark the conversation as read.");
+            }
+        }
 
-  if (!response.ok) {
-    throw new Error(conversation.error || "Could not load conversation.");
-  }
+        if (signal.aborted) return;
 
-  state.mailCurrent = {
-    ...conversation,
-    unread: summary.unread
-  };
+        // Peek first: a failed fetch should not remove it from the queue.
+        const summary = state.mailQueue[0];
 
-  const spoken = mailSpeech(state.mailCurrent);
-  addMessage("assistant", spoken);
-  speakText(spoken);
-  setStatus("Reading mail.");
+        if (!summary) {
+            state.mailCurrent = null;
+            addMessage("assistant", "Your inbox queue is complete.");
+            speakText("Your inbox queue is complete.");
+            setStatus("Inbox complete.");
+            return;
+        }
+
+        setStatus("Loading conversation…");
+
+        const response = await fetch(
+            mailUrl(
+                window.VOICE_ENDPOINTS.mailConversation,
+                summary.thread_id
+            ),
+            { signal }
+        );
+        const conversation = await response.json();
+
+        if (!response.ok) {
+            throw new Error(
+                conversation.error || "Could not load conversation."
+            );
+        }
+
+        if (signal.aborted) return;
+
+        state.mailCurrent = {
+            ...conversation,
+            unread: summary.unread
+        };
+
+        setStatus("Preparing spoken email…");
+
+        const speechResponse = await fetch(
+            mailUrl(
+                window.VOICE_ENDPOINTS.mailSpeech,
+                summary.thread_id
+            ),
+            { signal }
+        );
+
+	console.log("AA");
+
+	if (!speechResponse.ok || !speechResponse.body) {
+            const error = await speechResponse.text();
+            throw new Error(error || "Could not prepare email speech.");
+        }
+
+        // Remove only after both conversation and speech stream are available.
+        state.mailQueue.shift();
+
+	console.log("BB");
+
+        const latest = state.mailCurrent.latest;
+        const header = [
+            state.mailCurrent.unread
+                ? "Unread conversation."
+                : "Read conversation.",
+            `${state.mailCurrent.message_count} message${
+                state.mailCurrent.message_count === 1 ? "" : "s"
+            }.`,
+            `From ${spokenHeader(latest.from) || "an unknown sender"}.`,
+            `Subject: ${speechSafeText(latest.subject) || "no subject"}.`,
+        ].join(" ");
+
+        assistantMessage = addMessage("assistant", `${header} `, {
+            partial: true
+        });
+
+	console.log("CC");
+
+        const speaker = createMailSpeaker(signal);
+        speaker.write(header);
+
+        const reader = speechResponse.body.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+
+            if (chunk) {
+                appendMessageText(assistantMessage, chunk);
+                speaker.write(chunk);
+            }
+        }
+
+	console.log("DD");
+
+        const finalChunk = decoder.decode();
+        if (finalChunk) {
+            appendMessageText(assistantMessage, finalChunk);
+            speaker.write(finalChunk);
+        }
+
+        finalizeMessage(assistantMessage);
+        speaker.finish();
+
+    } catch (error) {
+        if (error.name === "AbortError") {
+            if (assistantMessage) {
+                appendMessageText(assistantMessage, "\n\n[Stopped]");
+                finalizeMessage(assistantMessage);
+            }
+            setStatus("Stopped.");
+            return;
+        }
+
+        console.error(error);
+        setStatus(`Mail error: ${error.message}`);
+    } finally {
+        if (state.mailSpeechController === controller) {
+            state.mailSpeechController = null;
+        }
+    }
 }
 
 async function archiveCurrentMail() {
+    stopMailPlayback();
+    
   if (!state.mailCurrent) {
     await playNextMail({ markCurrent: false });
     return;
@@ -1122,6 +1224,8 @@ async function archiveCurrentMail() {
 }
 
 async function saveMailDraft(text) {
+    stopMailPlayback();
+
   const threadId = state.mailDraftThreadId;
   state.mailDraftThreadId = null;
 
@@ -1147,13 +1251,21 @@ async function saveMailDraft(text) {
 }
 
 if (window.VOICE_TASK === "mail") {
-  el.mailNext?.addEventListener("click", () =>
-    playNextMail().catch(error => setStatus(`Mail error: ${error.message}`))
-  );
+    function primeSpeech() {
+	const synth = window.speechSynthesis;
+	if (!synth) return;
+	synth.resume();
+    }
 
-  el.mailArchive?.addEventListener("click", () =>
-    archiveCurrentMail().catch(error => setStatus(`Mail error: ${error.message}`))
-  );
+    el.mailNext?.addEventListener("click", () => {
+	primeSpeech();
+	playNextMail().catch(error => setStatus(`Mail error: ${error.message}`));
+    });
+
+    el.mailArchive?.addEventListener("click", () => {
+	primeSpeech();
+	archiveCurrentMail().catch(error => setStatus(`Mail error: ${error.message}`));
+    });
 
   el.mailDraft?.addEventListener("click", () => {
     if (!state.mailCurrent) {
@@ -1172,4 +1284,140 @@ if (window.VOICE_TASK === "mail") {
 	    addMessage("assistant", "Inbox loaded. Press Play next to begin.");
 	})
 	.catch(error => setStatus(`Mail error: ${error.message}`));
+}
+
+function stopMailPlayback() {
+  state.mailSpeechController?.abort();
+  state.mailSpeechController = null;
+  state.mailSpeechUtterance = null;
+
+  const synth = window.speechSynthesis;
+  if (synth) {
+    synth.cancel();
+
+    // Particularly useful for Safari after interruption/backgrounding.
+    setTimeout(() => synth.resume(), 0);
+  }
+}
+
+function createMailSpeaker(signal) {
+    const synth = window.speechSynthesis;
+    const queue = [];
+    let buffer = "";
+    let speaking = false;
+    let finished = false;
+
+    function pump() {
+        if (signal.aborted || speaking) return;
+
+        if (!queue.length) {
+            if (finished) setStatus("Ready.");
+            return;
+        }
+
+        // Text still appears in the transcript on browsers without TTS.
+        if (!synth) {
+            queue.length = 0;
+            if (finished) setStatus("Ready.");
+            return;
+        }
+
+        const utterance = new SpeechSynthesisUtterance(queue.shift());
+        utterance.voice = selectedSpeechVoice();
+        utterance.rate = Number(el.speechRate.value);
+        utterance.pitch = Number(el.speechPitch.value);
+
+        speaking = true;
+
+        // Retain a reference throughout playback.
+        state.mailSpeechUtterance = utterance;
+
+        const advance = () => {
+            if (signal.aborted) return;
+
+            speaking = false;
+            if (state.mailSpeechUtterance === utterance) {
+                state.mailSpeechUtterance = null;
+            }
+            pump();
+        };
+
+        utterance.onend = advance;
+        utterance.onerror = advance;
+        utterance.onstart = () => {
+            if (!signal.aborted) setStatus("Reading mail.");
+        };
+
+	console.debug("Mail TTS speak", {
+	    text: utterance.text,
+	    speaking: synth.speaking,
+	    pending: synth.pending,
+	    paused: synth.paused,
+	    aborted: signal.aborted
+	});
+
+	utterance.onerror = event => {
+	    console.warn("Mail TTS error:", event.error, event);
+	    advance();
+	};
+
+	setTimeout(() => {
+	    if (signal.aborted) return;
+	    
+	    synth.resume();
+
+	    try {
+		synth.speak(utterance);
+	    } catch (error) {
+		console.error("Mail TTS speak() failed:", error);
+		speaking = false;
+		advance();
+	    }
+	}, 50);
+    }
+
+    function emit(text) {
+        const cleaned = speechSafeText(text);
+        if (cleaned) queue.push(cleaned);
+    }
+
+    function drain(flush = false) {
+        while (buffer.length) {
+            // Prefer a sentence boundary within a short utterance.
+            const sentence = buffer.slice(0, 260)
+                .match(/[.!?](?:\s+|$)/);
+
+            let cut;
+
+            if (sentence) {
+                cut = sentence.index + sentence[0].length;
+            } else if (buffer.length >= 260) {
+                const space = buffer.lastIndexOf(" ", 260);
+                cut = space >= 100 ? space : 260;
+            } else if (flush) {
+                cut = buffer.length;
+            } else {
+                break;
+            }
+
+            emit(buffer.slice(0, cut));
+            buffer = buffer.slice(cut);
+        }
+
+        pump();
+    }
+
+    return {
+        write(text) {
+            if (signal.aborted) return;
+            buffer += text;
+            drain();
+        },
+
+        finish() {
+            if (signal.aborted) return;
+            finished = true;
+            drain(true);
+        }
+    };
 }

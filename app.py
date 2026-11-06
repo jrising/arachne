@@ -75,6 +75,8 @@ def completion():
         return Response(None, mimetype='text/event-stream')
         
 def completion_api(custom_system=None, custom_model=None, custom_context=""):
+    print("OK")
+    print(request.form)
     data = request.form
 
     print("Collecting conversation...")
