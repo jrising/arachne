@@ -528,7 +528,7 @@ async function sendEconomyText(inputText, {
 }
 
 async function streamReaderRequest(endpoint, formData, userLabel) {
-  addMessage("user", userLabel);
+    addMessage("user", userLabel);
   const assistantMessage = addMessage("assistant", "", { partial: true });
 
   const controller = new AbortController();
@@ -1059,6 +1059,7 @@ async function playNextMail({ markCurrent = true } = {}) {
     const { signal } = controller;
 
     let assistantMessage = null;
+    let speaker = null;
 
     try {
         if (state.mailCurrent && markCurrent) {
@@ -1077,7 +1078,8 @@ async function playNextMail({ markCurrent = true } = {}) {
 
         if (signal.aborted) return;
 
-        // Peek first: a failed fetch should not remove it from the queue.
+	// Do not remove it until the speech endpoint has responded, because that
+	// endpoint is where the server records the reading attempt.
         const summary = state.mailQueue[0];
 
         if (!summary) {
@@ -1107,81 +1109,105 @@ async function playNextMail({ markCurrent = true } = {}) {
 
         if (signal.aborted) return;
 
-        state.mailCurrent = {
-            ...conversation,
-            unread: summary.unread
-        };
+	state.mailCurrent = {
+	    ...conversation,
+	    unread: summary.unread
+	};
 
-        setStatus("Preparing spoken email…");
+	const latest = state.mailCurrent.latest;
 
-        const speechResponse = await fetch(
-            mailUrl(
-                window.VOICE_ENDPOINTS.mailSpeech,
-                summary.thread_id
-            ),
-            { signal }
-        );
+	const header = [
+	    state.mailCurrent.unread
+		? "Unread conversation."
+		: "Read conversation.",
+	    `${state.mailCurrent.message_count} message${
+        state.mailCurrent.message_count === 1 ? "" : "s"
+    }.`,
+	    `From ${spokenHeader(latest.from) || "an unknown sender"}.`,
+	    `Subject: ${speechSafeText(latest.subject) || "no subject"}.`,
+	].join(" ");
+	
+	// Display and begin speaking the header before waiting for OpenAI.
+	assistantMessage = addMessage("assistant", `${header} `, {
+	    partial: true
+	});
+	
+	speaker = createMailSpeaker(signal);
+	speaker.write(header + " ");
 
-	console.log("AA");
+	setStatus("Preparing spoken email…");
+	
+	const speechUrl = new URL(
+	    mailUrl(
+		window.VOICE_ENDPOINTS.mailSpeech,
+		summary.thread_id
+	    ),
+	    window.location.href
+	);
 
+	speechUrl.searchParams.set(
+	    "message_id",
+	    conversation.latest.gmail_message_id
+	);
+	
+	const speechResponse = await fetch(speechUrl, { signal });
+	
+	// The server records this as attempted before translating it.
+	state.mailQueue.shift();
+	
 	if (!speechResponse.ok || !speechResponse.body) {
-            const error = await speechResponse.text();
-            throw new Error(error || "Could not prepare email speech.");
-        }
+	    const error = await speechResponse.text();
+	    
+	    // Do not leave the header message looking unfinished.
+	    appendMessageText(
+		assistantMessage,
+		"\n\n[Email body could not be prepared.]"
+	    );
+	    finalizeMessage(assistantMessage);
+	    
+	    // Finish speaking the already-queued header.
+	    speaker.finish();
+	    
+	    throw new Error(error || "Could not prepare email speech.");
+	}
 
-        // Remove only after both conversation and speech stream are available.
-        state.mailQueue.shift();
+	const reader = speechResponse.body.getReader();
+	const decoder = new TextDecoder();
 
-	console.log("BB");
+	while (true) {
+	    const { done, value } = await reader.read();
+	    if (done) break;
+	    
+	    const chunk = decoder.decode(value, { stream: true });
+	    
+	    if (chunk) {
+		appendMessageText(assistantMessage, chunk);
+		speaker.write(chunk);
+	    }
+	}
+	
+	const finalChunk = decoder.decode();
+	if (finalChunk) {
+	    appendMessageText(assistantMessage, finalChunk);
+	    speaker.write(finalChunk);
+	}
+	
+	finalizeMessage(assistantMessage);
+	speaker.finish();
+	
+	if (signal.aborted) {
+	    throw new DOMException("Playback stopped", "AbortError");
+	}
 
-        const latest = state.mailCurrent.latest;
-        const header = [
-            state.mailCurrent.unread
-                ? "Unread conversation."
-                : "Read conversation.",
-            `${state.mailCurrent.message_count} message${
-                state.mailCurrent.message_count === 1 ? "" : "s"
-            }.`,
-            `From ${spokenHeader(latest.from) || "an unknown sender"}.`,
-            `Subject: ${speechSafeText(latest.subject) || "no subject"}.`,
-        ].join(" ");
-
-        assistantMessage = addMessage("assistant", `${header} `, {
-            partial: true
-        });
-
-	console.log("CC");
-
-        const speaker = createMailSpeaker(signal);
-        speaker.write(header);
-
-        const reader = speechResponse.body.getReader();
-        const decoder = new TextDecoder();
-
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            const chunk = decoder.decode(value, { stream: true });
-
-            if (chunk) {
-                appendMessageText(assistantMessage, chunk);
-                speaker.write(chunk);
-            }
-        }
-
-	console.log("DD");
-
-        const finalChunk = decoder.decode();
-        if (finalChunk) {
-            appendMessageText(assistantMessage, finalChunk);
-            speaker.write(finalChunk);
-        }
-
-        finalizeMessage(assistantMessage);
-        speaker.finish();
-
+	if (state.mailSpeechController === controller) {
+	    setStatus("Ready.");
+	}
+	
     } catch (error) {
+	if (state.mailSpeechController === controller) {
+	    window.speechSynthesis?.cancel();
+	}
+
         if (error.name === "AbortError") {
             if (assistantMessage) {
                 appendMessageText(assistantMessage, "\n\n[Stopped]");

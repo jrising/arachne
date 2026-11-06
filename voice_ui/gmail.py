@@ -10,6 +10,9 @@ from email.utils import getaddresses, parsedate_to_datetime
 from bs4 import BeautifulSoup
 from email import policy
 from email.parser import BytesParser
+import sqlite3
+from contextlib import closing
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -23,6 +26,10 @@ DRAFTS_FOLDER = os.getenv("GMAIL_DRAFTS_FOLDER", "[Gmail]/Drafts")
 _inbox_cache = {"expires": 0, "value": None}
 
 ARCHIVE_FOLDER = "aiarchive"
+
+PLAYBACK_DB = Path(str(Path(__file__).resolve().parent.parent
+        / "instance" / "mail-playback.sqlite3"))
+
 
 def connect():
     client = imaplib.IMAP4_SSL(HOST)
@@ -130,7 +137,7 @@ def _thread_messages(client, thread_id):
         status, rows = client.uid(
             "fetch",
             search_uid,
-            "(UID FLAGS BODY.PEEK[])",
+            "(UID FLAGS X-GM-MSGID BODY.PEEK[])",
         )
         if status != "OK":
             continue
@@ -156,6 +163,10 @@ def _thread_messages(client, thread_id):
             raise RuntimeError(
                 f"Gmail FETCH response omitted UID: {metadata!r}"
             )
+
+        gmail_id_match = re.search(r"\bX-GM-MSGID\s+(\d+)\b", metadata)
+        if not gmail_id_match:
+            raise RuntimeError("Gmail FETCH response omitted X-GM-MSGID")
 
         message_uid = uid_match.group(1)
 
@@ -185,19 +196,19 @@ def _thread_messages(client, thread_id):
             "references": msg.get("References", ""),
             "reply_to": decode_text(msg.get("Reply-To")),
             "body": speech_clean(message_body(msg)),
+            "gmail_message_id": gmail_id_match.group(1)
         })
 
     # Oldest to newest. ISO timestamps sort lexically in chronological order
     # because all are timezone-aware ISO-8601 strings.
-    messages.sort(key=lambda message: message["date"])
+    messages.sort(key=lambda message: datetime.fromisoformat(message["date"]))
 
     return messages
 
 
 def inbox_threads():
     """Return thread summaries: unread first, then newest-first."""
-    if _inbox_cache["value"] and time.time() < _inbox_cache["expires"]:
-        return _inbox_cache["value"]
+    covered = covered_message_ids()
     
     client = connect()
     try:
@@ -213,8 +224,8 @@ def inbox_threads():
             status, rows = client.uid(
                 "fetch",
                 uid_set,
-                "(UID FLAGS X-GM-THRID INTERNALDATE "
-                "BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])",
+                "(UID FLAGS X-GM-THRID X-GM-MSGID INTERNALDATE "
+                "BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])"
             )
 
             if status != "OK":
@@ -233,9 +244,13 @@ def inbox_threads():
 
                 uid_match = re.search(r"UID\s+(\d+)", meta)
                 thread_match = re.search(r"X-GM-THRID\s+(\d+)", meta)
+                gmail_id_match = re.search(r"\bX-GM-MSGID\s+(\d+)\b", meta)
 
                 if not uid_match or not thread_match:
                     continue
+
+                if not gmail_id_match:
+                    raise RuntimeError("Gmail FETCH response omitted X-GM-MSGID")
 
                 try:
                     date = parsedate_to_datetime(msg.get("Date"))
@@ -254,10 +269,17 @@ def inbox_threads():
                     "date": date,
                     "from": decode_text(msg.get("From")),
                     "subject": decode_text(msg.get("Subject")) or "(no subject)",
+                    "gmail_message_id": gmail_id_match.group(1),
                 })
 
         result = []
         for thread_id, messages in threads.items():
+            if all(
+                    message["gmail_message_id"] in covered
+                    for message in messages
+            ):
+                continue
+
             messages.sort(key=lambda item: item["date"], reverse=True)
             latest = messages[0]
             result.append({
@@ -279,8 +301,6 @@ def inbox_threads():
             )
         )
 
-        _inbox_cache["value"] = result
-        _inbox_cache["expires"] = time.time() + 300
         return result
     finally:
         client.logout()
@@ -414,3 +434,60 @@ def speech_clean(text):
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+def _playback_connection():
+    PLAYBACK_DB.parent.mkdir(parents=True, exist_ok=True)
+
+    connection = sqlite3.connect(str(PLAYBACK_DB), timeout=10)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS covered_messages (
+            host TEXT NOT NULL,
+            account TEXT NOT NULL,
+            gmail_message_id TEXT NOT NULL,
+            covered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (host, account, gmail_message_id)
+        )
+    """)
+    connection.commit()
+    return connection
+
+
+def covered_message_ids():
+    with closing(_playback_connection()) as connection:
+        rows = connection.execute(
+            """
+            SELECT gmail_message_id
+            FROM covered_messages
+            WHERE host = ? AND account = ?
+            """,
+            (HOST.lower(), USER.lower()),
+        )
+        return {row[0] for row in rows}
+
+
+def record_read_attempt(message_ids):
+    if (
+        not isinstance(message_ids, list)
+        or not message_ids
+        or len(message_ids) > 10000
+        or any(
+            not isinstance(value, str)
+            or re.fullmatch(r"[0-9]{1,20}", value) is None
+            for value in message_ids
+        )
+    ):
+        raise ValueError("Invalid Gmail message IDs")
+
+    with closing(_playback_connection()) as connection:
+        with connection:
+            connection.executemany(
+                """
+                INSERT OR IGNORE INTO covered_messages
+                    (host, account, gmail_message_id)
+                VALUES (?, ?, ?)
+                """,
+                [
+                    (HOST.lower(), USER.lower(), value)
+                    for value in set(message_ids)
+                ],
+            )

@@ -482,10 +482,20 @@ def create_voice_blueprint(system_message: str):
         try:
             print("mail speech")
             conversation = gmail.get_thread(thread_id)
+
+            # This is intentionally recorded before translation or browser TTS.
+            # An oversized, malformed, or otherwise troublesome conversation should
+            # not trap the user in a repeated playback loop.
+            gmail.record_read_attempt([
+                message["gmail_message_id"]
+                for message in conversation["messages"]
+            ])
+
             original = conversation["latest"]
             body = original["body"].strip()
 
-            # Never silently discard the end of an oversized email.
+            # The attempt is already recorded even for an email that cannot be
+            # processed by the speech translator.
             if len(body) > 120_000:
                 return jsonify({
                     "error": "This email is too large for the speech translator."
@@ -571,5 +581,23 @@ with a complete sentence.
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @bp.post("/mail/playback-complete")
+    @require_mail_access
+    def mail_playback_complete():
+        data = request.get_json(silent=True)
+        
+        if not isinstance(data, dict):
+            return jsonify({"error": "Expected a JSON object"}), 400
+
+        try:
+            gmail.record_playback(data.get("message_ids"))
+            return "", 204
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except Exception:
+            return jsonify({
+                "error": "Could not save playback history."
+            }), 500
         
     return bp
