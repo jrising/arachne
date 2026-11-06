@@ -27,9 +27,7 @@ _inbox_cache = {"expires": 0, "value": None}
 
 ARCHIVE_FOLDER = "aiarchive"
 
-PLAYBACK_DB = Path(str(Path(__file__).resolve().parent.parent
-        / "instance" / "mail-playback.sqlite3"))
-
+PLAYBACK_DB = Path(".cache/mail-playback.sqlite3")
 
 def connect():
     client = imaplib.IMAP4_SSL(HOST)
