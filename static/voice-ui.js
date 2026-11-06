@@ -24,7 +24,8 @@ const state = {
     mailDraftThreadId: null,
 
     mailSpeechController: null,
-    mailSpeechUtterance: null
+    mailSpeechUtterance: null,
+    mailPlaybackEpoch: 0
 };
 
 Object.assign(state, {
@@ -493,6 +494,7 @@ async function sendEconomyText(inputText, {
 	}
 	
 	const finalChunk = decoder.decode();
+	if (!ownsMailPlayback(controller, epoch)) return;
 	if (finalChunk) {
 	    result += finalChunk;
 	    appendMessageText(assistantMessage, finalChunk);
@@ -1010,6 +1012,14 @@ el.drivingReaderDocument?.addEventListener("change", event => {
 
 // Mail Behavior
 
+function ownsMailPlayback(controller, epoch) {
+  return (
+    !controller.signal.aborted &&
+    state.mailSpeechController === controller &&
+    state.mailPlaybackEpoch === epoch
+  );
+}
+
 function mailUrl(template, threadId) {
   return template.replace("THREAD_ID", encodeURIComponent(threadId));
 }
@@ -1055,9 +1065,11 @@ async function playNextMail({ markCurrent = true } = {}) {
     stopMailPlayback();
 
     const controller = new AbortController();
-    state.mailSpeechController = controller;
     const { signal } = controller;
-
+    const epoch = ++state.mailPlaybackEpoch;
+    
+    state.mailSpeechController = controller;
+    
     let assistantMessage = null;
     let speaker = null;
 
@@ -1071,12 +1083,14 @@ async function playNextMail({ markCurrent = true } = {}) {
                 { method: "POST", signal }
             );
 
+	    if (!ownsMailPlayback(controller, epoch)) return;
+
             if (!readResponse.ok) {
                 throw new Error("Could not mark the conversation as read.");
             }
         }
 
-        if (signal.aborted) return;
+        if (!ownsMailPlayback(controller, epoch)) return;
 
 	// Do not remove it until the speech endpoint has responded, because that
 	// endpoint is where the server records the reading attempt.
@@ -1099,6 +1113,9 @@ async function playNextMail({ markCurrent = true } = {}) {
             ),
             { signal }
         );
+
+	if (!ownsMailPlayback(controller, epoch)) return;
+	
         const conversation = await response.json();
 
         if (!response.ok) {
@@ -1107,7 +1124,7 @@ async function playNextMail({ markCurrent = true } = {}) {
             );
         }
 
-        if (signal.aborted) return;
+        if (!ownsMailPlayback(controller, epoch)) return;
 
 	state.mailCurrent = {
 	    ...conversation,
@@ -1132,7 +1149,7 @@ async function playNextMail({ markCurrent = true } = {}) {
 	    partial: true
 	});
 	
-	speaker = createMailSpeaker(signal);
+	speaker = createMailSpeaker(controller, epoch);
 	speaker.write(header + " ");
 
 	setStatus("Preparing spoken email…");
@@ -1151,6 +1168,8 @@ async function playNextMail({ markCurrent = true } = {}) {
 	);
 	
 	const speechResponse = await fetch(speechUrl, { signal });
+
+	if (!ownsMailPlayback(controller, epoch)) return;
 	
 	// The server records this as attempted before translating it.
 	state.mailQueue.shift();
@@ -1176,6 +1195,7 @@ async function playNextMail({ markCurrent = true } = {}) {
 
 	while (true) {
 	    const { done, value } = await reader.read();
+	    if (!ownsMailPlayback(controller, epoch)) return;
 	    if (done) break;
 	    
 	    const chunk = decoder.decode(value, { stream: true });
@@ -1195,7 +1215,7 @@ async function playNextMail({ markCurrent = true } = {}) {
 	finalizeMessage(assistantMessage);
 	speaker.finish();
 	
-	if (signal.aborted) {
+	if (!ownsMailPlayback(controller, epoch)) {
 	    throw new DOMException("Playback stopped", "AbortError");
 	}
 
@@ -1313,20 +1333,28 @@ if (window.VOICE_TASK === "mail") {
 }
 
 function stopMailPlayback() {
-  state.mailSpeechController?.abort();
+  // Invalidates all callbacks, fetch continuations, and delayed TTS work.
+  state.mailPlaybackEpoch += 1;
+
+  const controller = state.mailSpeechController;
   state.mailSpeechController = null;
+  controller?.abort();
+
   state.mailSpeechUtterance = null;
 
   const synth = window.speechSynthesis;
   if (synth) {
     synth.cancel();
 
-    // Particularly useful for Safari after interruption/backgrounding.
-    setTimeout(() => synth.resume(), 0);
+    // Do this directly rather than through an unowned timeout, which can
+    // interfere with the next playback session on Safari.
+    if (synth.paused) synth.resume();
   }
 }
 
-function createMailSpeaker(signal) {
+function createMailSpeaker(controller, epoch) {
+    const signal = controller.signal;
+
     const synth = window.speechSynthesis;
     const queue = [];
     let buffer = "";
@@ -1334,7 +1362,7 @@ function createMailSpeaker(signal) {
     let finished = false;
 
     function pump() {
-        if (signal.aborted || speaking) return;
+        if (!ownsMailPlayback(controller, epoch) || speaking) return;
 
         if (!queue.length) {
             if (finished) setStatus("Ready.");
@@ -1359,7 +1387,7 @@ function createMailSpeaker(signal) {
         state.mailSpeechUtterance = utterance;
 
         const advance = () => {
-            if (signal.aborted) return;
+            if (!ownsMailPlayback(controller, epoch)) return;
 
             speaking = false;
             if (state.mailSpeechUtterance === utterance) {
@@ -1371,7 +1399,7 @@ function createMailSpeaker(signal) {
         utterance.onend = advance;
         utterance.onerror = advance;
         utterance.onstart = () => {
-            if (!signal.aborted) setStatus("Reading mail.");
+            if (ownsMailPlayback(controller, epoch)) setStatus("Reading mail.");
         };
 
 	console.debug("Mail TTS speak", {
@@ -1388,13 +1416,14 @@ function createMailSpeaker(signal) {
 	};
 
 	setTimeout(() => {
-	    if (signal.aborted) return;
+	    if (!ownsMailPlayback(controller, epoch)) return;
 	    
 	    synth.resume();
 
 	    try {
 		synth.speak(utterance);
 	    } catch (error) {
+		if (!ownsMailPlayback(controller, epoch)) return;
 		console.error("Mail TTS speak() failed:", error);
 		speaking = false;
 		advance();
@@ -1435,13 +1464,13 @@ function createMailSpeaker(signal) {
 
     return {
         write(text) {
-            if (signal.aborted) return;
+            if (!ownsMailPlayback(controller, epoch)) return;
             buffer += text;
             drain();
         },
 
         finish() {
-            if (signal.aborted) return;
+            if (!ownsMailPlayback(controller, epoch)) return;
             finished = true;
             drain(true);
         }
