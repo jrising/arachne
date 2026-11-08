@@ -215,7 +215,8 @@ def inbox_threads():
             raise RuntimeError("Could not search Inbox")
 
         threads = {}
-
+        batches = 0
+        
         for uid_batch in batched(data[0].split(), 100):
             uid_set = b",".join(uid_batch)
 
@@ -269,6 +270,10 @@ def inbox_threads():
                     "subject": decode_text(msg.get("Subject")) or "(no subject)",
                     "gmail_message_id": gmail_id_match.group(1),
                 })
+
+            batches += 1
+            if batches > 10:
+                break
 
         result = []
         for thread_id, messages in threads.items():
@@ -397,6 +402,24 @@ def create_reply_all_draft(thread_id, dictated_text):
         if not subject.lower().startswith("re:"):
             subject = f"Re: {subject}"
 
+        # Fetch existing draft content in this thread if present
+        existing_text = ""
+        status, _ = client.select(DRAFTS_FOLDER)
+        if status == "OK":
+            status, data = client.uid("search", None, "X-GM-THRID", str(thread_id))
+            if status == "OK" and data and data[0]:
+                for uid in data[0].split():
+                    status, rows = client.uid("fetch", uid, "(BODY.PEEK[])")
+                    if status == "OK" and rows and isinstance(rows[0], tuple):
+                        msg = BytesParser(policy=policy.default).parsebytes(rows[0][1])
+                        body = message_body(msg).strip()
+                        if body:
+                            existing_text = body
+                    client.uid("store", uid, "+FLAGS", r"(\Deleted)")
+                client.expunge()
+
+        full_text = f"{existing_text}\n\n{dictated_text.strip()}".strip() if existing_text else dictated_text.strip()
+
         draft = EmailMessage()
         draft["From"] = USER
         draft["To"] = ", ".join(addresses)
@@ -407,7 +430,7 @@ def create_reply_all_draft(thread_id, dictated_text):
         if references:
             draft["References"] = references
 
-        draft.set_content(dictated_text.strip())
+        draft.set_content(full_text)
 
         status, _ = client.append(
             DRAFTS_FOLDER,

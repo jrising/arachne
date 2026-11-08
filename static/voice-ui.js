@@ -32,7 +32,10 @@ Object.assign(state, {
   economyRecorder: null,
   economyAudioChunks: [],
   economyMicStream: null,
-  economyRecording: false,
+    economyRecording: false,
+    economyActivePointerId: null,
+    economyStarting: false,
+    economySession: null,
   speechVoice: null
 });
 
@@ -726,15 +729,17 @@ el.speechPitch.addEventListener("input", () => {
   el.speechPitchValue.textContent = el.speechPitch.value;
 });
 
-async function startEconomyRecording() {
-  if (state.economyRecording) return;
+async function startEconomyRecording(pointerId = null) {
+  if (state.economyStarting || state.economySession) return;
 
-  // Speaking must never feed back into the microphone interaction.
   window.speechSynthesis?.cancel();
   stopEconomyRequest();
 
+  state.economyStarting = true;
+  state.economyActivePointerId = pointerId;
+
   try {
-    state.economyMicStream = await navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
@@ -742,21 +747,37 @@ async function startEconomyRecording() {
       }
     });
 
-    const recorder = new MediaRecorder(state.economyMicStream, {
+    // Finger/button was released while permission or microphone startup
+    // was pending. Never start a recorder in that case.
+    if (state.economyActivePointerId !== pointerId) {
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
+
+    const recorder = new MediaRecorder(stream, {
       mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
         : undefined
     });
 
+    const session = {
+      stream,
+      recorder,
+      chunks: [],
+      stopped: false
+    };
+
+    state.economySession = session;
     state.economyRecorder = recorder;
-    state.economyAudioChunks = [];
+    state.economyMicStream = stream;
+    state.economyAudioChunks = session.chunks;
     state.economyRecording = true;
 
     recorder.ondataavailable = event => {
-      if (event.data.size > 0) state.economyAudioChunks.push(event.data);
+      if (event.data.size > 0) session.chunks.push(event.data);
     };
 
-    recorder.onstop = transcribeEconomyRecording;
+    recorder.onstop = () => transcribeEconomyRecording(session);
 
     recorder.start();
     el.economyMicButton.textContent = "Release to send";
@@ -766,37 +787,60 @@ async function startEconomyRecording() {
   } catch (error) {
     console.error(error);
     setStatus(`Microphone error: ${error.message}`);
+  } finally {
+    state.economyStarting = false;
   }
 }
 
-function stopEconomyRecording() {
-  if (!state.economyRecording || !state.economyRecorder) return;
+function stopEconomyRecording(pointerId = null) {
+  // Ignore a release from another control/pointer.
+  if (
+    pointerId !== null &&
+    state.economyActivePointerId !== null &&
+    pointerId !== state.economyActivePointerId
+  ) {
+    return;
+  }
 
+  state.economyActivePointerId = null;
+
+  const session = state.economySession;
+  if (!session || session.stopped) return;
+
+  session.stopped = true;
   state.economyRecording = false;
   el.economyMicButton.textContent = "Hold to speak";
-  state.economyRecorder.stop();
+
+  // Stop the privacy-sensitive mic indicator immediately, not after
+  // transcription/network work.
+  session.stream.getTracks().forEach(track => track.stop());
+
+  if (session.recorder.state !== "inactive") {
+    session.recorder.stop();
+  }
 }
 
-async function transcribeEconomyRecording() {
-  const stream = state.economyMicStream;
-  const chunks = state.economyAudioChunks;
 
-  state.economyRecorder = null;
-  state.economyMicStream = null;
-  state.economyAudioChunks = [];
+async function transcribeEconomyRecording(session) {
+  if (state.economySession === session) {
+    state.economySession = null;
+    state.economyRecorder = null;
+    state.economyMicStream = null;
+    state.economyAudioChunks = [];
+  }
 
-  for (const track of stream?.getTracks() || []) track.stop();
-
-  if (!chunks.length) {
+  if (!session.chunks.length) {
     el.speechPreview.textContent = "";
     setStatus("Ready.");
     return;
   }
 
+  // Keep the remainder of your existing transcription function, but use:
+  const blob = new Blob(session.chunks, { type: "audio/webm" });
+
   try {
     setStatus("Transcribing…");
 
-    const blob = new Blob(chunks, { type: "audio/webm" });
     const form = new FormData();
     form.set("audio", blob, "speech.webm");
 
@@ -834,12 +878,8 @@ async function transcribeEconomyRecording() {
 el.economyMicButton.addEventListener("pointerdown", event => {
   event.preventDefault();
   el.economyMicButton.setPointerCapture?.(event.pointerId);
-  startEconomyRecording();
+  startEconomyRecording(event.pointerId);
 });
-
-for (const eventName of ["pointerup", "pointercancel", "lostpointercapture"]) {
-  el.economyMicButton.addEventListener(eventName, stopEconomyRecording);
-}
 
 async function dispatchSpokenRequest(text) {
     const normalized = text
@@ -964,12 +1004,6 @@ el.drivingPrimary.addEventListener("pointerdown", event => {
     startEconomyRecording();
   }
 });
-
-for (const eventName of ["pointerup", "pointercancel", "pointerleave"]) {
-  el.drivingPrimary.addEventListener(eventName, () => {
-    if (state.mode === "economy") stopEconomyRecording();
-  });
-}
 
 el.drivingSecondary.addEventListener("click", async () => {
   if (window.VOICE_TASK === "reader") {
@@ -1186,6 +1220,12 @@ async function playNextMail({ markCurrent = true } = {}) {
 	    
 	    // Finish speaking the already-queued header.
 	    speaker.finish();
+
+	    await speaker.done;
+
+	    if (!ownsMailPlayback(controller, epoch)) return;
+
+	    setStatus("Ready.");
 	    
 	    throw new Error(error || "Could not prepare email speech.");
 	}
@@ -1214,7 +1254,13 @@ async function playNextMail({ markCurrent = true } = {}) {
 	
 	finalizeMessage(assistantMessage);
 	speaker.finish();
-	
+
+	await speaker.done;
+
+	if (!ownsMailPlayback(controller, epoch)) return;
+
+	setStatus("Ready.");
+
 	if (!ownsMailPlayback(controller, epoch)) {
 	    throw new DOMException("Playback stopped", "AbortError");
 	}
@@ -1353,126 +1399,150 @@ function stopMailPlayback() {
 }
 
 function createMailSpeaker(controller, epoch) {
-    const signal = controller.signal;
+  const signal = controller.signal;
+  const synth = window.speechSynthesis;
+  const queue = [];
+  let buffer = "";
+  let speaking = false;
+  let finished = false;
 
-    const synth = window.speechSynthesis;
-    const queue = [];
-    let buffer = "";
-    let speaking = false;
-    let finished = false;
+  let resolveDone;
+  const done = new Promise(resolve => {
+    resolveDone = resolve;
+  });
 
-    function pump() {
-        if (!ownsMailPlayback(controller, epoch) || speaking) return;
+  function complete() {
+    resolveDone();
+  }
 
-        if (!queue.length) {
-            if (finished) setStatus("Ready.");
-            return;
-        }
+  signal.addEventListener("abort", complete, { once: true });
 
-        // Text still appears in the transcript on browsers without TTS.
-        if (!synth) {
-            queue.length = 0;
-            if (finished) setStatus("Ready.");
-            return;
-        }
+  function pump() {
+    if (!ownsMailPlayback(controller, epoch) || speaking) return;
 
-        const utterance = new SpeechSynthesisUtterance(queue.shift());
-        utterance.voice = selectedSpeechVoice();
-        utterance.rate = Number(el.speechRate.value);
-        utterance.pitch = Number(el.speechPitch.value);
-
-        speaking = true;
-
-        // Retain a reference throughout playback.
-        state.mailSpeechUtterance = utterance;
-
-        const advance = () => {
-            if (!ownsMailPlayback(controller, epoch)) return;
-
-            speaking = false;
-            if (state.mailSpeechUtterance === utterance) {
-                state.mailSpeechUtterance = null;
-            }
-            pump();
-        };
-
-        utterance.onend = advance;
-        utterance.onerror = advance;
-        utterance.onstart = () => {
-            if (ownsMailPlayback(controller, epoch)) setStatus("Reading mail.");
-        };
-
-	console.debug("Mail TTS speak", {
-	    text: utterance.text,
-	    speaking: synth.speaking,
-	    pending: synth.pending,
-	    paused: synth.paused,
-	    aborted: signal.aborted
-	});
-
-	utterance.onerror = event => {
-	    console.warn("Mail TTS error:", event.error, event);
-	    advance();
-	};
-
-	setTimeout(() => {
-	    if (!ownsMailPlayback(controller, epoch)) return;
-	    
-	    synth.resume();
-
-	    try {
-		synth.speak(utterance);
-	    } catch (error) {
-		if (!ownsMailPlayback(controller, epoch)) return;
-		console.error("Mail TTS speak() failed:", error);
-		speaking = false;
-		advance();
-	    }
-	}, 50);
+    if (!queue.length) {
+      if (finished) {
+        setStatus("Ready.");
+        complete();
+      }
+      return;
     }
 
-    function emit(text) {
-        const cleaned = speechSafeText(text);
-        if (cleaned) queue.push(cleaned);
+    if (!synth) {
+      queue.length = 0;
+      if (finished) complete();
+      return;
     }
 
-    function drain(flush = false) {
-        while (buffer.length) {
-            // Prefer a sentence boundary within a short utterance.
-            const sentence = buffer.slice(0, 260)
-                .match(/[.!?](?:\s+|$)/);
+    const utterance = new SpeechSynthesisUtterance(queue.shift());
+    utterance.voice = selectedSpeechVoice();
+    utterance.rate = Number(el.speechRate.value);
+    utterance.pitch = Number(el.speechPitch.value);
 
-            let cut;
+    speaking = true;
+    state.mailSpeechUtterance = utterance;
 
-            if (sentence) {
-                cut = sentence.index + sentence[0].length;
-            } else if (buffer.length >= 260) {
-                const space = buffer.lastIndexOf(" ", 260);
-                cut = space >= 100 ? space : 260;
-            } else if (flush) {
-                cut = buffer.length;
-            } else {
-                break;
-            }
+    const advance = () => {
+      if (!ownsMailPlayback(controller, epoch)) return;
 
-            emit(buffer.slice(0, cut));
-            buffer = buffer.slice(cut);
-        }
-
-        pump();
-    }
-
-    return {
-        write(text) {
-            if (!ownsMailPlayback(controller, epoch)) return;
-            buffer += text;
-            drain();
-        },
-
-        finish() {
-            if (!ownsMailPlayback(controller, epoch)) return;
-            finished = true;
-            drain(true);
-        }
+      speaking = false;
+      if (state.mailSpeechUtterance === utterance) {
+        state.mailSpeechUtterance = null;
+      }
+      pump();
     };
+
+    utterance.onstart = () => {
+      if (ownsMailPlayback(controller, epoch)) {
+        setStatus("Reading mail.");
+      }
+    };
+
+    utterance.onend = advance;
+
+    utterance.onerror = event => {
+      console.warn("Mail TTS error:", event.error);
+      advance();
+    };
+
+    setTimeout(() => {
+      if (!ownsMailPlayback(controller, epoch)) return;
+
+      try {
+        synth.resume();
+        synth.speak(utterance);
+      } catch (error) {
+        console.error("Mail TTS speak() failed:", error);
+        speaking = false;
+        advance();
+      }
+    }, 50);
+  }
+
+  function emit(text) {
+    const cleaned = speechSafeText(text);
+    if (cleaned) queue.push(cleaned);
+  }
+
+  function drain(flush = false) {
+    while (buffer.length) {
+      const sentence = buffer.slice(0, 260).match(/[.!?](?:\s+|$)/);
+
+      let cut;
+      if (sentence) {
+        cut = sentence.index + sentence[0].length;
+      } else if (buffer.length >= 260) {
+        const space = buffer.lastIndexOf(" ", 260);
+        cut = space >= 100 ? space : 260;
+      } else if (flush) {
+        cut = buffer.length;
+      } else {
+        break;
+      }
+
+      emit(buffer.slice(0, cut));
+      buffer = buffer.slice(cut);
+    }
+
+    pump();
+  }
+
+  return {
+    done,
+
+    write(text) {
+      if (!ownsMailPlayback(controller, epoch)) return;
+      buffer += text;
+      drain();
+    },
+
+    finish() {
+      if (!ownsMailPlayback(controller, epoch)) return;
+      finished = true;
+      drain(true);
+    }
+  };
 }
+
+el.mailDraft?.addEventListener("pointerdown", event => {
+  event.preventDefault();
+
+  if (!state.mailCurrent) {
+    speakText("There is no current conversation to reply to.");
+    return;
+  }
+
+  stopMailPlayback();
+  state.mailDraftThreadId = state.mailCurrent.thread_id;
+
+  el.mailDraft.setPointerCapture?.(event.pointerId);
+  startEconomyRecording(event.pointerId);
+});
+
+window.addEventListener("pointerup", event => {
+  stopEconomyRecording(event.pointerId);
+}, true);
+
+window.addEventListener("pointercancel", event => {
+  stopEconomyRecording(event.pointerId);
+}, true);
