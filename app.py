@@ -75,12 +75,12 @@ def completion():
         return Response(None, mimetype='text/event-stream')
         
 def completion_api(custom_system=None, custom_model=None, custom_context=""):
-    print("OK")
-    print(request.form)
     data = request.form
 
     print("Collecting conversation...")
 
+    input_text = data['input_text']
+    
     soup = BeautifulSoup(data['past_messages'], 'html.parser')
     past_messages = []
     for div in soup.find_all('div'):
@@ -90,15 +90,17 @@ def completion_api(custom_system=None, custom_model=None, custom_context=""):
             past_messages.append({"role": "assistant", "content": div.text.strip()})
     ## Drop the last message from the user (added later)
     if past_messages[-1]['role'] == 'user':
+        if input_text.strip() == '':
+            input_text = past_messages[-1]['content']
         past_messages = past_messages[:-1]
 
+    print(past_messages)
+        
     if custom_model is None:
         custom_model = data.get('model', None)
         
     myuser_id = user_id
-    if past_messages:
-        input_text = data['input_text']
-    else:
+    if not past_messages:
         if data.get('preamble', 'none') == 'none':
             preamble = ""
         else:
@@ -107,12 +109,16 @@ def completion_api(custom_system=None, custom_model=None, custom_context=""):
                 preamble = preamble.replace("[CONTEXT]", data.get('context', ''))
             elif os.path.exists('prompts/' + data['preamble'] + '.md'):
                 preamble = open('prompts/' + data['preamble'] + '.md', 'r').read()
+                if preamble[:6] == 'user: ':
+                    parts = preamble.split('\n', 1)
+                    myuser_id = parts[0].split(' ')[1]
+                    preamble = parts[1]
             else:
                 myuser_id = data['preamble']
                 print(f"Loading memory {myuser_id}")
                 preamble = ""
                 
-        input_text = preamble + data['input_text']
+        input_text = preamble + input_text
 
     if custom_context:
         history_text = custom_context

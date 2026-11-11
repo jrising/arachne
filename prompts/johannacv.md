@@ -1,110 +1,121 @@
 The following prompt is related to Johanna Goetzel's job search. Below
 is her resume:
 ===
-# Johanna N. Goetzel
+**JOHANNA N. GOETZEL**
 
-## SUMMARY
+Sustainability & ESG Leader | Strategic Partnerships Manager | Impact Investor
 
-Sustainability professional with over two decades of experience leading diverse teams for mission-driven organizations. Adept at managing a large portfolio of equity-focused issues, cross-functional collaboration, relationship management, and action-oriented research.  
-- **Relationship Manager:** Fostering business partnerships and expanding networks.  
-- **Project Manager:** Organizing teams to achieve goals, identifying needs, and developing solutions.  
-- **Communications Expert:** Crafting messages in language most accessible to audience needs.  
-- **Fund Management and Growth:** Raising funds for new goals and scaling up existing projects.
+Email · [Jgoetzel@gmail.com](mailto:Jgoetzel@gmail.com) +1 301 802 0529 · [LinkedIn](https://www.linkedin.com/in/johanna-goetzel-90992044/)
 
-## PROFESSIONAL EXPERIENCE
+EXECUTIVE SUMMARY
 
-### Institute for Market Transformation, Director, Corporate Giving  
-2024-present, DC
+Environmental, social, and governance (ESG) professional with twenty years' experience leading mission-driven teams. Establishing and fostering portfolios exceeding **\$10 million** including individual, foundational, corporate giving. Brings international experience in clean energy, climate policy, public health, and community development. Relationship-centered approach to fundraising and team management.
 
-- Established individual giving stewardship strategy and raised over $50,000 in new gifts in 12 months. Fostered relationships with board members and piloted a new advisory board for the Building Innovation Hub, increasing participation and investments in the DC region.
-- Grew a network of philanthropy and corporate donors including the Clif Family Foundation, Energy Foundation, Kresge Foundation, and Yardi. Expanded program-specific memberships in support of Washington DC real estate and community stakeholders and provided data policy tracking and analysis to corporations nationally.
-- Curated revenue-generating events, including the launch of the inaugural DC Climate Week in 2025.
+PROFESSIONAL EXPERIENCE
 
-### Clean Energy Buyers Association, Manager of Strategic Partnerships  
-2021-2023, DC
+**Institute for Market Transformation**
 
-- Grew membership network of clean energy buyers, service, and energy providers from 200 to over 450 corporate participants, representing $7.5 trillion in annual revenue.
-- Established the company’s first diversity, equity, and inclusion program for member companies led by women and people of color. Expanded the program by 200%.
-- Led international stakeholders in deploying a robust strategy to decarbonize the grid and unlock energy markets, facilitating deals that brought over 64 GW of clean energy.
+**Director, Development Team** · Washington, DC | **2024–2025**
 
-### Sustainable Ventures, London, CleanTech Innovation Lead  
-2020, London
+- Established the organization's first individual giving strategy, raising **\$2 million in donor new gifts within 12 months.**
+- Established an advisory board for the Building Innovation Hub, increasing participation and investment across the Washington, DC, region expanded board engagement in fundraising and advised on donor-advised funds.
+- Cultivated philanthropic and corporate relationships, including the Clif Family Foundation, Energy Foundation, Kresge Foundation, and Yardi; supporting local real estate and community stakeholders.
+- Curated revenue-generating national events and supported the **inaugural DC Climate Week in 2025, which attracted 5,000+ participants, including newly cultivated donors and individual supporters.**
 
-- Established an innovation hub with academic, start-up, and government members in London and advised women and minority-run start-ups on how to pitch effectively to VCs.
-- Created a forum for clean technology development and investment in London. Led collaborations across the Greater London Authority, universities, and corporate steering committee members to develop sponsorship platforms and funding pipelines.
+**Clean Energy Buyers Association**
 
-### Carbon Credentials, Senior Sustainability Consultant  
-2018-2019, London
+**Senior Manager, Strategic Partnerships** · Washington, DC | **2021–2023**
 
-- Provided bespoke environmental strategy consulting to Fortune 500 clients across Europe.
-- Consulted on sector-specific guidance for companies to meet the recommendations of the Task Force on Climate-Related Financial Disclosures (TCFD) and other voluntary commitments.
-- Managed a team of four analysts, led over a dozen client workshops.
+- Grew membership from **200 to 450 corporate participants**, representing **\$7.5T** annual revenue.
+- Established the organization's first diversity, equity, and belonging membership program for companies led by women and people of color; participation, grew **1 to 75 members** in its first year. Model was later expanded to include other disadvantaged groups.
+- Authored annual reports and coordinated international stakeholder reporting on grid decarbonization strategies. Supported efforts to unlock energy markets and facilitate transactions contributing to **more than 64 GW of clean energy**.
 
-### The Climate Group, Head of Member Engagement, North America  
-2015-2018, New York
+**Sustainable Ventures**
 
-- Built and sustained multinational relationships with corporate partners, increasing member engagement through dozens of successful virtual and in-person forums.
-- Grew corporate clean energy programs from inception to 200+ members (including RE100, EP100, and EV100 work). Exceeded the KPIs for each program.
-- Coordinated US partners for Climate Week NYC, managing an international team of 15.
-- Raised $500,000 by bringing in new clients, board members, and supporters.
+**CleanTech Innovation, New Partnerships Lead** · London, UK | **2020**
 
-### Vitality Institute, Climate and Health Policy Analyst  
-2013-2015, New York
+- Established an innovation hub connecting academic institutions, start-ups, and government partners; **advised female and minority-led businesses to attain venture capital investment.**
+- Created a forum for clean technology development and investment, with the Greater London Authority, universities, and corporate steering committee to grow pipeline in other UK cities.
 
-- Wrote and researched healthcare policies to reduce the burden of non-communicable diseases, focused on detrimental climate impacts on health.
-- Developed programs for employee health and employer cost savings in the US, including a healthy food in the workplace toolkit.
-- Worked with NGOs, food industry leaders, and startup founders to develop healthy child-friendly recipes for celebrity chef Jamie Oliver.
+**Carbon Credentials**
 
-### The Earth Institute, Columbia University, Community Coordinator  
-2012-2013, New York
+**Senior Sustainability Consultant** · London, UK | **2018–2019**
 
-- Organized discussion series on climate change policy, adaptation, and mitigation strategies.
-- Translated scientific research for lay audiences, making the IPCC nominations accessible and actionable.
-- Managed a team of researchers and writers on a neighborhood rebuilding plan after Hurricane Sandy.
+- Developed environmental strategies for Fortune 500 clients across Europe.
+- Advised companies on sector-specific approaches to Task Force on Climate-related Financial Disclosures recommendations and science-based targets. Wrote annual ESG reports and roadmaps for cost savings through energy use reductions.
+- Managed **four analysts** and led **more than a dozen client workshops across industries**.
 
-### Nature Means Business, Principal Investigator  
-2009-2012, New York
+**The Climate Group**
 
-- Researched, edited, and assisted with writing a book called *Environmental Debt: The Hidden Cost of a Changing Economy*.
-- Crafted a new framework for 21st-century business, working with companies to enact the CGF Refrigeration Resolution to eliminate HFCs.
+**Head of Member Engagement, North America** · New York, NY | **2015–2018**
 
-### Democracy in Action, Donations and Events Manager  
-2007-2009, Washington, D.C.
+- Led Corporate partnerships for Climate Week NYC bringing in \$5M each year in sponsorship. **Independently raised** **\$500,000** from a new member and coordinated C-suite executives and government leaders with **800+ sustainability practitioners**.
+- Built and sustained relationships with **250 corporate partners**, delivering virtual and in-person engagement forums, including events at the United Nations.
+- Grew corporate clean energy programs, RE100, EP100, EV100, **300 members**, exceeding performance targets by **25%**.
+- Managed an international team of **15** through six months of event preparation and post-event analysis.
 
-- Assisted nonprofits with web-platform and interactive tools for charitable contributions and communication strategies.
-- Project-managed engineers to ensure end-user satisfaction and organized annual conferences.
+**Vitality Institute**
 
-## EDUCATION
+**Climate and Health Policy Analyst** · New York, NY | **2013–2015**
 
-**Columbia University, MA, Climate and Society**  
-New York, NY  
-- Science-based program focused on climate impacts on natural and human systems.
-- Developed methodologies for building sustainable food and health systems in urban areas.
+- Researched and authored policies addressing noncommunicable diseases and climate-related health impacts.
+- Developed a workplace healthy-food toolkit and assessment instrument
+- Collaborated with food industry leaders and start-up founders on child-friendly recipes for Jamie Oliver, using American Medical Association guidelines and contributed to employee health and employer cost-saving programs.
 
-**Sciences Po University, Science and Policy Program**  
-Paris, France  
-- Bridged the gap between scientists and international policymakers.
-- Focused on translating scientific findings to non-academic audiences.
+**The Earth Institute, Columbia University**
 
-**Wesleyan University, BA, Honors in English and Gender Studies**  
-Middletown, CT  
-- Honors in English and Gender Studies. Center for the Humanities Fellowship.
-- Developed curriculum for a new program called “Food Politics” and co-taught it twice.
+**Community Coordinator** · New York, NY | **2012–2013**
 
-## AFFILIATIONS
+- Led researchers and writers in developing a neighborhood rebuilding plan following Hurricane Sandy; advised sustainability-focused food access projects in Brooklyn.
+- Translated climate and health research for public and policy audiences.
+- Organized faculty and doctoral student discussions on climate policy, adaptation, and mitigation.
 
-- **Board Member, Columbia University’s Graduate School of Arts and Science:** Head of Recent Alumni Committee, co-lead the young professionals committee.
-- **Marques Who’s Who 2025, Winner, Sustainability:** Recognized for contributions to the field.
-- **WISE Philadelphia, Chapter Lead:** Lead a network of Women Investing for a Sustainable Economy.
-- **Growth Advisor, Second Daughter Artisanal Bakery:** Uplifting the best brownies in Philadelphia, female and minority-owned business [helloseconddaughter.com](https://l.instagram.com/?u=http%3A%2F%2Fhelloseconddaughter.com%2F%3Ffbclid%3DPAZXh0bgNhZW0CMTEAAaaLX9ZgOVCqnUf_jWiZNy-59wSQyAAge_OWtqGuaPu4Pt0P8ReNXQjaHDw_aem_5UHOYSo_ppc0K8O3WLMQPQ).
-- **PTA President, Project Play School:** 4 years of leading communications between school and families.
+**Nature Means Business**
 
-## SKILLS
+**Principal Investigator** · New York, NY | **2009–2012**
 
-- **Software:** Google and Microsoft tools, HTML, front-end design, data analysis tools, climate modeling/mapping.
-- **Financial and Decision Modeling:** Cost Benefit Analysis, Raiser’s Edge, Salesforce, QuickBooks, Payflow Pro.
-- **Writing:** Grants, technical and policy, blogs, social media, and marketing materials.
-- **Languages:** Conversational Spanish.
-- **Culinary:** Culinary degree from L’academie de Cuisine.
+- Researched for the book _Environmental Debt: The Hidden Costs of a Changing Global Economy_ (Palgrave Macmillan, 2013).
+- Helped develop a business framework connecting financial returns with environmental sustainability.
+- Worked with Consumer Goods Forum members, including Coca-Cola, PepsiCo, and Unilever, advising on refrigeration regulation.
+
+**Democracy in Action**
+
+**Donations and Events Manager** · Washington, DC | **2007–2009**
+
+- Supported hundreds of nonprofits with online fundraising tools and constituent communication strategies.
+- Coordinated engineering projects to improve user satisfaction and organized annual conferences.
+
+EDUCATION
+
+**Columbia University** · New York, NY **MA, Climate and Society** Focus on climate impacts and sustainable urban food and health systems.
+
+**Sciences Po** · Paris, France **Science and Policy Program** Scientific research with international policymaking and public communication.
+
+**Wesleyan University** · Middletown, CT **BA, Honors in English and Gender Studies** Center for Humanities Fellowship.
+
+**Additional Training:** Invest for Better alumna · Culinary degree, L'Academie de Cuisine.
+
+LEADERSHIP & COMMUNITY ENGAGEMENT
+
+**Columbia University Graduate School of Arts and Sciences** Board member; Young Professionals Committee.
+
+**Women Investing for a Sustainable Economy (WISE)**Philadelphia Chapter Lead.
+
+**Second Daughter Artisanal Bakery** Growth Advisor, increased visibility for a women- and minority-owned business.
+
+**Project Play School** PTA President; four years leading school and family communications and fundraising.
+
+**Glitter Philadelphia** Ambassador promoting affordable, community-funded neighborhood street cleaning.
+
+**MatchedByJo** Matchmaker and host of events fostering romantic and platonic connections.
+
+**Notable Recognition:** Marquis Who's Who, 2025, recognized for contributions to sustainability.
+
+SKILLS
+
+**Fundraising & Communications:** Grant writing, donor engagement, technical and policy writing, annual reports, marketing, social media.
+
+**Technology & Analysis:** Salesforce, Raiser's Edge, QuickBooks, Payflow Pro, Microsoft Office, Google Workspace, HTML, front-end design, data analysis, climate modeling and mapping, cost–benefit analysis.
+
+**Languages:** Conversational Spanish, ASL
 ===
-

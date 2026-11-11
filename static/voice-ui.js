@@ -1170,7 +1170,7 @@ async function playNextMail({ markCurrent = true } = {}) {
 	const header = [
 	    state.mailCurrent.unread
 		? "Unread conversation."
-		: "Read conversation.",
+		: "Red conversation.",
 	    `${state.mailCurrent.message_count} message${
         state.mailCurrent.message_count === 1 ? "" : "s"
     }.`,

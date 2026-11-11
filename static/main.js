@@ -36,10 +36,6 @@ function addToResponse(text, temp, temprend) {
 	scrollToBottom();
 }
 
-function addButtons(temprend, uid) {
-    $(temprend).parent().append("[<span class=\"vote-icons up-vote\" data-link-id=\"" + uid + "\">👍</span><span class=\"vote-icons down-vote\" data-link-id=\"" + uid + "\">👎</span><span class=\"vote-icons recycle\" data-link-id=\"" + uid + "\">♻</span>]");
-}
-
 function endResponse(temp, temprend, responseId) {
     addButtons(temprend, responseId);
     temp.removeAttribute('id');
@@ -90,12 +86,11 @@ async function asyncSubmit() {
     if (userinput != "") {
 	escapedinput = htmlEscape(userinput);
 	upperdiv.innerHTML += `<div class="message">
-                <div class="usermessagediv">
-                        <div class="usermessage">
-                            ${escapedinput}
-                        </div>
-                </div>
-            </div>`
+    <div class="usermessagediv flex items-center justify-between">
+        <div class="usermessage">${escapedinput}</div>
+        <span class="vote-icons copy-btn text-xs cursor-pointer ml-2 opacity-70 hover:opacity-100" title="Copy raw text">📋</span>
+    </div>
+            </div>`;
 	scrollToBottom();
     }
 
@@ -226,6 +221,25 @@ $(function() {
 	event.preventDefault();
 	asyncSubmit();
     });
+
+    // Delegated click handler for all copy buttons
+    $('body').on('click', '.copy-btn', function() {
+	copyMessageText(this);
+    });
+
+    // Render buttons for existing assistant messages on page reload
+    $('.appmessagediv').each(function(i) {
+	const $render = $(this).find('.mdrender');
+	const respId = $(this).attr('data-response-id') || `response-history-${i}`;
+	if (!$(this).find('.vote-icons').length) {
+            addButtons($render[0], respId);
+	}
+    });
+
+    // Add copy buttons for existing user messages
+    $('.usermessagediv').each(function() {
+	addUserCopyButton($(this));
+    });
 });
 
 // Link voting
@@ -265,4 +279,39 @@ function updateThinking(event) {
     if (!event.plan && !event.ocde) line += `\n${JSON.stringify(event, null, 2)}`;
 
     details.textContent += line + "\n\n";
+}
+
+// Copy button
+
+// Copy raw text to clipboard with temporary visual feedback
+async function copyMessageText(btn) {
+    const $parent = $(btn).closest('.appmessagediv, .usermessagediv');
+    // Assistant text lives in .appmessage; User text lives in .usermessage
+    const rawText = $parent.find('.appmessage, .usermessage').text().trim();
+    
+    try {
+        await navigator.clipboard.writeText(rawText);
+        const originalText = $(btn).html();
+        $(btn).html('✓');
+        setTimeout(() => $(btn).html(originalText), 1200);
+    } catch (err) {
+        console.error('Failed to copy: ', err);
+    }
+}
+
+// Update addButtons to include copy button for assistant messages
+function addButtons(temprend, uid) {
+    $(temprend).parent().append(
+        `[<span class="vote-icons copy-btn" data-link-id="${uid}" title="Copy raw text">📋</span>` +
+        `<span class="vote-icons up-vote" data-link-id="${uid}">👍</span>` +
+        `<span class="vote-icons down-vote" data-link-id="${uid}">👎</span>` +
+        `<span class="vote-icons recycle" data-link-id="${uid}">♻</span>]`
+    );
+}
+
+// Helper to attach copy button to user message elements
+function addUserCopyButton($usermessagediv) {
+    if (!$usermessagediv.find('.copy-btn').length) {
+        $usermessagediv.append('<span class="vote-icons copy-btn text-xs cursor-pointer ml-2 opacity-70 hover:opacity-100" title="Copy raw text">📋</span>');
+    }
 }
